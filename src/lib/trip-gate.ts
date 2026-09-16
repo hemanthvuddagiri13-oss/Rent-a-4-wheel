@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import { getSiteSettings } from "@/lib/settings";
 
 export interface TripStartGateResult {
@@ -15,10 +16,10 @@ const REQUIRED_DOCUMENT_TYPES = ["LICENSE_FRONT", "LICENSE_BACK", "SELFIE_WITH_L
  * UI that wants to show a checklist call this same function, so the rule
  * can never drift between what's displayed and what's enforced.
  */
-export async function evaluateTripStartGate(reservationId: string): Promise<TripStartGateResult> {
+export async function evaluateTripStartGate(reservationId: string, db: Prisma.TransactionClient = prisma): Promise<TripStartGateResult> {
   const reasons: string[] = [];
 
-  const reservation = await prisma.reservation.findUnique({
+  const reservation = await db.reservation.findUnique({
     where: { id: reservationId },
     include: {
       payments: true,
@@ -43,6 +44,7 @@ export async function evaluateTripStartGate(reservationId: string): Promise<Trip
   }
 
   const rentalPaid = reservation.payments.some((p) => p.type === "RENTAL" && p.status === "SUCCEEDED");
+  if (reservation.financialDisposition !== "OPEN") reasons.push("Reservation has a terminal or unresolved financial disposition.");
   if (!rentalPaid) reasons.push("Rental payment has not succeeded.");
 
   // A reservation refunded back to zero (or below) net paid must never
@@ -52,15 +54,16 @@ export async function evaluateTripStartGate(reservationId: string): Promise<Trip
     .filter((p) => p.type === "RENTAL" && p.status === "SUCCEEDED")
     .reduce((sum, p) => sum + p.amountCents, 0);
   const refundedCents = reservation.refunds
-    .filter((r) => r.status === "SUCCEEDED")
+    .filter((r) => r.status === "SUCCEEDED" || r.status === "PENDING")
     .reduce((sum, r) => sum + r.amountCents, 0);
   if (rentalPaid && paidCents - refundedCents <= 0) {
     reasons.push("Rental payment has been fully refunded; this reservation cannot start a trip.");
   }
 
+  if (reservation.depositCents > 0 && !reservation.deposit) reasons.push("Required security deposit record is missing.");
   if (reservation.deposit) {
     const authValid = reservation.deposit.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt > new Date();
-    if (reservation.deposit.status !== "SUCCEEDED" || !authValid) {
+    if (reservation.deposit.status !== "SUCCEEDED" || reservation.deposit.stripeStatus !== "requires_capture" || reservation.deposit.amountCents !== reservation.depositCents || !authValid) {
       reasons.push("Security deposit does not have a currently valid authorization.");
     }
   }
@@ -94,11 +97,11 @@ export async function evaluateTripStartGate(reservationId: string): Promise<Trip
   if (customerPreTrip && !customerPreTrip.acceptedAt) reasons.push("Customer has not accepted the pre-trip condition report.");
 
   if (hostPreTrip) {
-    const photoCount = await prisma.conditionPhoto.count({ where: { conditionReportId: hostPreTrip.id } });
+    const photoCount = await db.conditionPhoto.count({ where: { conditionReportId: hostPreTrip.id } });
     if (photoCount === 0) reasons.push("Host has not uploaded pre-trip photos.");
   }
   if (customerPreTrip) {
-    const photoCount = await prisma.conditionPhoto.count({ where: { conditionReportId: customerPreTrip.id } });
+    const photoCount = await db.conditionPhoto.count({ where: { conditionReportId: customerPreTrip.id } });
     if (photoCount === 0) reasons.push("Customer has not uploaded pre-trip photos.");
   }
 

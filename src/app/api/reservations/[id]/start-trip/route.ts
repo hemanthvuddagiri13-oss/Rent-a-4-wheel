@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { evaluateTripStartGate } from "@/lib/trip-gate";
+import { withReservationLock } from "@/lib/financial-locks";
 import { transitionReservation } from "@/lib/reservation-state-machine";
 import type { ReservationStatus } from "@prisma/client";
 
@@ -52,7 +53,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
 
   try {
-    await prisma.$transaction(async (tx) => {
+    await withReservationLock(id, async (tx) => {
+      const freshGate = await evaluateTripStartGate(id, tx);
+      if (!freshGate.canStart) throw new Error(freshGate.reasons.join("; "));
       let current = reservation.status;
       for (let i = startIndex; i < PRE_TRIP_CHAIN.length - 1; i++) {
         const next = PRE_TRIP_CHAIN[i + 1]!;

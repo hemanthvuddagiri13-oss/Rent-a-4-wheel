@@ -29,8 +29,10 @@ export default async function AdminReservationDetailPage({ params }: { params: P
   if (!reservation) notFound();
 
   const successfulPayment = reservation.payments.find((p) => p.type === "RENTAL" && p.status === "SUCCEEDED");
-  const alreadyRefunded = reservation.refunds.reduce((sum, r) => sum + r.amountCents, 0);
-  const refundableCents = Math.max(0, (successfulPayment?.amountCents ?? 0) - alreadyRefunded);
+  const alreadyRefunded = reservation.refunds.filter(r => r.status === "SUCCEEDED").reduce((sum, r) => sum + r.amountCents, 0);
+  const pendingRefunds = reservation.refunds.filter(r => r.status === "PENDING").reduce((sum, r) => sum + r.amountCents, 0);
+  const refundableCents = Math.max(0, (successfulPayment?.amountCents ?? 0) - alreadyRefunded - pendingRefunds);
+  const operations = await prisma.financialOperation.findMany({ where: { reservationId: id, state: { in: ["RETRY", "REVIEW", "RUNNING"] } }, select: { id: true, kind: true, state: true, lastError: true } });
 
   return (
     <div className="max-w-4xl">
@@ -73,6 +75,9 @@ export default async function AdminReservationDetailPage({ params }: { params: P
           <Row label="Total" value={formatCurrency(reservation.totalCents)} bold />
           <Row label="Deposit" value={`${formatCurrency(reservation.depositCents)} (${reservation.deposit?.status ?? "n/a"})`} />
           {reservation.refunds.length > 0 && <Row label="Refunded" value={formatCurrency(alreadyRefunded)} />}
+          {pendingRefunds > 0 && <Row label="Refund pending" value={formatCurrency(pendingRefunds)} />}
+          {reservation.refunds.filter(refund => ["FAILED", "CANCELLED"].includes(refund.status)).map(refund => <p key={refund.id} className="text-amber-300">Refund {formatCurrency(refund.amountCents)}: {refund.status}. {refund.lastError}</p>)}
+          {operations.map(operation => <p key={operation.id} className="text-amber-300">{operation.kind}: {operation.state}. {operation.lastError} Reference: {operation.id}</p>)}
         </div>
         {successfulPayment && refundableCents > 0 && (
           <div className="mt-4">

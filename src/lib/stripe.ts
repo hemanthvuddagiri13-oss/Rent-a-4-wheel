@@ -1,3 +1,4 @@
+import { json, prepareOperation, runOperation } from "@/lib/financial-operations";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 
@@ -49,12 +50,18 @@ export async function ensureStripeCustomer(user: { id: string; email: string | n
   if (!stripe) throw new Error("Stripe is not configured.");
   if (user.stripeCustomerId) return user.stripeCustomerId;
 
-  const customer = await stripe.customers.create({
-    email: user.email ?? undefined,
-    name: user.name ?? undefined,
-    metadata: { userId: user.id },
+  const client = stripe;
+  const operation = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${user.id} FOR UPDATE`;
+    const existing = await tx.financialOperation.findUnique({ where: { key: `customer:${user.id}` } });
+    return existing ?? prepareOperation(tx, { key: `customer:${user.id}`, kind: "CUSTOMER", payload: json({ email: user.email ?? undefined, name: user.name ?? undefined, metadata: { userId: user.id } }) });
   });
-
+  const payload = operation.payload as unknown as Stripe.CustomerCreateParams;
+  const customer = await runOperation(operation, {
+    create: key => client.customers.create(payload, { idempotencyKey: key }),
+    retrieve: async id => { const c = await client.customers.retrieve(id); if (c.deleted) throw new Error("Stripe customer deleted"); return c; },
+    discover: async () => { for await (const c of client.customers.list({ email: payload.email, limit: 100 })) if(c.metadata.userId === user.id) return c; return null; },
+  });
   await prisma.user.update({ where: { id: user.id }, data: { stripeCustomerId: customer.id } });
   return customer.id;
 }

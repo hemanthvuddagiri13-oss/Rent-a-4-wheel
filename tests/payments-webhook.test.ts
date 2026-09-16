@@ -89,7 +89,7 @@ describe("handlePaymentIntentSucceeded — payment/deposit gating", () => {
 
   it("confirms the reservation when the deposit authorization succeeds", async () => {
     const { reservation, payment } = await setupAwaitingPaymentReservation(30000);
-    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_success_${reservation.id}`, status: "requires_capture" });
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_success_${reservation.id}`, status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
 
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
 
@@ -99,7 +99,7 @@ describe("handlePaymentIntentSucceeded — payment/deposit gating", () => {
   });
 
   it("does NOT confirm the reservation when the rental payment succeeds but deposit authorization fails", async () => {
-    createPaymentIntent.mockRejectedValueOnce(new Error("Your card was declined."));
+    createPaymentIntent.mockResolvedValueOnce({ id: "pi_declined", status: "requires_payment_method", created: Math.floor(Date.now()/1000) });
     const { reservation, payment } = await setupAwaitingPaymentReservation(30000);
 
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
@@ -144,13 +144,13 @@ describe("handlePaymentIntentSucceeded — payment/deposit gating", () => {
 });
 
 describe("handlePaymentIntentFailed", () => {
-  it("moves an AWAITING_PAYMENT reservation to PAYMENT_FAILED", async () => {
+  it("keeps a declined rental in its bounded AWAITING_PAYMENT checkout window", async () => {
     const { reservation, payment } = await setupAwaitingPaymentReservation(0);
 
     await handlePaymentIntentFailed(fakeIntent(payment.stripePaymentIntentId!));
 
     const reloaded = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
-    expect(reloaded.status).toBe("PAYMENT_FAILED");
+    expect(reloaded.status).toBe("AWAITING_PAYMENT");
     const reloadedPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
     expect(reloadedPayment.status).toBe("FAILED");
   });
@@ -178,17 +178,16 @@ describe("temporary Stripe failure during deposit authorization", () => {
       "network blip"
     );
 
-    // Must NOT have been recorded as a permanent decline — a transient
-    // Stripe-side failure has to come back as retryable, not
-    // PAYMENT_FAILED (which would be indistinguishable from a real
-    // card decline to the customer).
+    // The captured rental is durable while the deposit operation remains retryable.
     const reloadedReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
-    expect(reloadedReservation.status).toBe("AWAITING_PAYMENT");
+    expect(reloadedReservation.status).toBe("PAYMENT_FAILED");
     const reloadedPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
-    expect(reloadedPayment.status).toBe("REQUIRES_PAYMENT");
+    expect(reloadedPayment.status).toBe("SUCCEEDED");
+    const operation = await prisma.financialOperation.findFirst({ where: { reservationId: reservation.id, kind: "DEPOSIT" } });
+    expect(operation?.state).toBe("RETRY");
 
     // A subsequent retry (the network blip having cleared) succeeds normally.
-    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}`, status: "requires_capture" });
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}`, status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
     const finalReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
     expect(finalReservation.status).toBe("DOCUMENTS_REQUIRED");

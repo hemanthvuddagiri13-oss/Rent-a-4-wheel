@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { createOrRefreshHold, HoldError } from "@/lib/checkout-hold";
 import { createHoldSchema } from "@/lib/validations/reservation";
+import { prisma } from "@/lib/prisma";
+import { differenceInCalendarDays } from "date-fns";
 
 /**
  * Places a 15-minute checkout hold on a vehicle for a specific date/time
@@ -39,7 +41,13 @@ export async function POST(req: NextRequest) {
       extraIds,
       couponCode,
     });
-    return NextResponse.json({ id: result.id, confirmationNumber: result.confirmationNumber, expiresAt: result.expiresAt });
+    const extras = await prisma.reservationExtra.findMany({ where: { reservationId: result.id }, include: { extra: { select: { name: true } } } });
+    const breakdown = { rateType: result.rateType, rateAmountCents: result.rateAmountCents, units: result.units,
+      days: Math.max(1, differenceInCalendarDays(result.returnAt, result.pickupAt)), subtotalCents: result.subtotalCents,
+      extrasCents: result.extrasCents, discountCents: result.discountCents, taxCents: result.taxCents, feesCents: result.feesCents,
+      totalCents: result.totalCents, depositCents: result.depositCents,
+      extraLineItems: extras.map(e => ({ extraId: e.extraId, name: e.extra.name, amountCents: e.amountCents, quantity: e.quantity })) };
+    return NextResponse.json({ id: result.id, confirmationNumber: result.confirmationNumber, expiresAt: result.expiresAt, bookingFingerprint: result.bookingFingerprint, totalCents: result.totalCents, breakdown });
   } catch (err) {
     if (err instanceof HoldError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

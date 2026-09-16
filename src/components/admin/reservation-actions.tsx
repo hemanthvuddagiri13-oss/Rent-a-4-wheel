@@ -68,7 +68,7 @@ export function RefundForm({ reservationId, maxCents }: { reservationId: string;
   // network-level retry of the same submission), but rotated after each
   // completed attempt so a later, deliberate refund is never coalesced
   // with a prior one under the same idempotency key.
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+
   const [isPending, startTransitionFn] = useTransition();
   const router = useRouter();
 
@@ -89,9 +89,16 @@ export function RefundForm({ reservationId, maxCents }: { reservationId: string;
           onClick={() =>
             startTransitionFn(async () => {
               try {
-                await issueRefund(reservationId, Math.round(Number(amount) * 100), requestId, reason || undefined);
-                toast.success("Refund issued.");
-                setRequestId(crypto.randomUUID());
+                const storageKey = `refund-operation:${reservationId}`;
+                const amountCents = Math.round(Number(amount) * 100);
+                const stored = localStorage.getItem(storageKey);
+                const request = stored ? JSON.parse(stored) as { id: string; amountCents: number; reason: string } : { id: crypto.randomUUID(), amountCents, reason };
+                if (request.amountCents !== amountCents || request.reason !== reason) throw new Error(`An unresolved refund of ${(request.amountCents / 100).toFixed(2)} exists. Resume its original amount and reason before starting another.`);
+                localStorage.setItem(storageKey, JSON.stringify(request));
+                const result = await issueRefund(reservationId, amountCents, request.id, reason || undefined);
+                if (result.status === "succeeded") { localStorage.removeItem(storageKey); toast.success("Refund issued."); }
+                else if (result.status === "failed") { localStorage.removeItem(storageKey); toast.error("Provider rejected this refund. Review the recorded failure before submitting a new request."); }
+                else toast.info("Refund pending. Retry this same request to check progress.");
                 router.refresh();
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Unable to issue refund.");

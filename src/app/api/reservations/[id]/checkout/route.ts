@@ -1,3 +1,5 @@
+import { withReservationLock } from "@/lib/financial-locks";
+import { fingerprint } from "@/lib/financial-operations";
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
@@ -30,6 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
   const { driver, documentIds, agreementAccepted } = parsed.data;
+  const checkoutFingerprint = fingerprint(parsed.data);
   if (!agreementAccepted) {
     return NextResponse.json({ error: "You must accept the Rental Agreement to continue." }, { status: 400 });
   }
@@ -46,26 +49,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Idempotent retry: this exact checkout already succeeded (e.g. the
-  // client's own retry after a dropped response, or the payment step
-  // remounting and re-finalizing before starting the PaymentIntent) — the
-  // reservation has already moved on to AWAITING_PAYMENT with these same
-  // documents and driver details attached. Resume rather than returning
-  // an unrecoverable 409 (item 13); a request with genuinely DIFFERENT
-  // inputs than what was already finalized is still rejected below.
-  if (reservation.status === "AWAITING_PAYMENT") {
-    const docTypesById = Object.fromEntries(reservation.documents.map((d) => [d.id, d.type]));
-    const sameDocuments =
-      docTypesById[documentIds.front] === "LICENSE_FRONT" &&
-      docTypesById[documentIds.back] === "LICENSE_BACK" &&
-      docTypesById[documentIds.selfie] === "SELFIE_WITH_LICENSE";
-    const sameDriver = reservation.driverEmail === driver.email && reservation.licenseNumber === driver.licenseNumber;
-    if (sameDocuments && sameDriver) {
-      return NextResponse.json({ success: true });
-    }
-    return NextResponse.json({ error: "This reservation is no longer awaiting checkout." }, { status: 409 });
-  }
-
+  if (reservation.checkoutFingerprint === checkoutFingerprint) return NextResponse.json({ success: true });
+  if (reservation.bookingFingerprint && parsed.data.bookingFingerprint !== reservation.bookingFingerprint) return NextResponse.json({ error: "Booking changed; refresh your review." }, { status: 409 });
   if (reservation.status !== "CHECKOUT_HOLD") {
     return NextResponse.json({ error: "This reservation is no longer awaiting checkout." }, { status: 409 });
   }
@@ -107,7 +92,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const userAgent = req.headers.get("user-agent");
 
   try {
-    await prisma.$transaction(async (tx) => {
+    await withReservationLock(id, async (tx) => {
+      const current = await tx.reservation.findUniqueOrThrow({ where: { id } });
+      if (current.checkoutFingerprint === checkoutFingerprint) return;
+      if (current.financialDisposition !== "OPEN" || current.status !== "CHECKOUT_HOLD" || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout hold no longer valid");
+      if (current.bookingFingerprint !== reservation.bookingFingerprint) throw new Error("Booking changed concurrently");
+      if (!await isVehicleAvailable(current.vehicleId, current.pickupAt, current.returnAt, { tx, excludeReservationId: id })) throw new Error("Vehicle no longer available");
       await tx.driverDocument.updateMany({
         where: { id: { in: requestedDocIds }, userId: session.user.id },
         data: { reservationId: reservation.id },
@@ -127,6 +117,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         from: "CHECKOUT_HOLD",
         to: "AWAITING_PAYMENT",
         data: {
+          checkoutFingerprint,
           expiresAt: new Date(Date.now() + CHECKOUT_WINDOW_MINUTES * 60 * 1000),
           driverFirstName: driver.firstName,
           driverLastName: driver.lastName,
@@ -156,7 +147,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "This vehicle is no longer available for the selected dates." }, { status: 409 });
     }
     console.error("Checkout finalize failed", err);
-    return NextResponse.json({ error: "Something went wrong finishing checkout." }, { status: 500 });
+    return NextResponse.json({ error: "Something went wrong finishing checkout." }, { status: 409 });
   }
 
   // PDF generation is comparatively slow — run it after the transaction

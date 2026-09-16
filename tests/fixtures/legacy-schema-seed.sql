@@ -58,3 +58,8 @@ INSERT INTO "LegalDocument" ("id", "type", "version", "title", "content", "needs
 
 INSERT INTO "RentalAgreement" ("id", "reservationId", "documentVersion", "acceptedAt", "signerName", "createdAt") VALUES
   ('mig_test_agreement_1', 'mig_test_res_confirmed', 'v1-legacy', now(), 'Test User', now());
+
+INSERT INTO "Payment" ("id", "reservationId", "type", "status", "amountCents", "stripePaymentIntentId", "createdAt", "updatedAt") VALUES
+  ('mig_test_payment', 'mig_test_res_confirmed', 'RENTAL', 'SUCCEEDED', 15000, 'pi_legacy_fixture', now(), now());
+INSERT INTO "Refund" ("id", "reservationId", "paymentId", "amountCents", "status", "stripeRefundId", "createdAt", "updatedAt") VALUES
+  ('mig_test_refund', 'mig_test_res_confirmed', 'mig_test_payment', 5000, 'PENDING', 're_legacy_fixture', now(), now());

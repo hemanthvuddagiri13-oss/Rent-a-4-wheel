@@ -62,7 +62,7 @@ describe("item 5/6 — deposit authorization requiring authentication (3DS) is n
 
   it("treats status requires_capture as a genuine success", async () => {
     const { reservation, deposit } = await setupReservationWithDeposit();
-    createPaymentIntent.mockResolvedValueOnce({ id: "pi_ok", status: "requires_capture" });
+    createPaymentIntent.mockResolvedValueOnce({ id: "pi_ok", status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
 
     const outcome = await attemptDepositAuthorization({ id: reservation.id, deposit }, fakeIntent());
     expect(outcome.outcome).toBe("succeeded");

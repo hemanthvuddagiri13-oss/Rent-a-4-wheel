@@ -35,14 +35,14 @@ const testDbUrl = adminUrl(testDbName);
 const maintenanceUrl = adminUrl("postgres");
 
 function psql(databaseUrl: string, args: string[]) {
-  execFileSync("psql", [databaseUrl, ...args], { stdio: "pipe" });
+  execFileSync("psql", [databaseUrl, "-v", "ON_ERROR_STOP=1", ...args], { stdio: "inherit" });
 }
 
 function prismaCli(args: string[], databaseUrl: string) {
-  execFileSync("npx", ["prisma", ...args], {
+  execFileSync(process.execPath, [path.join(ROOT, "node_modules/prisma/build/index.js"), ...args], {
     cwd: ROOT,
     env: { ...process.env, DATABASE_URL: databaseUrl },
-    stdio: "pipe",
+    stdio: "inherit",
   });
 }
 
@@ -67,6 +67,14 @@ afterAll(async () => {
 });
 
 describe("migration against a populated pre-Phase-1 database", () => {
+  it("preserves captured payments and pending refund identities without issuing new operations", async () => {
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { id: "mig_test_payment" } });
+    const refund = await prisma.refund.findUniqueOrThrow({ where: { id: "mig_test_refund" } });
+    expect(payment.status).toBe("SUCCEEDED"); expect(payment.stripePaymentIntentId).toBe("pi_legacy_fixture");
+    expect(refund.status).toBe("PENDING"); expect(refund.stripeRefundId).toBe("re_legacy_fixture");
+    expect(refund.idempotencyKey).toBe("legacy-mig_test_refund");
+    expect(await prisma.financialOperation.count()).toBe(0);
+  });
   it("preserves every legacy reservation row and maps its status correctly", async () => {
     const reservations = await prisma.reservation.findMany({
       where: { id: { startsWith: "mig_test_res_" } },

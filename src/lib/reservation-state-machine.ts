@@ -1,4 +1,5 @@
 import type { Prisma, ReservationStatus } from "@prisma/client";
+import { lockReservation, assertFinancialTripStart } from "@/lib/financial-locks";
 
 /**
  * The complete booking lifecycle. Every legal transition is listed
@@ -125,8 +126,15 @@ export async function transitionReservation(
   }
 ): Promise<void> {
   const { id, from, to, force = false, data = {}, whereExtra = {} } = params;
-  if (!force) {
-    assertTransitionAllowed(from, to);
+  const current = await lockReservation(tx, id);
+  if (!force) assertTransitionAllowed(from, to);
+  if (to === "ACTIVE") await assertFinancialTripStart(tx, id);
+  if ((current.financialDisposition !== "OPEN" || ["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(current.status)) &&
+      !["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST", "EXPIRED", "COMPLETED"].includes(to)) {
+    throw new Error("Financially terminated reservation cannot reopen");
+  }
+  if (["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(to)) {
+    data.financialDisposition = ["CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED"].includes(from) ? "REFUND_REQUIRED" : "TERMINATED";
   }
 
   const shouldAutoClearExpiry =

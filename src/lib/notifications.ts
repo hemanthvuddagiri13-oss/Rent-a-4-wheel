@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import {
@@ -15,6 +16,8 @@ import {
 import type { NotificationType } from "@prisma/client";
 
 interface QueueNotificationParams {
+  deliveryKey?: string;
+  throwOnFailure?: boolean;
   userId?: string;
   reservationId?: string;
   type: NotificationType;
@@ -35,10 +38,12 @@ const SUBJECTS: Record<NotificationType, string> = {
   LATE_RETURN: "Late return notice",
 };
 
-export async function queueNotification({ userId, reservationId, type, extra }: QueueNotificationParams) {
-  const notification = await prisma.notification.create({
-    data: { userId, reservationId, type, channel: "EMAIL", status: "PENDING", subject: SUBJECTS[type] },
-  });
+export async function queueNotification({ userId, reservationId, type, extra, deliveryKey, throwOnFailure }: QueueNotificationParams) {
+  const create = { userId, reservationId, type, channel: "EMAIL" as const, status: "PENDING" as const, subject: SUBJECTS[type] };
+  const notification = deliveryKey
+    ? await prisma.notification.upsert({ where: { deliveryKey }, update: {}, create: { ...create, deliveryKey } })
+    : await prisma.notification.create({ data: create });
+  if (notification.status === "SENT") return;
 
   try {
     const user = userId ? await prisma.user.findUnique({ where: { id: userId } }) : null;
@@ -51,6 +56,7 @@ export async function queueNotification({ userId, reservationId, type, extra }: 
         where: { id: notification.id },
         data: { status: "FAILED", error: "No recipient email on file." },
       });
+      if (throwOnFailure) throw new Error("No recipient email on file");
       return;
     }
 
@@ -114,7 +120,14 @@ export async function queueNotification({ userId, reservationId, type, extra }: 
         html = "";
     }
 
-    const result = await sendEmail({ to: user.email, subject: SUBJECTS[type], html });
+    let delivery = notification.payload as { to: string; subject: string; html: string } | null;
+    if (!delivery) {
+      const snapshot = { to: user.email, subject: SUBJECTS[type], html };
+      await prisma.notification.updateMany({ where: { id: notification.id, payload: { equals: Prisma.DbNull } }, data: { payload: snapshot } });
+      const saved = await prisma.notification.findUniqueOrThrow({ where: { id: notification.id } });
+      delivery = saved.payload as typeof snapshot;
+    }
+    const result = await sendEmail({ ...delivery, idempotencyKey: deliveryKey });
 
     await prisma.notification.update({
       where: { id: notification.id },
@@ -124,10 +137,12 @@ export async function queueNotification({ userId, reservationId, type, extra }: 
         sentAt: result.sent ? new Date() : undefined,
       },
     });
+    if (!result.sent && throwOnFailure) throw new Error(result.error ?? "Email delivery failed");
   } catch (err) {
     await prisma.notification.update({
       where: { id: notification.id },
       data: { status: "FAILED", error: err instanceof Error ? err.message : "Unknown error" },
     });
+    if (throwOnFailure) throw err;
   }
 }

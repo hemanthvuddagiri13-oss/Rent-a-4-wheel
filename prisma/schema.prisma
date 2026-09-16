@@ -476,6 +476,11 @@ enum RateType {
 }
 
 model Reservation {
+  financialCheckedAt DateTime?
+  // Terminal financial disposition is independent of captured payment status.
+  financialDisposition String @default("OPEN")
+  bookingFingerprint String?
+  checkoutFingerprint String?
   id                 String @id @default(cuid())
   confirmationNumber String @unique // e.g. RA4W-XXXXXX
 
@@ -769,6 +774,10 @@ enum OutboxMessageStatus {
 // never lose the notification, and a notification can never be sent for
 // a state change that itself rolled back.
 model OutboxMessage {
+  firstAttemptAt DateTime?
+  deliveryKey String? @unique
+  leaseToken String?
+  leaseExpiresAt DateTime?
   id      String              @id @default(cuid())
   type    String
   payload Json
@@ -782,6 +791,31 @@ model OutboxMessage {
   nextRetryAt DateTime?
 
   @@index([status, nextRetryAt])
+}
+
+// Immutable provider request plus resumable execution state. Payload contains
+// provider IDs, never card details. Unknown outcomes retain their original key.
+model FinancialOperation {
+  id String @id @default(cuid())
+  key String @unique
+  kind String
+  reservationId String?
+  fingerprint String
+  payload Json
+  providerId String?
+  result Json?
+  state String @default("READY")
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  firstAttemptAt DateTime?
+  nextAttemptAt DateTime?
+  attempts Int @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([reservationId, kind])
 }
 
 enum ReconciliationReason {
@@ -1390,6 +1424,7 @@ enum NotificationStatus {
 }
 
 model Notification {
+  deliveryKey String? @unique
   id String @id @default(cuid())
 
   userId        String?

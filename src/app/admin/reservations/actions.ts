@@ -116,18 +116,10 @@ export async function issueRefund(reservationId: string, amountCents: number, re
     initiatedById: session.user.id,
   });
   const result = await executeRefundOperation(refund.id, payment.stripePaymentIntentId);
-  const succeeded = result.status === "SUCCEEDED" || (result.status === "already_terminal" && result.refund.status === "SUCCEEDED");
-  if (!succeeded) {
-    const error = result.status === "FAILED" ? result.error : "Refund did not complete.";
-    throw new Error(`Refund failed: ${error}`);
-  }
+  if (result.status === "FAILED" || result.status === "CANCELLED" || (result.status === "already_terminal" && ["FAILED", "CANCELLED"].includes(result.refund.status))) return { status: "failed" };
 
-  await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "reservation.refund", entityType: "Reservation", entityId: reservationId, metadata: { amountCents, refundId: refund.id } },
-  });
-
-  await queueNotification({ userId: reservation.customerId, reservationId, type: "REFUND", extra: { amountCents } });
   revalidatePath(`/admin/reservations/${reservationId}`);
+  return { status: result.status === "SUCCEEDED" || (result.status === "already_terminal" && result.refund.status === "SUCCEEDED") ? "succeeded" : "pending" };
 }
 
 // NOTE: the ordinary "quick start rental" / "quick complete rental" staff

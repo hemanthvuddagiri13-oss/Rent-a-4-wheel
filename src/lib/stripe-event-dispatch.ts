@@ -8,6 +8,8 @@ import {
   handlePaymentIntentCanceled,
 } from "@/lib/stripe-webhook-handlers";
 import { reconcileRefundStatus } from "@/lib/refund-operations";
+import { eventFence } from "@/lib/financial-locks";
+import { stripe } from "@/lib/stripe";
 
 const MAX_ATTEMPTS_BEFORE_FLAGGING = 5;
 
@@ -27,6 +29,10 @@ export async function dispatchClaimedStripeEvent(params: {
   leaseToken: string;
   event: Stripe.Event;
 }): Promise<{ ok: boolean }> {
+  return eventFence.run({ id: params.eventRecordId, token: params.leaseToken }, () => dispatchWithFence(params));
+}
+
+async function dispatchWithFence(params: { eventRecordId: string; leaseToken: string; event: Stripe.Event }): Promise<{ ok: boolean }> {
   const { eventRecordId, leaseToken, event } = params;
 
   try {
@@ -41,16 +47,18 @@ export async function dispatchClaimedStripeEvent(params: {
         await handlePaymentIntentCanceled(event.data.object as Stripe.PaymentIntent);
         break;
       case "charge.refund.updated":
+      case "refund.created":
+      case "refund.failed":
       case "refund.updated": {
         const refundObject = event.data.object as Stripe.Refund;
         await reconcileRefundStatus(refundObject.id, refundObject.status ?? "");
         break;
       }
       case "charge.refunded":
-        // Individual refund line items are reconciled via
-        // charge.refund.updated above; this case is a placeholder for
-        // dashboard-initiated refunds with no corresponding local Refund
-        // row (nothing to reconcile against).
+        if (!stripe) throw new Error("Stripe unavailable");
+        for await (const refund of stripe.refunds.list({ charge: (event.data.object as Stripe.Charge).id, limit: 100 })) {
+          await reconcileRefundStatus(refund.id, refund.status ?? "");
+        }
         break;
       default:
         break;

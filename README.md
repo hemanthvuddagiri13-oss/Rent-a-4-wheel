@@ -458,7 +458,7 @@ reviewed and approved final language for each document.**
 - [ ] Production `DATABASE_URL` points at a managed, backed-up Postgres instance
 - [ ] `npx prisma migrate deploy` run against production database
 - [ ] Demo admin/customer seed accounts removed or disabled in production (sign-in is passwordless email-code — see Authentication)
-- [ ] `CRON_SECRET` set and a real scheduler (e.g. Vercel Cron) wired to POST `/api/cron/expire-holds` on an interval (every 1–5 minutes)
+- [ ] `CRON_SECRET` set and all five financial workers scheduled and monitored; see [financial operations](docs/financial-operations.md). `vercel.json` supplies minute schedules for Vercel; other hosts need equivalent authenticated invocations.
 - [ ] Demo/sample vehicles replaced with real inventory in `/admin/vehicles`
 - [ ] All legal documents reviewed and approved by a licensed Texas attorney; `needsAttorneyReview` cleared
 - [ ] Business settings (`/admin/settings`) filled in with real phone/email/hours/tax rate/deposit/minimum age

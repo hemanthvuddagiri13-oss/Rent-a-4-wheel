@@ -133,6 +133,7 @@ describe("emergency override — unauthorized force-start attempts are all rejec
 
   it("succeeds for a SUPER_ADMIN with role + step-up + reason + confirmation, and leaves a full audit record", async () => {
     const { actor, reservation } = await setupReservationAndActor("SUPER_ADMIN");
+    await prisma.payment.create({ data: { reservationId: reservation.id, type: "RENTAL", status: "SUCCEEDED", amountCents: reservation.totalCents } });
     const code = await issueValidStepUpCode(actor.email);
 
     const result = await performEmergencyOverride({

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { enqueueOutboxNotification } from "@/lib/outbox";
-import { getOrCreateRefundOperation, executeRefundOperation } from "@/lib/refund-operations";
+import { withReservationLock } from "@/lib/financial-locks";
+import { requireRefund, settleTerminatedReservation } from "@/lib/stripe-webhook-handlers";
 import type { Payment, Reservation, ReconciliationReason } from "@prisma/client";
 
 /**
@@ -24,49 +24,11 @@ export async function refundUnhonorableCharge(params: {
   reason: ReconciliationReason;
   idempotencyKeySuffix: string;
 }): Promise<void> {
-  const { reservation, payment, stripePaymentIntentId, reason, idempotencyKeySuffix } = params;
-
-  const refund = await getOrCreateRefundOperation({
-    idempotencyKey: `reconciliation-${idempotencyKeySuffix}-${payment.id}`,
-    reservationId: reservation.id,
-    paymentId: payment.id,
-    amountCents: payment.amountCents,
-    reason: `Automatic refund: ${reason}`,
+  await withReservationLock(params.reservation.id, async tx => {
+    await tx.payment.update({ where: { id: params.payment.id }, data: { status: "SUCCEEDED" } });
+    await requireRefund(tx, params.reservation.id, params.payment, params.reason);
   });
-  const result = await executeRefundOperation(refund.id, stripePaymentIntentId);
-  const succeeded = result.status === "SUCCEEDED" || (result.status === "already_terminal" && result.refund.status === "SUCCEEDED");
-  const refundError = result.status === "FAILED" ? result.error : undefined;
-
-  await prisma.$transaction(async (tx) => {
-    await tx.paymentReconciliation.create({
-      data: {
-        reservationId: reservation.id,
-        paymentId: payment.id,
-        stripePaymentIntentId,
-        reason,
-        status: succeeded ? "REFUNDED" : "NEEDS_MANUAL_REVIEW",
-        refundId: refund.stripeRefundId ?? undefined,
-        detail: { refundError, reservationStatusAtReconciliation: reservation.status, refundRecordId: refund.id },
-      },
-    });
-
-    await tx.tripEvent.create({
-      data: {
-        reservationId: reservation.id,
-        type: succeeded ? "PAYMENT_RECONCILED_REFUNDED" : "PAYMENT_RECONCILIATION_NEEDS_REVIEW",
-        metadata: { reason, refundError },
-      },
-    });
-
-    if (succeeded) {
-      await enqueueOutboxNotification(tx, {
-        userId: reservation.customerId,
-        reservationId: reservation.id,
-        type: "REFUND",
-        extra: { amountCents: payment.amountCents },
-      });
-    }
-  });
+  await settleTerminatedReservation(params.reservation.id);
 }
 
 /**

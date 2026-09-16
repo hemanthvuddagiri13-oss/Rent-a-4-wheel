@@ -26,6 +26,7 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
   const [couponMessage, setCouponMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     async function fetchQuote() {
       const pickupAt = `${state.pickupDate}T${state.pickupTime}:00`;
       const returnAt = `${state.returnDate}T${state.returnTime}:00`;
@@ -40,16 +41,23 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Unable to calculate pricing.");
-        update({ breakdown: data.breakdown });
+        const held = await fetch("/api/reservations/hold", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vehicleId: vehicle.id, pickupAt, returnAt, extraIds: state.selectedExtraIds, couponCode: state.couponCode || undefined }) });
+        const hold = await held.json();
+        if (!held.ok) throw new Error(hold.error || "Unable to update reservation");
+        if (cancelled) return;
+        update({ reservationId: hold.id, confirmationNumber: hold.confirmationNumber, holdExpiresAt: hold.expiresAt, bookingFingerprint: hold.bookingFingerprint });
+        update({ breakdown: hold.breakdown });
         setCouponMessage(data.couponError || (data.couponApplied ? "Coupon applied!" : null));
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to calculate pricing.");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to calculate pricing.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     fetchQuote();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicle.id, state.pickupDate, state.pickupTime, state.returnDate, state.returnTime, state.selectedExtraIds, state.couponCode]);
 
@@ -155,7 +163,7 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        <Button size="lg" disabled={!state.breakdown || !state.agreementAccepted || loading} onClick={onNext}>
+        <Button size="lg" disabled={!state.breakdown || !state.agreementAccepted || loading || Boolean(error)} onClick={onNext}>
           Continue to Payment
         </Button>
       </div>

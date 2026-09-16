@@ -1,0 +1,9 @@
+{
+  "crons": [
+    { "path": "/api/cron/financial/stripe-events", "schedule": "* * * * *" },
+    { "path": "/api/cron/financial/refunds", "schedule": "* * * * *" },
+    { "path": "/api/cron/financial/deposits", "schedule": "* * * * *" },
+    { "path": "/api/cron/financial/reconciliation", "schedule": "* * * * *" },
+    { "path": "/api/cron/financial/outbox", "schedule": "* * * * *" }
+  ]
+}

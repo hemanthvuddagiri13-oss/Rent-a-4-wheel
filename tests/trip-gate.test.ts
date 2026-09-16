@@ -21,7 +21,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-async function fullySetUpReservation() {
+async function fullySetUpReservation(paid = true) {
   const vehicle = await createTestVehicle();
   const customer = await createTestCustomer();
   const { user: hostUser, hostProfile } = await createTestHost();
@@ -38,7 +38,7 @@ async function fullySetUpReservation() {
   });
 
   await prisma.payment.create({
-    data: { reservationId: reservation.id, type: "RENTAL", status: "SUCCEEDED", amountCents: 15000 },
+    data: { reservationId: reservation.id, type: "RENTAL", status: paid ? "SUCCEEDED" : "REQUIRES_PAYMENT", amountCents: 15000 },
   });
 
   await prisma.driverDocument.createMany({
@@ -120,8 +120,7 @@ describe("evaluateTripStartGate — individually missing preconditions", () => {
   });
 
   it("blocks the trip when the rental payment has not succeeded", async () => {
-    const { reservation } = await fullySetUpReservation();
-    await prisma.payment.updateMany({ where: { reservationId: reservation.id }, data: { status: "REQUIRES_PAYMENT" } });
+    const { reservation } = await fullySetUpReservation(false);
 
     const gate = await evaluateTripStartGate(reservation.id);
     expect(gate.canStart).toBe(false);

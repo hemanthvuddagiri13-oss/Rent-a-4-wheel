@@ -2,64 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
-import { transitionReservation } from "@/lib/reservation-state-machine";
 import { confirmAfterRentalPaymentSuccess } from "@/lib/stripe-webhook-handlers";
-
-/**
- * Retries a failed security-deposit authorization for a reservation stuck
- * in PAYMENT_FAILED (see src/lib/stripe-webhook-handlers.ts and
- * src/lib/cleanup.ts — the rental payment already succeeded and is being
- * held pending either a successful retry here or an automatic refund once
- * the recovery window lapses). Reuses the same saved payment method the
- * customer already confirmed with for the rental charge — this covers a
- * transient decline (insufficient funds resolved, temporary hold) but NOT
- * a customer wanting to authorize the deposit with a genuinely different
- * card; that case still falls through to the automatic-refund recovery
- * path (item 4 is satisfied for the "retry same method" case; a
- * different-card retry UI is a follow-up, not a correctness bug).
- */
+import { attemptDepositAuthorization } from "@/lib/deposit-authorization";
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const reservation = await prisma.reservation.findUnique({
-    where: { id },
-    include: { deposit: true, payments: { where: { type: "RENTAL", status: "SUCCEEDED" } } },
-  });
-  if (!reservation) return NextResponse.json({ error: "Reservation not found." }, { status: 404 });
-  if (reservation.customerId !== session.user.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (reservation.status !== "PAYMENT_FAILED") {
-    return NextResponse.json({ error: "This reservation does not have a pending deposit retry." }, { status: 409 });
-  }
-  const rentalPayment = reservation.payments[0];
-  if (!rentalPayment?.stripePaymentIntentId || !stripe) {
-    return NextResponse.json({ error: "Unable to retry: original payment not found." }, { status: 409 });
-  }
-
-  const rentalIntent = await stripe.paymentIntents.retrieve(rentalPayment.stripePaymentIntentId);
-
+  const { id } = await params;
+  const r = await prisma.reservation.findUnique({ where: { id }, include: { deposit: true, payments: { where: { type: "RENTAL", status: "SUCCEEDED" } } } });
+  if (!r) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (r.customerId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (r.financialDisposition !== "OPEN" || !["PAYMENT_FAILED","CONFIRMED","DOCUMENTS_REQUIRED","READY_FOR_CHECK_IN","CHECK_IN_PROGRESS","READY_TO_START"].includes(r.status) ||
+    (r.status === "PAYMENT_FAILED" && (!r.expiresAt || r.expiresAt <= new Date()))) return NextResponse.json({ error: "Deposit recovery unavailable" }, { status: 409 });
+  const p = r.payments[0];
+  if (!stripe || !p?.stripePaymentIntentId) return NextResponse.json({ error: "Payment provider unavailable" }, { status: 503 });
   try {
-    await prisma.$transaction(async (tx) => {
-      await transitionReservation(tx, {
-        id: reservation.id,
-        from: "PAYMENT_FAILED",
-        to: "AWAITING_PAYMENT",
-        data: { expiresAt: null },
-      });
-      await tx.tripEvent.create({ data: { reservationId: reservation.id, type: "DEPOSIT_RETRY_ATTEMPTED", actorId: session.user.id } });
-    });
+    const intent = await stripe.paymentIntents.retrieve(p.stripePaymentIntentId);
+    if (r.status === "PAYMENT_FAILED") await confirmAfterRentalPaymentSuccess(r, p, intent, true);
+    else await attemptDepositAuthorization(r, intent, true);
+    const d = await prisma.securityDeposit.findUnique({ where: { reservationId: id } });
+    const depositIntent = d?.stripePaymentIntentId ? await stripe.paymentIntents.retrieve(d.stripePaymentIntentId) : null;
+    return NextResponse.json({ success: d?.status === "SUCCEEDED", requiresAction: depositIntent?.status === "requires_action",
+      clientSecret: depositIntent?.status === "requires_action" ? depositIntent.client_secret : null });
   } catch {
-    return NextResponse.json({ error: "This reservation is no longer eligible for a deposit retry." }, { status: 409 });
+    return NextResponse.json({ error: "Deposit recovery is pending. Your rental payment will not be charged again." }, { status: 503 });
   }
-
-  const reopened = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: true } });
-  const { confirmed } = await confirmAfterRentalPaymentSuccess(reopened, rentalPayment, rentalIntent);
-
-  return NextResponse.json({
-    success: confirmed,
-    message: confirmed ? "Security deposit authorized." : "The security deposit could not be authorized again. This reservation will be automatically refunded if not resolved soon.",
-  });
 }

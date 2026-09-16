@@ -1,9 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const createRefund = vi.fn();
+const retrieveRefund = vi.fn();
 
 vi.mock("@/lib/stripe", () => ({
-  stripe: { refunds: { create: createRefund } },
+  stripe: { refunds: { create: createRefund, retrieve: retrieveRefund } },
 }));
 
 const { getOrCreateRefundOperation, executeRefundOperation, reconcileRefundStatus } = await import("@/lib/refund-operations");
@@ -43,7 +44,7 @@ async function setupPaidReservation() {
 }
 
 describe("item 7 — resumable, application-idempotent refund reconciliation", () => {
-  it("crash after a successful Stripe refund but before the DB commit: retrying resumes instead of double-refunding", async () => {
+  it("retry after completed refund returns its existing result", async () => {
     const { reservation, payment } = await setupPaidReservation();
     const idempotencyKey = `test-crash-${payment.id}`;
 
@@ -53,9 +54,8 @@ describe("item 7 — resumable, application-idempotent refund reconciliation", (
     expect(first.status).toBe("SUCCEEDED");
     expect(createRefund).toHaveBeenCalledOnce();
 
-    // Simulate a retry of the SAME logical operation (e.g. the caller
-    // crashed right after Stripe responded, before persisting, and a
-    // supervisor re-invokes with the same idempotencyKey).
+    // Replay after completion; actual persistence-failure injection is in
+    // financial-concurrency.test.ts.
     const resumedOp = await getOrCreateRefundOperation({ idempotencyKey, reservationId: reservation.id, paymentId: payment.id, amountCents: 15000 });
     expect(resumedOp.id).toBe(refund.id);
     const second = await executeRefundOperation(resumedOp.id, payment.stripePaymentIntentId);
@@ -80,7 +80,7 @@ describe("item 7 — resumable, application-idempotent refund reconciliation", (
     // Never two separate durable operations for the same idempotencyKey.
     expect(opA.id).toBe(opB.id);
 
-    const [resultA, resultB] = await Promise.all([
+    const results = await Promise.allSettled([
       executeRefundOperation(opA.id, payment.stripePaymentIntentId),
       executeRefundOperation(opB.id, payment.stripePaymentIntentId),
     ]);
@@ -93,7 +93,8 @@ describe("item 7 — resumable, application-idempotent refund reconciliation", (
     const finalRefund = await prisma.refund.findUniqueOrThrow({ where: { id: opA.id } });
     expect(finalRefund.status).toBe("SUCCEEDED");
     expect(finalRefund.stripeRefundId).toBe("re_concurrent");
-    expect([resultA.status, resultB.status]).toContain("SUCCEEDED");
+    expect(results.some(r => r.status === "fulfilled" && r.value.status === "SUCCEEDED")).toBe(true);
+    expect(createRefund).toHaveBeenCalledOnce();
   });
 });
 
@@ -109,6 +110,7 @@ describe("item 8 — refund creation is not refund completion", () => {
     let reloaded = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
     expect(reloaded.status).toBe("PENDING");
 
+    retrieveRefund.mockResolvedValueOnce({ id: "re_pending_1", status: "succeeded" });
     await reconcileRefundStatus("re_pending_1", "succeeded");
     reloaded = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
     expect(reloaded.status).toBe("SUCCEEDED");
@@ -121,6 +123,7 @@ describe("item 8 — refund creation is not refund completion", () => {
     const refund = await getOrCreateRefundOperation({ idempotencyKey: `test-pending-fail-${payment.id}`, reservationId: reservation.id, paymentId: payment.id, amountCents: 15000 });
     await executeRefundOperation(refund.id, payment.stripePaymentIntentId);
 
+    retrieveRefund.mockResolvedValueOnce({ id: "re_pending_2", status: "failed" });
     await reconcileRefundStatus("re_pending_2", "failed");
     const reloaded = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
     expect(reloaded.status).toBe("FAILED");
@@ -133,6 +136,7 @@ describe("item 8 — refund creation is not refund completion", () => {
     const refund = await getOrCreateRefundOperation({ idempotencyKey: `test-terminal-${payment.id}`, reservationId: reservation.id, paymentId: payment.id, amountCents: 15000 });
     await executeRefundOperation(refund.id, payment.stripePaymentIntentId);
 
+    retrieveRefund.mockResolvedValueOnce({ id: "re_terminal", status: "succeeded" });
     await reconcileRefundStatus("re_terminal", "failed");
     const reloaded = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
     expect(reloaded.status).toBe("SUCCEEDED");

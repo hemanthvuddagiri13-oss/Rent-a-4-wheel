@@ -25,6 +25,7 @@ export const createHoldSchema = z.object({
 });
 
 export const checkoutSchema = z.object({
+  bookingFingerprint: z.string().optional(),
   driver: driverInfoSchema,
   documentIds: z.object({
     front: z.string().optional(),

@@ -63,7 +63,7 @@ export function StepDriver({ vehicle, state, update, onNext, onBack }: Props) {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Unable to hold this vehicle for you.");
         if (!cancelled) {
-          update({ reservationId: data.id, confirmationNumber: data.confirmationNumber, holdExpiresAt: data.expiresAt });
+          update({ reservationId: data.id, confirmationNumber: data.confirmationNumber, holdExpiresAt: data.expiresAt, bookingFingerprint: data.bookingFingerprint });
         }
       } catch (err) {
         if (!cancelled) setHoldError(err instanceof Error ? err.message : "Something went wrong.");

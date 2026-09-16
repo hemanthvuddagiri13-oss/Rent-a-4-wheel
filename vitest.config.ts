@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
     environment: "node",
+    // Some suites share the singleton LegalDocument configuration. Individual
+    // financial tests explicitly overlap independent PostgreSQL connections.
+    fileParallelism: false,
     include: ["tests/**/*.test.ts"],
     testTimeout: 20000,
     // Load DATABASE_URL (and any other .env values) into process.env for the

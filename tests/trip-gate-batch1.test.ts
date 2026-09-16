@@ -23,6 +23,7 @@ async function setupConfirmedReservation() {
     pickupAt: new Date(Date.now() - 60 * 60 * 1000),
     returnAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
     status: "READY_TO_START",
+    depositCents: 30000,
   });
   return { vehicle, customer, reservation };
 }
@@ -67,6 +68,7 @@ describe("item 5 — trip start requires a currently valid deposit authorization
         reservationId: reservation.id,
         amountCents: 30000,
         status: "SUCCEEDED",
+        stripeStatus: "requires_capture",
         authorizedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
         authorizationExpiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000), // already expired
       },
@@ -76,7 +78,7 @@ describe("item 5 — trip start requires a currently valid deposit authorization
     expect(gate.reasons.some((r) => r.includes("currently valid authorization"))).toBe(true);
   });
 
-  it("allows trip start when the deposit authorization is still valid", async () => {
+  it("does not add a deposit reason when the authorization is still valid", async () => {
     const { reservation } = await setupConfirmedReservation();
     await prisma.payment.create({
       data: { reservationId: reservation.id, type: "RENTAL", status: "SUCCEEDED", amountCents: 15000, stripePaymentIntentId: `pi_deposit_gate_valid_${reservation.id}` },
@@ -86,6 +88,7 @@ describe("item 5 — trip start requires a currently valid deposit authorization
         reservationId: reservation.id,
         amountCents: 30000,
         status: "SUCCEEDED",
+        stripeStatus: "requires_capture",
         authorizedAt: new Date(),
         authorizationExpiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
       },

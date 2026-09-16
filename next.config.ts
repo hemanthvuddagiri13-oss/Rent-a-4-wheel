@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Optional worker threads for Windows environments without subprocess pipes.
+  experimental: { workerThreads: process.env.LOCAL_BUILD_WORKER_THREADS === "true", useTypeScriptCli: process.env.LOCAL_BUILD_WORKER_THREADS !== "true" },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "res.cloudinary.com" },
