@@ -9,6 +9,7 @@ import { handlePaymentIntentSucceeded, handlePaymentIntentFailed } from "@/lib/s
 import { createOrRefreshHold } from "@/lib/checkout-hold";
 import { expireStaleReservations } from "@/lib/cleanup";
 import { assertFinancialTripStart } from "@/lib/financial-locks";
+import { recoverRefunds } from "@/lib/financial-workers";
 
 const provider = vi.hoisted(() => ({ refunds: { create: vi.fn(), retrieve: vi.fn(), list: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn(), cancel: vi.fn() } }));
 vi.mock("@/lib/stripe", () => ({ stripe: provider }));
@@ -42,6 +43,19 @@ async function waitForDatabaseLock(pid: number) {
 }
 
 describe("durable financial operations with real concurrent connections", () => {
+  it("rotates an uncertain refund without freeing its reserved balance", async () => {
+    const { r, p } = await fixture();
+    const refund = await getOrCreateRefundOperation({ reservationId: r.id, paymentId: p.id, amountCents: 15000, idempotencyKey: `rotation:${p.id}` });
+    await prisma.refund.update({ where: { id: refund.id }, data: { updatedAt: new Date(0) } });
+    // Scope the worker batch to this fixture; execution and projections use PostgreSQL.
+    vi.spyOn(prisma.refund, "findMany").mockResolvedValueOnce([{ ...refund, payment: p }] as never);
+    provider.refunds.create.mockRejectedValueOnce(new Error("Provider outcome unknown"));
+    expect(await recoverRefunds()).toEqual({ processed: 0, pending: 1 });
+    const current = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
+    expect(current.updatedAt.getTime()).toBeGreaterThan(0);
+    expect(current.status).toBe("PENDING");
+    await expect(getOrCreateRefundOperation({ reservationId: r.id, paymentId: p.id, amountCents: 1, idempotencyKey: `rotation-overrun:${p.id}` })).rejects.toThrow("remaining refundable balance");
+  });
   it("retrieves an existing pending refund after the replay window instead of recreating it", async () => {
     const { r, p } = await fixture();
     const refund = await getOrCreateRefundOperation({ reservationId: r.id, paymentId: p.id, amountCents: 5000, idempotencyKey: `pending:${p.id}` });

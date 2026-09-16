@@ -26,7 +26,12 @@ export async function recoverStripeEvents() {
 }
 export async function recoverRefunds() {
   const refunds = await prisma.refund.findMany({ where: { status: "PENDING" }, include: { payment: true }, orderBy: { updatedAt: "asc" }, take: 25 });
-  return each(refunds, r => executeRefundOperation(r.id, r.payment.stripePaymentIntentId));
+  return each(refunds, async r => {
+    // Rotate even uncertain/provider-failed items so one poisoned batch cannot
+    // permanently starve later refunds. The operation lease owns execution.
+    await prisma.refund.updateMany({ where: { id: r.id, status: "PENDING" }, data: { updatedAt: new Date() } });
+    return executeRefundOperation(r.id, r.payment.stripePaymentIntentId);
+  });
 }
 export async function recoverDeposits() {
   const legacyIds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT d."id" FROM "SecurityDeposit" d WHERE d."stripePaymentIntentId" IS NOT NULL
@@ -42,7 +47,10 @@ export async function recoverDeposits() {
     if (!operation.reservationId) return;
     const r = await prisma.reservation.findUnique({ where: { id: operation.reservationId } });
     if (!r) return;
-    if (r.financialDisposition !== "OPEN" && !operation.firstAttemptAt) return;
+    if (r.financialDisposition !== "OPEN" && !operation.firstAttemptAt) {
+      await prisma.financialOperation.updateMany({ where: { id: operation.id, firstAttemptAt: null }, data: { nextAttemptAt: new Date(Date.now() + 86400000) } });
+      return;
+    }
     await executeDepositOperation(operation);
     if (r.financialDisposition !== "OPEN") await releaseDeposits(r.id);
     else {
