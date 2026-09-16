@@ -1,0 +1,861 @@
+// Rent A 4Wheel — Prisma schema
+// PostgreSQL datasource. All monetary values are stored as integer cents (USD)
+// to avoid floating point rounding errors.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH & USERS
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CUSTOMER
+  STAFF
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  phone         String?
+  role          Role      @default(CUSTOMER)
+  isActive      Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  customer        Customer?
+  reservations    Reservation[]    @relation("ReservationCustomer")
+  documents       DriverDocument[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]       @relation("AuditActor")
+  reviews         Review[]
+  contactMessages ContactMessage[]
+
+  @@index([role])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Extended profile for customers (renters). Admin/staff capability is
+// represented by User.role rather than a separate table, avoiding a
+// redundant 1:1 mirror of User for privileged accounts.
+model Customer {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  dateOfBirth  DateTime?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  zip          String?
+  country      String?   @default("US")
+
+  licenseNumber     String?
+  licenseState      String?
+  licenseExpiration DateTime?
+
+  verificationStatus DocumentStatus @default(PENDING_VERIFICATION)
+  verificationNotes  String?        @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([verificationStatus])
+}
+
+// ---------------------------------------------------------------------------
+// VEHICLES
+// ---------------------------------------------------------------------------
+
+enum VehicleCategory {
+  ECONOMY
+  SEDAN
+  SUV
+  LUXURY
+  TRUCK
+}
+
+enum Transmission {
+  AUTOMATIC
+  MANUAL
+}
+
+enum FuelType {
+  GASOLINE
+  DIESEL
+  HYBRID
+  ELECTRIC
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+  RETIRED
+}
+
+enum OwnershipType {
+  COMPANY_OWNED
+  LEASED_TO_COMPANY
+  MANAGED_VEHICLE
+}
+
+model Vehicle {
+  id   String @id @default(cuid())
+  slug String @unique
+
+  vin          String  @unique
+  licensePlate String
+  year         Int
+  make         String
+  model        String
+  trim         String?
+  color        String?
+  mileage      Int     @default(0)
+
+  category     VehicleCategory
+  transmission Transmission    @default(AUTOMATIC)
+  fuelType     FuelType        @default(GASOLINE)
+  seats        Int             @default(5)
+  doors        Int             @default(4)
+  mpg          Int?
+
+  description String?       @db.Text
+  status      VehicleStatus @default(ACTIVE)
+  isDemo      Boolean       @default(false)
+
+  // Pricing — set independently by admin, stored as integer cents.
+  dailyRateCents       Int
+  weeklyRateCents      Int
+  monthlyRateCents     Int
+  securityDepositCents Int @default(0)
+
+  mileageAllowancePerDay    Int @default(150)
+  additionalMileageFeeCents Int @default(35)
+
+  minRentalDays      Int  @default(1)
+  maxRentalDays      Int?
+  advanceNoticeHours Int  @default(2)
+
+  // Compliance tracking
+  registrationExpiresAt     DateTime?
+  insuranceExpiresAt        DateTime?
+  inspectionExpiresAt       DateTime?
+  nextMaintenanceDueAt      DateTime?
+  nextMaintenanceDueMileage Int?
+
+  ownerId       String?
+  owner         VehicleOwner? @relation(fields: [ownerId], references: [id])
+  ownershipType OwnershipType @default(COMPANY_OWNED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  images             VehicleImage[]
+  features           VehicleFeatureOnVehicle[]
+  reservations       Reservation[]
+  blocks             VehicleBlock[]
+  inspections        VehicleInspection[]
+  maintenanceRecords MaintenanceRecord[]
+  reviews            Review[]
+  availability       VehicleAvailabilityConfig?
+
+  @@index([category])
+  @@index([status])
+  @@index([make, model])
+}
+
+model VehicleAvailabilityConfig {
+  id        String  @id @default(cuid())
+  vehicleId String  @unique
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  isBookable    Boolean @default(true)
+  blackoutNotes String? @db.Text
+
+  updatedAt DateTime @updatedAt
+}
+
+model VehicleImage {
+  id        String  @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  url       String
+  publicId  String? // Cloudinary public id
+  alt       String?
+  position  Int     @default(0)
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([vehicleId])
+}
+
+model Feature {
+  id   String  @id @default(cuid())
+  name String  @unique
+  icon String? // lucide icon name
+
+  vehicles VehicleFeatureOnVehicle[]
+}
+
+model VehicleFeatureOnVehicle {
+  vehicleId String
+  featureId String
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([vehicleId, featureId])
+}
+
+// ---------------------------------------------------------------------------
+// VEHICLE OWNERSHIP (for leased / managed vehicles from third-party owners)
+// ---------------------------------------------------------------------------
+
+model VehicleOwner {
+  id    String  @id @default(cuid())
+  name  String
+  email String?
+  phone String?
+  notes String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicles   Vehicle[]
+  agreements OwnerAgreement[]
+}
+
+enum PaymentArrangement {
+  MONTHLY_FIXED
+  REVENUE_SHARE
+}
+
+model OwnerAgreement {
+  id      String       @id @default(cuid())
+  ownerId String
+  owner   VehicleOwner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  startDate DateTime
+  endDate   DateTime?
+
+  paymentArrangement  PaymentArrangement
+  monthlyFixedCents   Int?
+  revenueSharePercent Decimal?           @db.Decimal(5, 2)
+
+  documentUrl String? // private, admin-only ownership/lease document
+  notes       String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// RESERVATIONS / BOOKING
+// ---------------------------------------------------------------------------
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum RateType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model Reservation {
+  id                 String @id @default(cuid())
+  confirmationNumber String @unique // e.g. RA4W-XXXXXX
+
+  customerId String
+  customer   User   @relation("ReservationCustomer", fields: [customerId], references: [id])
+
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+
+  pickupAt       DateTime
+  returnAt       DateTime
+  pickupLocation String   @default("Dallas, TX")
+  returnLocation String   @default("Dallas, TX")
+
+  rateType        RateType
+  rateAmountCents Int // the per-unit rate applied (daily/weekly/monthly) at booking time
+  units           Int // number of days/weeks/months billed
+
+  subtotalCents Int
+  taxCents      Int @default(0)
+  feesCents     Int @default(0)
+  discountCents Int @default(0)
+  extrasCents   Int @default(0)
+  totalCents    Int
+  depositCents  Int @default(0)
+
+  couponId String?
+  coupon   Coupon? @relation(fields: [couponId], references: [id])
+
+  status ReservationStatus @default(PENDING)
+
+  driverFirstName   String
+  driverLastName    String
+  driverDob         DateTime
+  driverEmail       String
+  driverPhone       String
+  driverAddress     String
+  driverCity        String
+  driverState       String
+  driverZip         String
+  driverCountry     String   @default("US")
+  licenseNumber     String
+  licenseState      String
+  licenseExpiration DateTime
+
+  agreementAcceptedAt      DateTime?
+  agreementVersionAccepted String?
+
+  notes String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  extras        ReservationExtra[]
+  payments      Payment[]
+  refunds       Refund[]
+  deposit       SecurityDeposit?
+  documents     DriverDocument[]
+  agreement     RentalAgreement?
+  inspections   VehicleInspection[]
+  damageReports DamageReport[]
+  notifications Notification[]
+
+  @@index([vehicleId, pickupAt, returnAt])
+  @@index([customerId])
+  @@index([status])
+}
+
+model Extra {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  chargeType  ExtraChargeType
+  amountCents Int? // for ONE_TIME / DAILY
+  percent     Decimal?        @db.Decimal(5, 2) // for PERCENTAGE
+  isActive    Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations ReservationExtra[]
+}
+
+enum ExtraChargeType {
+  ONE_TIME
+  DAILY
+  PERCENTAGE
+}
+
+model ReservationExtra {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  extraId String
+  extra   Extra  @relation(fields: [extraId], references: [id])
+
+  quantity    Int @default(1)
+  amountCents Int // computed line total at time of booking
+
+  @@index([reservationId])
+}
+
+// ---------------------------------------------------------------------------
+// PAYMENTS
+// ---------------------------------------------------------------------------
+
+enum PaymentStatus {
+  REQUIRES_PAYMENT
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentType {
+  RENTAL
+  DEPOSIT_AUTH
+  DEPOSIT_CAPTURE
+  ADDITIONAL_CHARGE
+}
+
+model Payment {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  type   PaymentType
+  status PaymentStatus @default(REQUIRES_PAYMENT)
+
+  amountCents Int
+  currency    String @default("usd")
+
+  stripePaymentIntentId String? @unique
+  idempotencyKey        String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  refunds Refund[]
+
+  @@index([reservationId])
+  @@index([status])
+}
+
+enum RefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model Refund {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id])
+
+  amountCents    Int
+  reason         String?
+  status         RefundStatus @default(PENDING)
+  stripeRefundId String?      @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reservationId])
+}
+
+model SecurityDeposit {
+  id            String      @id @default(cuid())
+  reservationId String      @unique
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  amountCents           Int
+  status                PaymentStatus @default(REQUIRES_PAYMENT)
+  stripePaymentIntentId String?       @unique
+  capturedAmountCents   Int?
+  releasedAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// DRIVER DOCUMENTS (private storage only)
+// ---------------------------------------------------------------------------
+
+enum DocumentStatus {
+  PENDING_VERIFICATION
+  APPROVED
+  REJECTED
+  NEEDS_INFORMATION
+}
+
+enum DocumentSide {
+  FRONT
+  BACK
+}
+
+model DriverDocument {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  reservationId String?
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+
+  side         DocumentSide
+  // Private storage key/URL only — never served publicly. Access must go
+  // through an authenticated, signed route (see /api/documents/[id]).
+  storageKey   String
+  status       DocumentStatus @default(PENDING_VERIFICATION)
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNotes  String?        @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([reservationId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// RENTAL AGREEMENT (legal e-sign workflow)
+// ---------------------------------------------------------------------------
+
+model RentalAgreement {
+  id            String      @id @default(cuid())
+  reservationId String      @unique
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  documentVersion    String // version of the LegalDocument (RENTAL_AGREEMENT) accepted
+  acceptedAt         DateTime
+  signerName         String
+  signatureProvider  String? // e.g. "docusign", "hellosign" — architecture placeholder
+  signatureRequestId String?
+  pdfUrl             String? // generated agreement PDF (private storage)
+
+  createdAt DateTime @default(now())
+
+  @@index([reservationId])
+}
+
+enum LegalDocumentType {
+  RENTAL_AGREEMENT
+  TERMS_AND_CONDITIONS
+  PRIVACY_POLICY
+  CANCELLATION_POLICY
+  INSURANCE_POLICY
+  DAMAGE_POLICY
+  SECURITY_DEPOSIT_POLICY
+}
+
+// Admin-editable legal content. Content flagged `needsAttorneyReview` must
+// display a clear placeholder warning until reviewed by a licensed Texas
+// attorney — see README "Legal" section.
+model LegalDocument {
+  id                  String            @id @default(cuid())
+  type                LegalDocumentType @unique
+  version             String            @default("v1-draft")
+  title               String
+  content             String            @db.Text
+  needsAttorneyReview Boolean           @default(true)
+
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+// ---------------------------------------------------------------------------
+// FLEET OPERATIONS
+// ---------------------------------------------------------------------------
+
+enum BlockReason {
+  MAINTENANCE
+  ADMIN_HOLD
+  OWNER_REQUEST
+  OTHER
+}
+
+model VehicleBlock {
+  id        String  @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  startAt DateTime
+  endAt   DateTime
+  reason  BlockReason @default(OTHER)
+  notes   String?     @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([vehicleId, startAt, endAt])
+}
+
+enum InspectionType {
+  CHECK_OUT
+  CHECK_IN
+}
+
+model VehicleInspection {
+  id            String      @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle     @relation(fields: [vehicleId], references: [id])
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  type InspectionType
+
+  mileage       Int
+  fuelLevel     Int // percentage 0-100
+  photoUrls     String[] // private storage URLs
+  damageNotes   String?  @db.Text
+  performedById String?
+  performedAt   DateTime @default(now())
+
+  lateReturn            Boolean @default(false)
+  additionalMileage     Int     @default(0)
+  additionalChargeCents Int     @default(0)
+
+  @@index([vehicleId])
+  @@index([reservationId])
+}
+
+model DamageReport {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  description        String   @db.Text
+  photoUrls          String[]
+  estimatedCostCents Int?
+  chargedCents       Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([reservationId])
+}
+
+enum MaintenanceType {
+  OIL_CHANGE
+  TIRES
+  BRAKES
+  INSPECTION
+  REGISTRATION
+  INSURANCE
+  REPAIR
+  CLEANING
+  OTHER
+}
+
+model MaintenanceRecord {
+  id        String  @id @default(cuid())
+  vehicleId String
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  service            MaintenanceType
+  serviceDate        DateTime
+  mileage            Int
+  costCents          Int
+  vendor             String?
+  nextServiceDate    DateTime?
+  nextServiceMileage Int?
+  notes              String?         @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([vehicleId])
+}
+
+// ---------------------------------------------------------------------------
+// MARKETING / SUPPORT
+// ---------------------------------------------------------------------------
+
+enum CouponDiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+model Coupon {
+  id   String @id @default(cuid())
+  code String @unique
+
+  discountType CouponDiscountType
+  amountCents  Int? // for FIXED
+  percent      Decimal?           @db.Decimal(5, 2) // for PERCENTAGE
+
+  startsAt      DateTime
+  expiresAt     DateTime
+  minRentalDays Int?
+  maxUses       Int?
+  usedCount     Int      @default(0)
+
+  applicableVehicleIds String[] // empty = all vehicles
+
+  isActive Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+
+  @@index([code])
+}
+
+model Review {
+  id String @id @default(cuid())
+
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+
+  authorName  String
+  rating      Int // 1-5
+  comment     String  @db.Text
+  isPublished Boolean @default(false)
+  isDemo      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isPublished])
+}
+
+model ContactMessage {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  name    String
+  email   String
+  phone   String?
+  message String  @db.Text
+
+  isResolved Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model FaqCategory {
+  id       String @id @default(cuid())
+  name     String @unique
+  position Int    @default(0)
+
+  faqs Faq[]
+}
+
+model Faq {
+  id         String      @id @default(cuid())
+  categoryId String
+  category   FaqCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  question    String
+  answer      String  @db.Text
+  position    Int     @default(0)
+  isPublished Boolean @default(true)
+
+  @@index([categoryId])
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMATION
+  PAYMENT_RECEIPT
+  UPCOMING_RENTAL_REMINDER
+  DRIVER_VERIFICATION_REQUEST
+  PICKUP_REMINDER
+  RETURN_REMINDER
+  CANCELLATION
+  REFUND
+  LATE_RETURN
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Notification {
+  id String @id @default(cuid())
+
+  userId        String?
+  user          User?        @relation(fields: [userId], references: [id])
+  reservationId String?
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+
+  type    NotificationType
+  channel NotificationChannel @default(EMAIL)
+  status  NotificationStatus  @default(PENDING)
+
+  subject String?
+  payload Json?
+  error   String?
+
+  createdAt DateTime  @default(now())
+  sentAt    DateTime?
+
+  @@index([userId])
+  @@index([status])
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorId String?
+  actor   User?   @relation("AuditActor", fields: [actorId], references: [id])
+
+  action     String // e.g. "vehicle.update", "reservation.cancel"
+  entityType String
+  entityId   String
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+}
+
+// Admin-configurable, no-code business settings (task 34). Single source of
+// truth read via `getSiteSettings()` with in-memory fallback defaults.
+model SiteSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120" width="560" height="120" role="img" aria-labelledby="logoTitle">
+  <title id="logoTitle">Rent A 4Wheel</title>
+  <defs>
+    <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#D4AF37"/>
+      <stop offset="50%" stop-color="#F5C542"/>
+      <stop offset="100%" stop-color="#D4AF37"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(0,10)">
+    <circle cx="50" cy="50" r="44" fill="none" stroke="url(#goldGrad)" stroke-width="5"/>
+    <circle cx="50" cy="50" r="30" fill="none" stroke="#D9D9D9" stroke-width="2.5" opacity="0.85"/>
+    <g stroke="#D9D9D9" stroke-width="2.5" opacity="0.85">
+      <line x1="50" y1="24" x2="50" y2="76"/>
+      <line x1="24" y1="50" x2="76" y2="50"/>
+      <line x1="33" y1="33" x2="67" y2="67"/>
+      <line x1="67" y1="33" x2="33" y2="67"/>
+    </g>
+    <circle cx="50" cy="50" r="6" fill="url(#goldGrad)"/>
+  </g>
+  <text x="118" y="55" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="34" letter-spacing="1" fill="#FFFFFF">RENT A <tspan fill="url(#goldGrad)">4</tspan>WHEEL</text>
+  <text x="119" y="80" font-family="Arial, Helvetica, sans-serif" font-weight="500" font-size="13" letter-spacing="4" fill="#8A8A8A">DRIVE MORE POSSIBILITIES</text>
+</svg>

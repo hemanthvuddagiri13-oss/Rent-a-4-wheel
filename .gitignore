@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.env
+
+# private document storage (never commit real uploads)
+/private-storage/*
+!/private-storage/.gitignore

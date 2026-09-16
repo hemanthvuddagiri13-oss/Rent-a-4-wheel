@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0a0a"/>
+      <stop offset="55%" stop-color="#141414"/>
+      <stop offset="100%" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#D4AF37"/>
+      <stop offset="50%" stop-color="#F5C542"/>
+      <stop offset="100%" stop-color="#D4AF37"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <g opacity="0.08">
+    <circle cx="1000" cy="150" r="280" fill="#D4AF37"/>
+  </g>
+  <g transform="translate(600,430)" opacity="0.9">
+    <path d="M -360 40 Q -360 -40 -280 -55 L -190 -140 Q -140 -175 -40 -175 L 90 -175 Q 170 -175 220 -130 L 300 -55 Q 370 -45 370 40 L 370 90 Q 370 120 335 120 L -325 120 Q -360 120 -360 90 Z"
+      fill="none" stroke="url(#gold)" stroke-width="4"/>
+    <circle cx="-220" cy="120" r="55" fill="#050505" stroke="url(#gold)" stroke-width="4"/>
+    <circle cx="220" cy="120" r="55" fill="#050505" stroke="url(#gold)" stroke-width="4"/>
+    <line x1="-260" y1="-50" x2="240" y2="-50" stroke="url(#gold)" stroke-width="2" opacity="0.5"/>
+  </g>
+  <text x="80" y="710" font-family="Arial, sans-serif" font-size="42" letter-spacing="6" fill="#D9D9D9" opacity="0.85">RENT A 4WHEEL</text>
+  <text x="80" y="660" font-family="Arial, sans-serif" font-size="30" letter-spacing="3" fill="#D4AF37">SUV — SAMPLE IMAGE</text>
+</svg>
