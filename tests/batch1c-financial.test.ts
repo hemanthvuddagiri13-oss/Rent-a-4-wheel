@@ -32,6 +32,14 @@ const rental = {payment_method:"pm_fixture",customer:"cus_fixture"} as never;
 async function snapshot(id:string){return prisma.reservation.findUniqueOrThrow({where:{id},include:{payments:true,refunds:true,deposit:true}})}
 async function waitLock(pid:number) { const deadline=Date.now()+4000; while(Date.now()<deadline){const rows=await prisma.$queryRaw<Array<{wait_event_type:string}>>`SELECT wait_event_type FROM pg_stat_activity WHERE pid=${pid}`; if(rows[0]?.wait_event_type==="Lock") return;await new Promise(r=>setTimeout(r,5));}throw new Error("No concurrent lock wait observed"); }
 describe("Batch 1C financial regressions",()=>{
+ it("adopts a known legacy refund ID even when its operation ledger has no provider mapping",async()=>{
+   const {r,p}=await fixture();const refund=await getOrCreateRefundOperation({reservationId:r.id,paymentId:p.id,amountCents:1000,idempotencyKey:`adopt:${r.id}`});
+   const providerId=`re_known_${r.id}`;await prisma.refund.update({where:{id:refund.id},data:{legacyUncertain:true,stripeRefundId:providerId}});
+   provider.refunds.retrieve.mockResolvedValue({id:providerId,status:"succeeded"});
+   await executeRefundOperation(refund.id,p.stripePaymentIntentId);
+   expect(provider.refunds.create).not.toHaveBeenCalled();expect(provider.refunds.retrieve).toHaveBeenCalledWith(providerId);
+   expect((await prisma.financialOperation.findUniqueOrThrow({where:{key:refund.idempotencyKey}})).providerId).toBe(providerId);
+ });
  it("deposit recovery uses the explicit generation owner rather than timestamp ordering",async()=>{
    const {r}=await fixture(30000);const old=capture(`pi_order_old_${r.id}`),next=capture(`pi_order_new_${r.id}`);
    const ledger=new Map([[old.id,old],[next.id,next]]);

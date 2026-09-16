@@ -82,7 +82,10 @@ export async function executeRefundOperation(refundId: string, suppliedPaymentIn
   }
   const operation = await withReservationLock(refund.reservationId, async tx => {
     const existing = await tx.financialOperation.findUnique({ where: { key: refund.idempotencyKey } });
-    if (existing) return existing;
+    if (existing) {
+      if (!existing.providerId && refund.stripeRefundId) return tx.financialOperation.update({ where: { id: existing.id }, data: { providerId: refund.stripeRefundId } });
+      return existing;
+    }
     const created = await prepareOperation(tx, { key: refund.idempotencyKey, kind: "REFUND", reservationId: refund.reservationId,
       payload: { refundId: refund.id, paymentIntentId: intentId, amount: refund.amountCents } });
     // Legacy pending rows may already have reached Stripe before migration.
