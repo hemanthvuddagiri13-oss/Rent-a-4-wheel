@@ -14,6 +14,7 @@ const stripePromise = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 
 interface Props {
   state: BookingState;
+  onCheckoutComplete: () => void;
   onSuccess: () => void;
   onBack: () => void;
 }
@@ -33,7 +34,7 @@ async function finalizeCheckout(reservationId: string, state: BookingState) {
   if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Unable to complete checkout.");
 }
 
-export function StepPayment({ state, onSuccess, onBack }: Props) {
+export function StepPayment({ state, onCheckoutComplete, onSuccess, onBack }: Props) {
   const [initializing, setInitializing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [devMode, setDevMode] = useState(false);
@@ -53,15 +54,19 @@ export function StepPayment({ state, onSuccess, onBack }: Props) {
         }
 
         const statusResponse = await fetch(`/api/reservations/${reservationId}/status`);
+        if (!statusResponse.ok) throw new Error("Unable to access this reservation.");
+        let checkoutComplete = state.checkoutComplete;
         if (statusResponse.ok) {
           const status = await statusResponse.json();
+          checkoutComplete = status.status !== "CHECKOUT_HOLD";
+          if (checkoutComplete) onCheckoutComplete();
           if (status.outcome === "confirmed") { if (!cancelled) onSuccess(); return; }
           if (status.paidCents > 0 || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(status.status)) {
             if (!cancelled) { setRecovering(true); setOutcome(status.outcome); }
             return;
           }
         }
-        await finalizeCheckout(reservationId, state);
+        if (!checkoutComplete) { await finalizeCheckout(reservationId, state); onCheckoutComplete(); }
 
         const res = await fetch(`/api/reservations/${reservationId}/payment-intent`, { method: "POST" });
         const data = await res.json();

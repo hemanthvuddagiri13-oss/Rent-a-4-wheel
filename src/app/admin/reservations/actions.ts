@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { queueNotification } from "@/lib/notifications";
 import { transitionReservation } from "@/lib/reservation-state-machine";
 import { getOrCreateRefundOperation, executeRefundOperation } from "@/lib/refund-operations";
+import { withReservationLock } from "@/lib/financial-locks";
 
 async function requireAdmin() {
   const session = await auth();
@@ -45,17 +46,17 @@ export async function updateDocumentStatus(documentId: string, status: "APPROVED
 
 export async function cancelReservation(reservationId: string, notes?: string) {
   const session = await requireAdmin();
-  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
-
-  await prisma.$transaction(async (tx) => {
+  const reservation = await withReservationLock(reservationId, async (tx) => {
+    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservationId } });
     await transitionReservation(tx, {
       id: reservationId,
-      from: reservation.status,
+      from: current.status,
       to: "CANCELLED_BY_HOST",
       force: true, // staff can cancel from any pre-trip status, not just the ordinary customer-facing set
       data: { notes, expiresAt: null },
     });
     await tx.tripEvent.create({ data: { reservationId, type: "CANCELLED_BY_HOST", actorId: session.user.id } });
+    return current;
   });
 
   await prisma.auditLog.create({

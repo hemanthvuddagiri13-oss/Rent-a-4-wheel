@@ -57,7 +57,7 @@ describe("Stripe event processing state machine", () => {
 
     const failedRecord = await prisma.stripeEvent.findUniqueOrThrow({ where: { stripeEventId } });
     expect(failedRecord.status).toBe("FAILED");
-    expect(failedRecord.lastError).toContain("simulated transient DB failure");
+    expect(failedRecord.lastError).toBe("OPERATION_FAILED");
     expect(failedRecord.nextRetryAt).not.toBeNull();
 
     // Simulated retry (a second webhook delivery, or a manual replay).

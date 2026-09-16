@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (err instanceof InvalidDocumentError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
-    console.error("Condition report submission failed", err);
+    safeLog("CONDITION_REPORT_SUBMISSION_FAILED", err);
     return NextResponse.json({ error: "Something went wrong submitting the condition report." }, { status: 500 });
   }
 }

@@ -26,6 +26,7 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
   const [couponMessage, setCouponMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    if (state.checkoutComplete) return;
     let cancelled = false;
     async function fetchQuote() {
       const pickupAt = `${state.pickupDate}T${state.pickupTime}:00`;
@@ -34,21 +35,14 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
       setError(null);
 
       try {
-        const res = await fetch(`/api/vehicles/${vehicle.id}/quote`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pickupAt, returnAt, extraIds: state.selectedExtraIds, couponCode: state.couponCode || undefined }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Unable to calculate pricing.");
         const held = await fetch("/api/reservations/hold", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ vehicleId: vehicle.id, pickupAt, returnAt, extraIds: state.selectedExtraIds, couponCode: state.couponCode || undefined }) });
+          body: JSON.stringify({ vehicleId: vehicle.id, draftId: state.draftId, revision: state.revision, pickupAt, returnAt, extraIds: state.selectedExtraIds, couponCode: state.couponCode || undefined }) });
         const hold = await held.json();
         if (!held.ok) throw new Error(hold.error || "Unable to update reservation");
         if (cancelled) return;
         update({ reservationId: hold.id, confirmationNumber: hold.confirmationNumber, holdExpiresAt: hold.expiresAt, bookingFingerprint: hold.bookingFingerprint });
         update({ breakdown: hold.breakdown });
-        setCouponMessage(data.couponError || (data.couponApplied ? "Coupon applied!" : null));
+        setCouponMessage(null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Unable to calculate pricing.");
       } finally {
@@ -111,8 +105,8 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
           Promo Code
         </label>
         <div className="mt-1.5 flex gap-2">
-          <Input id="coupon" value={couponInput} onChange={(e) => setCouponInput(e.target.value.toUpperCase())} placeholder="Enter code" />
-          <Button type="button" variant="outline" onClick={() => update({ couponCode: couponInput })}>
+          <Input disabled={state.checkoutComplete} id="coupon" value={couponInput} onChange={(e) => setCouponInput(e.target.value.toUpperCase())} placeholder="Enter code" />
+          <Button type="button" variant="outline" disabled={state.checkoutComplete} onClick={() => update({ couponCode: couponInput })}>
             Apply
           </Button>
         </div>
@@ -160,7 +154,7 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
       </label>
 
       <div className="mt-8 flex gap-3">
-        <Button variant="outline" onClick={onBack}>
+        <Button variant="outline" onClick={onBack} disabled={state.checkoutComplete}>
           Back
         </Button>
         <Button size="lg" disabled={!state.breakdown || !state.agreementAccepted || loading || Boolean(error)} onClick={onNext}>

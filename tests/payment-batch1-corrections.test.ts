@@ -1,3 +1,5 @@
+import { withReservationLock } from "@/lib/financial-locks";
+import { transitionReservation } from "@/lib/reservation-state-machine";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const createPaymentIntent = vi.fn();
@@ -131,15 +133,16 @@ describe("item 3 — late payment reconciliation before the cleanup sweep runs",
 });
 
 describe("item 6 — cancellation must never be reversed by a delayed payment", () => {
-  it("customer cancellation racing payment: a late success is refunded and recorded, never un-cancels the reservation", async () => {
+  it("customer cancellation followed by late payment: a late success is refunded and recorded, never un-cancels the reservation", async () => {
     const { vehicle, customer } = await makeVehicleAndCustomer(0);
     const reservation = await createTestReservation({
       vehicleId: vehicle.id,
       customerId: customer.id,
       pickupAt: new Date("2029-04-10T10:00:00Z"),
       returnAt: new Date("2029-04-13T10:00:00Z"),
-      status: "CANCELLED_BY_CUSTOMER",
+      status: "AWAITING_PAYMENT",
     });
+    await withReservationLock(reservation.id, tx => transitionReservation(tx, { id: reservation.id, from: "AWAITING_PAYMENT", to: "CANCELLED_BY_CUSTOMER", force: true }));
     const payment = await prisma.payment.create({
       data: { reservationId: reservation.id, type: "RENTAL", status: "REQUIRES_PAYMENT", amountCents: 15000, stripePaymentIntentId: `pi_cancel_customer_${reservation.id}` },
     });
@@ -157,15 +160,16 @@ describe("item 6 — cancellation must never be reversed by a delayed payment", 
     expect(reconciliation?.status).toBe("REFUNDED");
   });
 
-  it("host cancellation racing payment: same guarantee — never reversed by a late success", async () => {
+  it("host cancellation followed by late payment: same guarantee — never reversed by a late success", async () => {
     const { vehicle, customer } = await makeVehicleAndCustomer(0);
     const reservation = await createTestReservation({
       vehicleId: vehicle.id,
       customerId: customer.id,
       pickupAt: new Date("2029-04-20T10:00:00Z"),
       returnAt: new Date("2029-04-23T10:00:00Z"),
-      status: "CANCELLED_BY_HOST",
+      status: "AWAITING_PAYMENT",
     });
+    await withReservationLock(reservation.id, tx => transitionReservation(tx, { id: reservation.id, from: "AWAITING_PAYMENT", to: "CANCELLED_BY_HOST", force: true }));
     const payment = await prisma.payment.create({
       data: { reservationId: reservation.id, type: "RENTAL", status: "REQUIRES_PAYMENT", amountCents: 15000, stripePaymentIntentId: `pi_cancel_host_${reservation.id}` },
     });

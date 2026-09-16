@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { executeRentalOperation } from "@/lib/rental-payment";
 import { withReservationLock } from "@/lib/financial-locks";
 import { prepareOperation } from "@/lib/financial-operations";
@@ -14,7 +15,7 @@ import { expireStaleReservations } from "@/lib/cleanup";
 
 async function each<T>(items: T[], run: (item: T) => Promise<unknown>) {
   let processed = 0, pending = 0;
-  for (const item of items) try { await run(item); processed++; } catch (error) { pending++; console.error("Recovery pending", String(error)); }
+  for (const item of items) try { await run(item); processed++; } catch (error) { pending++; safeLog("RECOVERY_PENDING", error); }
   return { processed, pending };
 }
 export async function recoverStripeEvents() {
@@ -41,6 +42,7 @@ export async function recoverDeposits() {
     if (await tx.financialOperation.count({ where: { reservationId: deposit.reservationId, kind: "DEPOSIT" } })) return;
     const op = await prepareOperation(tx, { key: `legacy-deposit:${deposit.reservationId}`, kind: "DEPOSIT", reservationId: deposit.reservationId, payload: { legacy: true } });
     await tx.financialOperation.update({ where: { id: op.id }, data: { providerId: deposit.stripePaymentIntentId, firstAttemptAt: deposit.createdAt } });
+    await tx.securityDeposit.update({ where: { id: deposit.id }, data: { operationId: op.id, generation: { increment: 1 } } });
   });
   const operations = await prisma.financialOperation.findMany({ where: { kind: "DEPOSIT", OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] }, orderBy: { updatedAt: "asc" }, take: 25 });
   return each(operations, async operation => {
@@ -52,7 +54,7 @@ export async function recoverDeposits() {
       return;
     }
     await executeDepositOperation(operation);
-    if (r.financialDisposition !== "OPEN") await releaseDeposits(r.id);
+    if (["REFUND_REQUIRED", "TERMINATED"].includes(r.financialDisposition)) await releaseDeposits(r.id);
     else {
       const latest = await prisma.financialOperation.findFirst({ where: { reservationId: r.id, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
       const observed = await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } });

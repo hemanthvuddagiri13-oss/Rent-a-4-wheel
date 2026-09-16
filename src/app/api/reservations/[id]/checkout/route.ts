@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { withReservationLock } from "@/lib/financial-locks";
 import { fingerprint } from "@/lib/financial-operations";
 import { NextRequest, NextResponse } from "next/server";
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  if (reservation.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(reservation.status) || !reservation.expiresAt || reservation.expiresAt <= new Date()) return NextResponse.json({ error: "Checkout unavailable" }, { status: 409 });
   if (reservation.checkoutFingerprint === checkoutFingerprint) return NextResponse.json({ success: true });
   if (reservation.bookingFingerprint && parsed.data.bookingFingerprint !== reservation.bookingFingerprint) return NextResponse.json({ error: "Booking changed; refresh your review." }, { status: 409 });
   if (reservation.status !== "CHECKOUT_HOLD") {
@@ -94,6 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await withReservationLock(id, async (tx) => {
       const current = await tx.reservation.findUniqueOrThrow({ where: { id } });
+      if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout unavailable");
       if (current.checkoutFingerprint === checkoutFingerprint) return;
       if (current.financialDisposition !== "OPEN" || current.status !== "CHECKOUT_HOLD" || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout hold no longer valid");
       if (current.bookingFingerprint !== reservation.bookingFingerprint) throw new Error("Booking changed concurrently");
@@ -146,14 +149,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "23P01") {
       return NextResponse.json({ error: "This vehicle is no longer available for the selected dates." }, { status: 409 });
     }
-    console.error("Checkout finalize failed", err);
+    safeLog("CHECKOUT_FINALIZE_FAILED", err);
     return NextResponse.json({ error: "Something went wrong finishing checkout." }, { status: 409 });
   }
 
   // PDF generation is comparatively slow — run it after the transaction
   // commits rather than holding the transaction open for it.
   generateAndStoreSignedAgreementPdf(reservation.id).catch((err) =>
-    console.error("Failed to generate signed agreement PDF", err)
+    safeLog("FAILED_TO_GENERATE_SIGNED_AGREEMENT_PDF", err)
   );
 
   return NextResponse.json({ success: true });

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import type { FinancialOperation, SecurityDeposit, Prisma } from "@prisma/client";
 import { withReservationLock } from "@/lib/financial-locks";
-import { json, prepareOperation, runOperation } from "@/lib/financial-operations";
+import { json, prepareOperation, runOperation, UncertainOutcomeError } from "@/lib/financial-operations";
 
 export function isTransientStripeError(err: unknown): boolean {
   return err instanceof Stripe.errors.StripeError && ["StripeConnectionError", "StripeAPIError", "StripeRateLimitError"].includes(err.type);
@@ -25,13 +25,16 @@ export async function syncDepositIntent(reservationId: string, intent: Stripe.Pa
     const deposit = await tx.securityDeposit.findUnique({ where: { reservationId } });
     if (!deposit) throw new Error("Required deposit record missing");
     // Ignore observations from older attempts once a newer attempt owns the row.
-    const latest = await tx.financialOperation.findFirst({ where: { reservationId, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+    const latest = deposit.operationId ? await tx.financialOperation.findUnique({ where: { id: deposit.operationId } }) : await tx.financialOperation.findFirst({ where: { reservationId, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
     if (latest && latest.providerId !== intent.id) return;
+    if (deposit.stripePaymentIntentId === intent.id && (deposit.status === "CANCELLED" || ["canceled", "succeeded"].includes(deposit.stripeStatus ?? "") || deposit.releasedAt) && !["canceled", "succeeded"].includes(intent.status)) return;
+    if (deposit.stripePaymentIntentId === intent.id && deposit.authorizationExpiresAt && deposit.authorizationExpiresAt <= new Date() && intent.status === "requires_capture") return;
     valid = intent.status === "requires_capture" && intent.currency === "usd" &&
       intent.amount === deposit.amountCents && intent.amount_capturable >= deposit.amountCents &&
       typeof expires === "number" && expires * 1000 > Date.now();
     await tx.securityDeposit.update({ where: { reservationId }, data: {
       stripePaymentIntentId: intent.id, stripeStatus: intent.status,
+      releasedAt: intent.status === "canceled" ? (deposit.releasedAt ?? new Date()) : deposit.stripePaymentIntentId === intent.id ? deposit.releasedAt : null,
       status: valid ? "SUCCEEDED" : intent.status === "canceled" ? "CANCELLED" : "FAILED",
       authorizedAt: charge ? new Date(charge.created * 1000) : null, authorizationExpiresAt,
       failureReason: valid ? null : `Deposit requires recovery: ${intent.status}`,
@@ -46,25 +49,30 @@ export async function syncDepositIntent(reservationId: string, intent: Stripe.Pa
 export async function attemptDepositAuthorization(
   reservation: { id: string; deposit: SecurityDeposit | null }, intent: Stripe.PaymentIntent, retry = false
 ): Promise<DepositAuthorizationOutcome> {
-  if (retry && reservation.deposit?.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt <= new Date()) await releaseDeposits(reservation.id);
+  const observedGeneration = reservation.deposit?.generation;
+  if (retry && reservation.deposit?.stripePaymentIntentId && reservation.deposit.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt <= new Date()) await releaseDeposits(reservation.id, reservation.deposit.stripePaymentIntentId);
   const prepared = await withReservationLock(reservation.id, async tx => {
     const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: true } });
     if (current.depositCents === 0) return null;
     if (current.financialDisposition !== "OPEN" || ["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST", "EXPIRED"].includes(current.status)) throw new Error("Reservation financially terminated");
     if (!current.deposit || current.deposit.amountCents !== current.depositCents) throw new Error("Required deposit record missing or inconsistent");
+    if (current.deposit.legacyUncertain) throw new Error("Legacy deposit outcome requires manual reconciliation");
     if (!stripe) throw new Error("Deposit provider unavailable");
-    const latest = await tx.financialOperation.findFirst({ where: { reservationId: current.id, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+    const latest = current.deposit.operationId ? await tx.financialOperation.findUnique({ where: { id: current.deposit.operationId } }) : await tx.financialOperation.findFirst({ where: { reservationId: current.id, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
     if (!latest && current.deposit.stripePaymentIntentId) {
       const legacy = await prepareOperation(tx, { key: `legacy-deposit:${current.id}`, kind: "DEPOSIT", reservationId: current.id, payload: { legacy: true } });
+      await tx.securityDeposit.update({ where: { reservationId: current.id }, data: { operationId: legacy.id, generation: { increment: 1 } } });
       return tx.financialOperation.update({ where: { id: legacy.id }, data: { providerId: current.deposit.stripePaymentIntentId, firstAttemptAt: current.deposit.createdAt } });
     }
-    if (latest && !(retry && ["requires_payment_method", "canceled"].includes(current.deposit.stripeStatus ?? "") && latest.providerId)) return latest;
+    if (latest && (observedGeneration !== current.deposit.generation || !(retry && ["requires_payment_method", "canceled"].includes(current.deposit.stripeStatus ?? "") && latest.providerId))) return latest;
     const pm = typeof intent.payment_method === "string" ? intent.payment_method : intent.payment_method?.id;
     const customer = typeof intent.customer === "string" ? intent.customer : intent.customer?.id;
     if (!pm || !customer) throw new Error("Saved payment method and customer required");
     const sequence = await tx.financialOperation.count({ where: { reservationId: current.id, kind: "DEPOSIT" } });
-    return prepareOperation(tx, { key: `deposit:${current.id}:${sequence + 1}`, kind: "DEPOSIT", reservationId: current.id,
+    const operation = await prepareOperation(tx, { key: `deposit:${current.id}:${sequence + 1}`, kind: "DEPOSIT", reservationId: current.id,
       payload: json({ amount: current.depositCents, currency: "usd", customer, payment_method: pm, capture_method: "manual", confirm: true, off_session: true, metadata: { reservationId: current.id, purpose: "security_deposit" } }) });
+    await tx.securityDeposit.update({ where: { reservationId: current.id }, data: { operationId: operation.id, generation: { increment: 1 } } });
+    return operation;
   });
   if (!prepared) return { outcome: "not_required" };
   return executeDepositOperation(prepared);
@@ -103,14 +111,21 @@ export async function releaseDeposits(reservationId: string, onlyIntentId?: stri
     const operation = await withReservationLock(reservationId, tx => prepareOperation(tx, {
       key: `deposit-release:${intentId}`, kind: "DEPOSIT_RELEASE", reservationId, payload: { intentId },
     }));
+    const cancelExactIntent = async () => {
+      const current = await client.paymentIntents.retrieve(intentId);
+      if (current.status === "canceled") return current;
+      if (current.status === "succeeded") throw new UncertainOutcomeError("Captured deposit requires manual resolution");
+      const canceled = await client.paymentIntents.cancel(intentId, {}, { idempotencyKey: operation.key });
+      if (canceled.status !== "canceled") throw new Error("Deposit release unresolved");
+      return canceled;
+    };
     await runOperation(operation, {
       apply: (tx, result) => syncDepositIntent(reservationId, result, tx),
-      create: async key => {
-        const current = await client.paymentIntents.retrieve(intentId);
-        return ["canceled", "succeeded"].includes(current.status) ? current : client.paymentIntents.cancel(intentId, {}, { idempotencyKey: key });
-      },
-      retrieve: id => client.paymentIntents.retrieve(id),
-      discover: () => client.paymentIntents.retrieve(intentId),
+      // A release's provider ID identifies its immutable target, not proof of
+      // cancellation. It is safe to cancel that exact still-live target again.
+      create: cancelExactIntent,
+      retrieve: cancelExactIntent,
+      discover: cancelExactIntent,
     });
 
   }

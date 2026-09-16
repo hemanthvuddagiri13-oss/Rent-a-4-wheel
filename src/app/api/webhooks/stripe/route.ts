@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import type { Prisma } from "@prisma/client";
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
     if (!signature) throw new Error("Missing stripe-signature header");
     event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
   } catch (err) {
-    console.error("Stripe webhook signature verification failed", err);
+    safeLog("STRIPE_WEBHOOK_SIGNATURE_VERIFICATION_FAILED", err);
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
 

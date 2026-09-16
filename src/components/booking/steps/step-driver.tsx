@@ -54,6 +54,7 @@ export function StepDriver({ vehicle, state, update, onNext, onBack }: Props) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             vehicleId: vehicle.id,
+            draftId: state.draftId, revision: state.revision,
             pickupAt: `${state.pickupDate}T${state.pickupTime}:00`,
             returnAt: `${state.returnDate}T${state.returnTime}:00`,
             extraIds: state.selectedExtraIds,

@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { prisma } from "@/lib/prisma";
 import { withReservationLock } from "@/lib/financial-locks";
 import { requireRefund, settleTerminatedReservation } from "@/lib/stripe-webhook-handlers";
@@ -24,7 +25,7 @@ export async function expireStaleReservations(now: Date = new Date()) {
       if (await prisma.refund.count({ where: { reservationId: row.id, status: "SUCCEEDED" } })) refundedCount++;
     } catch (error) {
       // Intent is already durable; cron retries without releasing the balance.
-      console.error("Financial recovery remains pending", row.id, String(error));
+      safeLog("RECOVERY_PENDING", error, row.id);
     }
   }
   return { expiredCount, refundedCount };

@@ -3,9 +3,11 @@ import Credentials from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
 import { verifyAuthCode, getRequestIp } from "@/lib/auth-code";
 import { authConfig } from "@/auth.config";
+import { safeLog } from "@/lib/safe-log";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
+  logger: { error: error => safeLog("AUTH_FAILED", error), warn: () => safeLog("AUTH_WARNING"), debug: () => {} },
   session: { strategy: "jwt" },
   providers: [
     Credentials({

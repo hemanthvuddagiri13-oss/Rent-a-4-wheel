@@ -21,6 +21,8 @@ export async function reserveRefund(tx: Prisma.TransactionClient, params: Reques
   const remaining = payment.amountCents - (held._sum.amountCents ?? 0);
   if (params.amountCents > remaining) throw new Error("Refund exceeds remaining refundable balance");
   const reservation = await tx.reservation.findUniqueOrThrow({ where: { id: params.reservationId } });
+  const unfinishedTrip = await tx.trip.findFirst({ where: { reservationId: params.reservationId, startedAt: { not: null }, endedAt: null } });
+  if (unfinishedTrip) throw new Error("Cannot refund an unfinished trip through this operation");
   if (params.amountCents === remaining) {
     if (["ACTIVE", "RETURN_IN_PROGRESS"].includes(reservation.status)) throw new Error("Cannot fully refund an active trip through this operation");
     await tx.reservation.update({ where: { id: reservation.id }, data: { financialDisposition: "REFUND_REQUIRED" } });
@@ -74,6 +76,7 @@ export async function executeRefundOperation(refundId: string, suppliedPaymentIn
   if (refund.status !== "PENDING") return { status: "already_terminal", refund };
   if (!stripe || !refund.payment.stripePaymentIntentId) throw new Error("Stripe refund provider unavailable");
   const client = stripe, intentId = refund.payment.stripePaymentIntentId;
+  if (refund.legacyUncertain && !refund.stripeRefundId) throw new Error("Legacy refund outcome requires manual reconciliation");
   const operation = await withReservationLock(refund.reservationId, async tx => {
     const existing = await tx.financialOperation.findUnique({ where: { key: refund.idempotencyKey } });
     if (existing) return existing;

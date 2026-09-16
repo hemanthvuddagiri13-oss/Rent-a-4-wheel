@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
     if (err instanceof InvalidDocumentError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
-    console.error("Document upload failed", err);
+    safeLog("DOCUMENT_UPLOAD_FAILED", err);
     return NextResponse.json({ error: "Unable to process this file." }, { status: 500 });
   }
 }

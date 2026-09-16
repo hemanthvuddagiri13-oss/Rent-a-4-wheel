@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { financialProjection } from "@/lib/financial-projection";
 
 export const eventFence = new AsyncLocalStorage<{ id: string; token: string }>();
 
@@ -35,9 +36,7 @@ export function withReservationLock<T>(id: string, run: (tx: Prisma.TransactionC
 // lock, shared with refund reservation and deposit/cancellation projections.
 export async function assertFinancialTripStart(tx: Prisma.TransactionClient, id: string) {
   const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: true } });
-  const paid = r.payments.filter(p => p.type === "RENTAL" && p.status === "SUCCEEDED").reduce((n, p) => n + p.amountCents, 0);
-  const reserved = r.refunds.filter(f => f.status === "PENDING" || f.status === "SUCCEEDED").reduce((n, f) => n + f.amountCents, 0);
-  if (r.financialDisposition !== "OPEN" || paid <= reserved) throw new Error("Financial state does not permit trip start");
-  const deposit = r.deposit;
-  if (r.depositCents > 0 && (!deposit || deposit.amountCents !== r.depositCents || deposit.status !== "SUCCEEDED" || deposit.stripeStatus !== "requires_capture" || !deposit.authorizationExpiresAt || deposit.authorizationExpiresAt <= new Date())) throw new Error("Valid required deposit authorization missing");
+  const projection = financialProjection(r);
+  if (r.financialDisposition !== "OPEN" || !projection.moneyAvailable) throw new Error("Financial state does not permit trip start");
+  if (!projection.depositValid) throw new Error("Valid required deposit authorization missing");
 }

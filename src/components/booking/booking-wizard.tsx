@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ProgressSteps } from "@/components/booking/progress-steps";
 import { StepVehicle } from "@/components/booking/steps/step-vehicle";
@@ -24,6 +24,7 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
   const [dateError, setDateError] = useState<string | null>(null);
 
   const [state, setState] = useState<BookingState>({
+    draftId: crypto.randomUUID(), revision: 1,
     pickupDate: searchParams.get("pickupDate") || defaultDate(1),
     pickupTime: searchParams.get("pickupTime") || "10:00",
     returnDate: searchParams.get("returnDate") || defaultDate(4),
@@ -39,13 +40,50 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
     holdExpiresAt: null,
   });
 
+  const [resumeId] = useState(() => searchParams.get("reservationId"));
+  const [resuming, setResuming] = useState(Boolean(resumeId));
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!resumeId) return;
+    let stopped = false;
+    fetch('/api/reservations/' + encodeURIComponent(resumeId) + '/resume').then(async response => {
+      if (!response.ok) throw new Error("Unable to resume reservation");
+      const r = await response.json();
+      if (r.vehicleId !== vehicle.id) throw new Error("Reservation vehicle mismatch");
+      if (stopped) return;
+      const dateParts = (value: string) => { const d = new Date(value); return [new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10), d.toTimeString().slice(0, 5)]; };
+      const [pickupDate, pickupTime] = dateParts(r.pickupAt), [returnDate, returnTime] = dateParts(r.returnAt);
+      setState(prev => ({ ...prev, reservationId: r.reservationId, confirmationNumber: r.confirmationNumber, pickupDate, pickupTime, returnDate, returnTime,
+        selectedExtraIds: r.selectedExtraIds, couponCode: r.couponCode, breakdown: r.breakdown, bookingFingerprint: r.bookingFingerprint,
+        checkoutComplete: r.checkoutComplete, agreementAccepted: r.checkoutComplete, holdExpiresAt: r.holdExpiresAt,
+        draftId: r.draftId ?? prev.draftId, revision: r.revision ?? prev.revision }));
+      setStep(r.checkoutComplete || r.status !== "CHECKOUT_HOLD" ? 6 : 4);
+      setResuming(false);
+      const url = new URL(window.location.href);
+      for (const key of ["payment_intent", "payment_intent_client_secret", "redirect_status"]) url.searchParams.delete(key);
+      window.history.replaceState(null, "", url);
+    }).catch(() => { if (!stopped) setResumeError("Unable to resume this reservation. Please sign in as its owner."); });
+    return () => { stopped = true; };
+  }, [resumeId, vehicle.id]);
+  useEffect(() => {
+    if (!state.reservationId || resumeId === state.reservationId) return;
+    const url = new URL(window.location.href); url.searchParams.set("reservationId", state.reservationId);
+    window.history.replaceState(null, "", url);
+  }, [state.reservationId, resumeId]);
+
   function update(patch: Partial<BookingState> | ((prev: BookingState) => Partial<BookingState>)) {
-    setState((prev) => ({ ...prev, ...(typeof patch === "function" ? patch(prev) : patch) }));
+    setState((prev) => {
+      const value = typeof patch === "function" ? patch(prev) : patch;
+      const changed = ["pickupDate", "pickupTime", "returnDate", "returnTime", "selectedExtraIds", "couponCode"].some(k => k in value);
+      if (prev.checkoutComplete && changed) return prev;
+      return { ...prev, ...value, revision: changed ? prev.revision + 1 : prev.revision };
+    });
   }
 
   function toggleExtra(id: string) {
     setState((prev) => ({
       ...prev,
+      revision: prev.revision + 1,
       selectedExtraIds: prev.selectedExtraIds.includes(id)
         ? prev.selectedExtraIds.filter((e) => e !== id)
         : [...prev.selectedExtraIds, id],
@@ -71,6 +109,7 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  if (resuming) return <p role="status">{resumeError ?? "Resuming reservation…"}</p>;
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
       <ProgressSteps current={step} />
@@ -93,7 +132,7 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
         {step === 5 && (
           <StepReview vehicle={vehicle} extras={extras} state={state} update={update} onNext={goNext} onBack={goBack} />
         )}
-        {step === 6 && <StepPayment state={state} onSuccess={goNext} onBack={goBack} />}
+        {step === 6 && <StepPayment state={state} onCheckoutComplete={() => update({ checkoutComplete: true })} onSuccess={goNext} onBack={goBack} />}
         {step === 7 && <StepConfirmation vehicle={vehicle} state={state} />}
       </div>
     </div>

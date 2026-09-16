@@ -134,6 +134,9 @@ export async function transitionReservation(
     throw new Error("Financially terminated reservation cannot reopen");
   }
   if (["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(to)) {
+    const allowed = ["CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START"];
+    const trip = await tx.trip.findUnique({ where: { reservationId: id } });
+    if (!allowed.includes(current.status) || trip?.startedAt) throw new Error("Started or operational reservations cannot be cancelled");
     data.financialDisposition = ["CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED"].includes(from) ? "REFUND_REQUIRED" : "TERMINATED";
   }
 

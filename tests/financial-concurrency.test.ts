@@ -10,6 +10,7 @@ import { createOrRefreshHold } from "@/lib/checkout-hold";
 import { expireStaleReservations } from "@/lib/cleanup";
 import { assertFinancialTripStart } from "@/lib/financial-locks";
 import { recoverRefunds } from "@/lib/financial-workers";
+import { prisma as workerDb } from "@/lib/prisma";
 
 const provider = vi.hoisted(() => ({ refunds: { create: vi.fn(), retrieve: vi.fn(), list: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn(), cancel: vi.fn() } }));
 vi.mock("@/lib/stripe", () => ({ stripe: provider }));
@@ -48,7 +49,7 @@ describe("durable financial operations with real concurrent connections", () => 
     const refund = await getOrCreateRefundOperation({ reservationId: r.id, paymentId: p.id, amountCents: 15000, idempotencyKey: `rotation:${p.id}` });
     await prisma.refund.update({ where: { id: refund.id }, data: { updatedAt: new Date(0) } });
     // Scope the worker batch to this fixture; execution and projections use PostgreSQL.
-    vi.spyOn(prisma.refund, "findMany").mockResolvedValueOnce([{ ...refund, payment: p }] as never);
+    vi.spyOn(workerDb.refund, "findMany").mockResolvedValueOnce([{ ...refund, payment: p }] as never);
     provider.refunds.create.mockRejectedValueOnce(new Error("Provider outcome unknown"));
     expect(await recoverRefunds()).toEqual({ processed: 0, pending: 1 });
     const current = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
@@ -190,7 +191,7 @@ describe("durable financial operations with real concurrent connections", () => 
     await prisma.$executeRawUnsafe(`CREATE FUNCTION "${trigger}"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW."id" = '${refund.id}' AND NEW."status" = 'SUCCEEDED' THEN RAISE EXCEPTION 'Injected crash after Stripe accepted'; END IF; RETURN NEW; END $$`);
     await prisma.$executeRawUnsafe(`CREATE TRIGGER "${trigger}" BEFORE UPDATE ON "Refund" FOR EACH ROW EXECUTE FUNCTION "${trigger}"()`);
     try {
-      await expect(executeRefundOperation(refund.id, p.stripePaymentIntentId)).rejects.toThrow("Injected crash");
+      await expect(executeRefundOperation(refund.id, p.stripePaymentIntentId)).rejects.toThrow("DATABASE_OPERATION_FAILED");
       expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("PENDING");
     } finally {
       await prisma.$executeRawUnsafe(`DROP TRIGGER "${trigger}" ON "Refund"`);
@@ -202,7 +203,7 @@ describe("durable financial operations with real concurrent connections", () => 
     expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("SUCCEEDED");
   });
 
-  it("fences a stale provider worker after takeover while its request is in flight", async () => {
+  it("unit-checks the lease primitive independently of financial projections", async () => {
     const { r } = await fixture();
     const op = await withReservationLock(r.id, tx => prepareOperation(tx, { key: `lease:${r.id}`, kind: "TEST", reservationId: r.id, payload: { amount: 100 } }));
     const entered = barrier(), release = barrier();

@@ -1,3 +1,4 @@
+import { safeErrorCode } from "@/lib/safe-log";
 import { randomUUID } from "crypto";
 import { Prisma, StripeEventStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -154,7 +155,7 @@ export async function markStripeEventProcessed(eventRecordId: string, leaseToken
 export async function markStripeEventFailed(eventRecordId: string, leaseToken: string, error: unknown): Promise<void> {
   const record = await prisma.stripeEvent.findUnique({ where: { id: eventRecordId } });
   if (!record || record.leaseToken !== leaseToken) return; // fenced out by a newer claim
-  const message = error instanceof Error ? error.message : String(error);
+  const message = safeErrorCode(error);
   await prisma.stripeEvent.updateMany({
     where: { id: eventRecordId, leaseToken },
     data: {

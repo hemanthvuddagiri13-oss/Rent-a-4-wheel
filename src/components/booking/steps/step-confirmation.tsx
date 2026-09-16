@@ -1,3 +1,5 @@
+"use client";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, Download, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -5,12 +7,21 @@ import type { BookingState, BookingVehicle } from "@/components/booking/types";
 import { formatCurrency } from "@/lib/utils";
 
 export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; state: BookingState }) {
+  const [outcome, setOutcome] = useState("processing");
+  useEffect(() => {
+    let stopped = false;
+    fetch(`/api/reservations/${state.reservationId}/status`).then(async response => {
+      if (!response.ok) throw new Error("Status unavailable");
+      const data = await response.json(); if (!stopped) setOutcome(data.outcome);
+    }).catch(() => { if (!stopped) setOutcome("status_unavailable"); });
+    return () => { stopped = true; };
+  }, [state.reservationId]);
   return (
     <div className="flex flex-col items-center py-8 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/30">
         <CheckCircle2 className="h-8 w-8 text-emerald-400" />
       </div>
-      <h2 className="mt-6 font-display text-3xl font-bold uppercase tracking-tight text-white">Confirmed</h2>
+      <h2 className="mt-6 font-display text-3xl font-bold uppercase tracking-tight text-white">{outcome === "confirmed" ? "Confirmed" : outcome.replaceAll("_", " ")}</h2>
       <p className="mt-2 text-muted">Reservation Number</p>
       <p className="mt-1 font-display text-2xl font-semibold text-gold-bright">{state.confirmationNumber}</p>
 

@@ -1,3 +1,4 @@
+import { safeErrorCode } from "@/lib/safe-log";
 import { randomUUID } from "node:crypto";
 import type { Prisma, NotificationType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -34,7 +35,7 @@ export async function processOutboxOnce(limit = 50, ids?: string[]) {
       processed += saved.count;
     } catch (error) {
       await prisma.outboxMessage.updateMany({ where: { id: message.id, leaseToken: token }, data: {
-        status: message.attempts >= 4 ? "FAILED" : "PENDING", lastError: String(error), nextRetryAt: new Date(Date.now() + 60000),
+        status: message.attempts >= 4 ? "FAILED" : "PENDING", lastError: safeErrorCode(error), nextRetryAt: new Date(Date.now() + 60000),
         leaseToken: null, leaseExpiresAt: null,
       } });
       failed++;

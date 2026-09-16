@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (err instanceof EmergencyOverrideError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    console.error("Emergency override failed", err);
+    safeLog("EMERGENCY_OVERRIDE_FAILED", err);
     return NextResponse.json({ error: "Something went wrong performing the override." }, { status: 500 });
   }
 }

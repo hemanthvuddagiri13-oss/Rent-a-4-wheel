@@ -1,3 +1,4 @@
+import { financialProjection } from "@/lib/financial-projection";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { getSiteSettings } from "@/lib/settings";
@@ -43,30 +44,11 @@ export async function evaluateTripStartGate(reservationId: string, db: Prisma.Tr
     reasons.push(`Reservation status (${reservation.status}) is not eligible to start a trip.`);
   }
 
-  const rentalPaid = reservation.payments.some((p) => p.type === "RENTAL" && p.status === "SUCCEEDED");
+  const financial = financialProjection(reservation);
   if (reservation.financialDisposition !== "OPEN") reasons.push("Reservation has a terminal or unresolved financial disposition.");
-  if (!rentalPaid) reasons.push("Rental payment has not succeeded.");
-
-  // A reservation refunded back to zero (or below) net paid must never
-  // start a trip, even if a RENTAL payment once succeeded — the money the
-  // trip is predicated on is no longer actually held.
-  const paidCents = reservation.payments
-    .filter((p) => p.type === "RENTAL" && p.status === "SUCCEEDED")
-    .reduce((sum, p) => sum + p.amountCents, 0);
-  const refundedCents = reservation.refunds
-    .filter((r) => r.status === "SUCCEEDED" || r.status === "PENDING")
-    .reduce((sum, r) => sum + r.amountCents, 0);
-  if (rentalPaid && paidCents - refundedCents <= 0) {
-    reasons.push("Rental payment has been fully refunded; this reservation cannot start a trip.");
-  }
-
-  if (reservation.depositCents > 0 && !reservation.deposit) reasons.push("Required security deposit record is missing.");
-  if (reservation.deposit) {
-    const authValid = reservation.deposit.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt > new Date();
-    if (reservation.deposit.status !== "SUCCEEDED" || reservation.deposit.stripeStatus !== "requires_capture" || reservation.deposit.amountCents !== reservation.depositCents || !authValid) {
-      reasons.push("Security deposit does not have a currently valid authorization.");
-    }
-  }
+  if (!financial.paidCents) reasons.push("Rental payment has not succeeded.");
+  else if (!financial.moneyAvailable) reasons.push("Rental payment has been fully refunded; this reservation cannot start a trip.");
+  if (!financial.depositValid) reasons.push("Required security deposit does not have a currently valid authorization.");
 
   for (const type of REQUIRED_DOCUMENT_TYPES) {
     if (!reservation.documents.some((d) => d.type === type)) {

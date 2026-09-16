@@ -1,3 +1,4 @@
+import { safeErrorCode } from "@/lib/safe-log";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type FinancialOperation } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -78,7 +79,7 @@ export async function runOperation<T extends { id: string }>(operation: Financia
     // terminal failure or free the reserved refund balance.
     await prisma.financialOperation.updateMany({
       where: { id: claimed.id, leaseToken: token },
-      data: { state: error instanceof UncertainOutcomeError ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: String(error).slice(0, 1000) },
+      data: { state: error instanceof UncertainOutcomeError ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: safeErrorCode(error) },
     });
     throw error;
   }

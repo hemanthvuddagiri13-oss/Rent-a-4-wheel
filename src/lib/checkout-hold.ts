@@ -26,6 +26,8 @@ export async function createOrRefreshHold(params: {
   returnAt: Date;
   extraIds: string[];
   couponCode?: string;
+  draftId?: string;
+  revision?: number;
 }, db: PrismaClient = prisma): Promise<Reservation> {
   const { customerId, vehicleId, pickupAt, returnAt, extraIds, couponCode } = params;
   if (returnAt <= pickupAt) {
@@ -38,13 +40,31 @@ export async function createOrRefreshHold(params: {
     const result = await db.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${vehicleId} FOR UPDATE`;
+        if (params.draftId) {
+          const draft = await tx.bookingDraft.upsert({ where: { id: params.draftId }, update: {}, create: { id: params.draftId, customerId, vehicleId } });
+          if (draft.customerId !== customerId || draft.vehicleId !== vehicleId) throw new HoldError("Booking draft unavailable", 403);
+          if (!params.revision || params.revision < draft.revision || (params.revision === draft.revision && draft.fingerprint !== bookingFingerprint)) throw new HoldError("Obsolete booking revision", 409);
+          if (draft.reservationId) {
+            const prior = await tx.reservation.findUnique({ where: { id: draft.reservationId } });
+            if (prior?.checkoutFingerprint) {
+              if (draft.fingerprint === bookingFingerprint) return prior;
+              throw new HoldError("Checkout is immutable; resume the existing reservation", 409);
+            }
+          }
+          await tx.bookingDraft.update({ where: { id: draft.id }, data: { revision: params.revision, fingerprint: bookingFingerprint } });
+        }
         const now = new Date();
         const existingHold = await tx.reservation.findFirst({ where: { customerId, vehicleId, status: "CHECKOUT_HOLD" }, orderBy: { createdAt: "desc" }, include: { extras: true, coupon: true } });
+        if (params.draftId && existingHold) {
+          const ownerDraft = await tx.bookingDraft.findFirst({ where: { reservationId: existingHold.id, id: { not: params.draftId } } });
+          if (ownerDraft) throw new HoldError("Resume your existing booking before changing these dates", 409);
+        }
         const legacyMatches = existingHold && !existingHold.bookingFingerprint && existingHold.pickupAt.getTime() === pickupAt.getTime() && existingHold.returnAt.getTime() === returnAt.getTime()
           && fingerprint(existingHold.extras.map(e => e.extraId).sort()) === fingerprint([...new Set(extraIds)].sort())
           && (existingHold.coupon?.code ?? "") === (couponCode?.trim().toUpperCase() ?? "");
         if (existingHold && (existingHold.bookingFingerprint === bookingFingerprint || legacyMatches) && existingHold.expiresAt && existingHold.expiresAt > now) {
           if (!await isVehicleAvailable(vehicleId, pickupAt, returnAt, { tx, excludeReservationId: existingHold.id })) return new HoldError("Vehicle no longer available", 409);
+          if (params.draftId) await tx.bookingDraft.update({ where: { id: params.draftId }, data: { reservationId: existingHold.id } });
           return tx.reservation.update({ where: { id: existingHold.id }, data: { bookingFingerprint, expiresAt: new Date(Date.now() + HOLD_DURATION_MINUTES * 60000) } });
         }
         if (existingHold) await transitionReservation(tx, { id: existingHold.id, from: "CHECKOUT_HOLD", to: "EXPIRED", data: { expiresAt: null } });
@@ -127,6 +147,7 @@ export async function createOrRefreshHold(params: {
         });
 
         if (existingHold) await tx.driverDocument.updateMany({ where: { reservationId: existingHold.id, userId: customerId }, data: { reservationId: reservation.id } });
+        if (params.draftId) await tx.bookingDraft.update({ where: { id: params.draftId }, data: { reservationId: reservation.id } });
 
         return reservation;
       },

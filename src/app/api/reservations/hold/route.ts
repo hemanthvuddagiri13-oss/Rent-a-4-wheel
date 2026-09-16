@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { createOrRefreshHold, HoldError } from "@/lib/checkout-hold";
@@ -35,6 +36,8 @@ export async function POST(req: NextRequest) {
   try {
     const result = await createOrRefreshHold({
       customerId: session.user.id,
+      draftId: parsed.data.draftId,
+      revision: parsed.data.revision,
       vehicleId,
       pickupAt: new Date(parsed.data.pickupAt),
       returnAt: new Date(parsed.data.returnAt),
@@ -52,7 +55,7 @@ export async function POST(req: NextRequest) {
     if (err instanceof HoldError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    console.error("Checkout hold creation failed", err);
+    safeLog("CHECKOUT_HOLD_CREATION_FAILED", err);
     return NextResponse.json({ error: "Something went wrong holding this vehicle." }, { status: 500 });
   }
 }

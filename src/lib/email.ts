@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { Resend } from "resend";
 
 const resendApiKey = process.env.RESEND_API_KEY;
@@ -19,7 +20,7 @@ export interface SendEmailParams {
  */
 export async function sendEmail({ to, subject, html, idempotencyKey }: SendEmailParams): Promise<{ sent: boolean; error?: string }> {
   if (!resend) {
-    console.log(`[email:dev-mode] Would send "${subject}" to ${to}`);
+    safeLog("EMAIL_NOT_CONFIGURED");
     return { sent: false, error: "RESEND_API_KEY not configured (development mode)." };
   }
 
@@ -28,7 +29,7 @@ export async function sendEmail({ to, subject, html, idempotencyKey }: SendEmail
     if (result.error) return { sent: false, error: result.error.message };
     return { sent: true };
   } catch (err) {
-    console.error("Failed to send email", err);
+    safeLog("FAILED_TO_SEND_EMAIL", err);
     return { sent: false, error: err instanceof Error ? err.message : "Unknown error" };
   }
 }

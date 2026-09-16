@@ -56,6 +56,9 @@ export const emptyDriverForm: DriverFormState = {
 };
 
 export interface BookingState {
+  draftId: string;
+  revision: number;
+  checkoutComplete?: boolean;
   bookingFingerprint?: string;
   pickupDate: string;
   pickupTime: string;

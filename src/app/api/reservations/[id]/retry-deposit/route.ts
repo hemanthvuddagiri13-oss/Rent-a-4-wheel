@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { confirmAfterRentalPaymentSuccess } from "@/lib/stripe-webhook-handlers";
 import { attemptDepositAuthorization } from "@/lib/deposit-authorization";
+import { financialProjection } from "@/lib/financial-projection";
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,8 +22,11 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     else await attemptDepositAuthorization(r, intent, true);
     const d = await prisma.securityDeposit.findUnique({ where: { reservationId: id } });
     const depositIntent = d?.stripePaymentIntentId ? await stripe.paymentIntents.retrieve(d.stripePaymentIntentId) : null;
-    return NextResponse.json({ success: d?.status === "SUCCEEDED", requiresAction: depositIntent?.status === "requires_action",
-      clientSecret: depositIntent?.status === "requires_action" ? depositIntent.client_secret : null });
+    const current = await prisma.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: true } });
+    const projection = financialProjection(current);
+    const requiresAction = current.financialDisposition === "OPEN" && current.deposit?.stripePaymentIntentId === depositIntent?.id && depositIntent?.status === "requires_action";
+    return NextResponse.json({ success: projection.depositValid && current.financialDisposition === "OPEN", requiresAction,
+      clientSecret: requiresAction ? depositIntent?.client_secret : null });
   } catch {
     return NextResponse.json({ error: "Deposit recovery is pending. Your rental payment will not be charged again." }, { status: 503 });
   }

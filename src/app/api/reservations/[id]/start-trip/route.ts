@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       await tx.tripEvent.create({ data: { reservationId: id, type: "TRIP_STARTED", actorId: session.user.id } });
     });
   } catch (err) {
-    console.error("Failed to start trip", err);
+    safeLog("FAILED_TO_START_TRIP", err);
     return NextResponse.json({ error: "Something went wrong starting the trip. Please try again." }, { status: 409 });
   }
 

@@ -1,3 +1,4 @@
+import { safeLog } from "@/lib/safe-log";
 import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { markStripeEventProcessed, markStripeEventFailed } from "@/lib/stripe-event-ledger";
@@ -64,7 +65,7 @@ async function dispatchWithFence(params: { eventRecordId: string; leaseToken: st
         break;
     }
   } catch (err) {
-    console.error(`Stripe webhook processing failed for event ${event.id} (${event.type})`, err);
+    safeLog("WEBHOOK_FAILED", err, event.id);
     await markStripeEventFailed(eventRecordId, leaseToken, err);
 
     const record = await prisma.stripeEvent.findUnique({ where: { id: eventRecordId } });

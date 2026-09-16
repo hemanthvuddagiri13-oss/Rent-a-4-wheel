@@ -2,6 +2,7 @@ import type Stripe from "stripe";
 import type { Payment, Reservation, SecurityDeposit, Prisma, ReconciliationReason } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
+import { FULFILLMENT_RECOVERY_STATES, financialProjection } from "@/lib/financial-projection";
 import { withReservationLock } from "@/lib/financial-locks";
 import { enqueueOutboxNotification } from "@/lib/outbox";
 import { isVehicleAvailable } from "@/lib/availability";
@@ -25,13 +26,14 @@ export async function requireRefund(tx: Prisma.TransactionClient, reservationId:
 export async function settleTerminatedReservation(id: string) {
   const refunds = await withReservationLock(id, async tx => {
     const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true } });
-    if (r.financialDisposition === "OPEN" && !["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(r.status)) return [];
+    if (!["REFUND_REQUIRED", "TERMINATED"].includes(r.financialDisposition)) return null;
     for (const p of r.payments.filter(p => p.type === "RENTAL" && p.status === "SUCCEEDED")) {
       // Normal post-confirmation cancellations remain subject to staff policy.
       if (r.financialDisposition === "REFUND_REQUIRED") await requireRefund(tx, id, p, "Reservation cannot be fulfilled");
     }
     return tx.refund.findMany({ where: { reservationId: id, status: "PENDING" }, include: { payment: true } });
   });
+  if (!refunds) return;
   for (const refund of refunds) await executeRefundOperation(refund.id, refund.payment.stripePaymentIntentId);
   if (stripe) await releaseDeposits(id);
 }
@@ -42,12 +44,11 @@ export async function confirmAfterRentalPaymentSuccess(
   const eligible = await withReservationLock(reservation.id, async tx => {
     const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
     await tx.payment.update({ where: { id: payment.id }, data: { status: "SUCCEEDED" } });
-    if (current.financialDisposition === "TERMINATED" && payment.status === "SUCCEEDED") return false;
-    if (current.financialDisposition !== "OPEN" || ["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(current.status)) {
+    if (current.financialDisposition === "REFUND_REQUIRED") {
       await requireRefund(tx, current.id, payment, "Payment succeeded after termination");
       return false;
     }
-    if (["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START", "ACTIVE", "RETURN_IN_PROGRESS", "COMPLETED"].includes(current.status)) return false;
+    if (current.financialDisposition !== "OPEN" || !FULFILLMENT_RECOVERY_STATES.includes(current.status)) return false;
     if (current.status === "PAYMENT_FAILED" && current.expiresAt && current.expiresAt <= new Date()) {
       await requireRefund(tx, current.id, payment, "Deposit recovery deadline elapsed");
       await tx.reservation.update({ where: { id: current.id }, data: { status: "EXPIRED", expiresAt: null } });
@@ -75,15 +76,14 @@ export async function confirmAfterRentalPaymentSuccess(
   }
   await attemptDepositAuthorization(reservation, intent, retry);
   const confirmed = await withReservationLock(reservation.id, async tx => {
-    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: true } });
+    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: true, payments: true, refunds: true } });
     if (current.financialDisposition !== "OPEN" || current.status !== "PAYMENT_FAILED") return false;
     if (!current.expiresAt || current.expiresAt <= new Date()) {
       await requireRefund(tx, current.id, payment, "Deposit recovery deadline elapsed");
       await tx.reservation.update({ where: { id: current.id }, data: { status: "EXPIRED", expiresAt: null } });
       return false;
     }
-    const deposit = current.deposit;
-    if (current.depositCents > 0 && (!deposit || deposit.amountCents !== current.depositCents || deposit.status !== "SUCCEEDED" || deposit.stripeStatus !== "requires_capture" || !deposit.authorizationExpiresAt || deposit.authorizationExpiresAt <= new Date())) {
+    if (!financialProjection(current).financialEligible) {
       await enqueueOutboxNotification(tx, { userId: current.customerId, reservationId: current.id, type: "DEPOSIT_AUTH_FAILED" }, `deposit-recovery:${current.id}`);
       return false;
     }
