@@ -89,7 +89,7 @@ describe("handlePaymentIntentSucceeded — payment/deposit gating", () => {
 
   it("confirms the reservation when the deposit authorization succeeds", async () => {
     const { reservation, payment } = await setupAwaitingPaymentReservation(30000);
-    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_success_${reservation.id}`, status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_success_${reservation.id}`, status: "requires_capture", amount: 30000, amount_capturable: 30000, currency: "usd", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
 
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
 
@@ -187,7 +187,7 @@ describe("temporary Stripe failure during deposit authorization", () => {
     expect(operation?.state).toBe("RETRY");
 
     // A subsequent retry (the network blip having cleared) succeeds normally.
-    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}`, status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}`, status: "requires_capture", amount: 30000, amount_capturable: 30000, currency: "usd", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
     const finalReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
     expect(finalReservation.status).toBe("DOCUMENTS_REQUIRED");

@@ -19,14 +19,17 @@ export async function syncDepositIntent(reservationId: string, intent: Stripe.Pa
   let charge = typeof intent.latest_charge === "object" ? intent.latest_charge : null;
   if (typeof intent.latest_charge === "string") charge = await stripe.charges.retrieve(intent.latest_charge);
   const expires = charge?.payment_method_details?.card?.capture_before;
-  const valid = intent.status === "requires_capture" && typeof expires === "number" && expires * 1000 > Date.now();
+  let valid = false;
   const authorizationExpiresAt = expires ? new Date(expires * 1000) : null;
   const apply = async (tx: Prisma.TransactionClient) => {
     const deposit = await tx.securityDeposit.findUnique({ where: { reservationId } });
     if (!deposit) throw new Error("Required deposit record missing");
     // Ignore observations from older attempts once a newer attempt owns the row.
     const latest = await tx.financialOperation.findFirst({ where: { reservationId, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
-    if (latest?.providerId && latest.providerId !== intent.id) return;
+    if (latest && latest.providerId !== intent.id) return;
+    valid = intent.status === "requires_capture" && intent.currency === "usd" &&
+      intent.amount === deposit.amountCents && intent.amount_capturable >= deposit.amountCents &&
+      typeof expires === "number" && expires * 1000 > Date.now();
     await tx.securityDeposit.update({ where: { reservationId }, data: {
       stripePaymentIntentId: intent.id, stripeStatus: intent.status,
       status: valid ? "SUCCEEDED" : intent.status === "canceled" ? "CANCELLED" : "FAILED",

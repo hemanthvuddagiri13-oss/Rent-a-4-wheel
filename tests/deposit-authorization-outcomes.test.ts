@@ -48,6 +48,12 @@ function fakeIntent() {
 }
 
 describe("item 5/6 — deposit authorization requiring authentication (3DS) is not a valid authorization", () => {
+  it.each([0, 29999])("blocks an authorization with only %i cents capturable", async capturable => {
+    const { reservation, deposit } = await setupReservationWithDeposit();
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_short_${reservation.id}`, status: "requires_capture", amount: 30000, amount_capturable: capturable, currency: "usd", latest_charge: { created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
+    expect((await attemptDepositAuthorization({ id: reservation.id, deposit }, fakeIntent())).outcome).toBe("failed");
+    expect((await prisma.securityDeposit.findUniqueOrThrow({ where: { reservationId: reservation.id } })).status).toBe("FAILED");
+  });
   it("treats a resolved call with status requires_action as FAILED, not SUCCEEDED", async () => {
     const { reservation, deposit } = await setupReservationWithDeposit();
     createPaymentIntent.mockResolvedValueOnce({ id: "pi_3ds", status: "requires_action" });
@@ -62,7 +68,7 @@ describe("item 5/6 — deposit authorization requiring authentication (3DS) is n
 
   it("treats status requires_capture as a genuine success", async () => {
     const { reservation, deposit } = await setupReservationWithDeposit();
-    createPaymentIntent.mockResolvedValueOnce({ id: "pi_ok", status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
+    createPaymentIntent.mockResolvedValueOnce({ id: "pi_ok", status: "requires_capture", amount: 30000, amount_capturable: 30000, currency: "usd", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000) + 3600 } } } });
 
     const outcome = await attemptDepositAuthorization({ id: reservation.id, deposit }, fakeIntent());
     expect(outcome.outcome).toBe("succeeded");

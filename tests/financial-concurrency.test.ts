@@ -117,7 +117,7 @@ describe("durable financial operations with real concurrent connections", () => 
   it("refund timeout wins while a deposit request is in flight and releases its eventual authorization", async () => {
     const { r, p } = await fixture(false, 30000);
     const entered = barrier(), release = barrier();
-    let remote = { id: `pi_timeout_${r.id}`, status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000)+3600 } } } };
+    let remote = { id: `pi_timeout_${r.id}`, status: "requires_capture", amount: 30000, amount_capturable: 30000, currency: "usd", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000)+3600 } } } };
     provider.paymentIntents.create.mockImplementation(async () => { entered.release(); await release.wait; return remote; });
     provider.paymentIntents.retrieve.mockImplementation(async () => remote);
     provider.paymentIntents.cancel.mockImplementation(async () => { remote = { ...remote, status: "canceled" }; return remote; });
@@ -145,7 +145,7 @@ describe("durable financial operations with real concurrent connections", () => 
   it.each(["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"] as const)("compensates a deposit authorization completing after %s", async cancellation => {
     const { r, p } = await fixture(false, 30000);
     const entered = barrier(), release = barrier();
-    let remote = { id: `pi_deposit_${r.id}`, status: "requires_capture", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000)+3600 } } } };
+    let remote = { id: `pi_deposit_${r.id}`, status: "requires_capture", amount: 30000, amount_capturable: 30000, currency: "usd", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000)+3600 } } } };
     provider.paymentIntents.create.mockImplementation(async () => { entered.release(); await release.wait; return remote; });
     provider.paymentIntents.retrieve.mockImplementation(async () => remote);
     provider.paymentIntents.cancel.mockImplementation(async () => { remote = { ...remote, status: "canceled" }; return remote; });
