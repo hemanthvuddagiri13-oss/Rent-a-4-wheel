@@ -64,6 +64,11 @@ export function CancelReservationAdminButton({ reservationId }: { reservationId:
 export function RefundForm({ reservationId, maxCents }: { reservationId: string; maxCents: number }) {
   const [amount, setAmount] = useState((maxCents / 100).toFixed(2));
   const [reason, setReason] = useState("");
+  // Stable for the lifetime of one refund attempt (including any
+  // network-level retry of the same submission), but rotated after each
+  // completed attempt so a later, deliberate refund is never coalesced
+  // with a prior one under the same idempotency key.
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [isPending, startTransitionFn] = useTransition();
   const router = useRouter();
 
@@ -84,8 +89,9 @@ export function RefundForm({ reservationId, maxCents }: { reservationId: string;
           onClick={() =>
             startTransitionFn(async () => {
               try {
-                await issueRefund(reservationId, Math.round(Number(amount) * 100), reason || undefined);
+                await issueRefund(reservationId, Math.round(Number(amount) * 100), requestId, reason || undefined);
                 toast.success("Refund issued.");
+                setRequestId(crypto.randomUUID());
                 router.refresh();
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Unable to issue refund.");

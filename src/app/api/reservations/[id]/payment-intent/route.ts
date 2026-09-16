@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { stripe, isStripeConfigured, ensureStripeCustomer } from "@/lib/stripe";
+import { stripe, isStripeConfigured, isDevPaymentSimulationAllowed, ensureStripeCustomer } from "@/lib/stripe";
 
 /**
  * Creates (or reuses, for idempotency on refresh) the Stripe PaymentIntent
@@ -33,7 +33,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
 
   if (!isStripeConfigured() || !stripe) {
-    return NextResponse.json({ devMode: true, totalCents: reservation.totalCents });
+    return NextResponse.json({ devMode: isDevPaymentSimulationAllowed(), totalCents: reservation.totalCents });
   }
 
   const existing = reservation.payments.find((p) => p.type === "RENTAL");

@@ -7,7 +7,7 @@ import {
 } from "@/lib/stripe-event-ledger";
 import { prisma } from "./helpers/factories";
 
-function assertClaimed(claim: ClaimResult): asserts claim is { shouldProcess: true; eventRecordId: string } {
+function assertClaimed(claim: ClaimResult): asserts claim is { shouldProcess: true; eventRecordId: string; leaseToken: string } {
   if (!claim.shouldProcess) throw new Error("Expected the event to be claimed for processing.");
 }
 
@@ -41,7 +41,7 @@ describe("Stripe event processing state machine", () => {
     const first = await claimStripeEventForProcessing({ stripeEventId, type: "payment_intent.succeeded", payload: {} });
     expect(first.shouldProcess).toBe(true);
     assertClaimed(first);
-    await markStripeEventProcessed(first.eventRecordId);
+    await markStripeEventProcessed(first.eventRecordId, first.leaseToken);
 
     const duplicate = await claimStripeEventForProcessing({ stripeEventId, type: "payment_intent.succeeded", payload: {} });
     expect(duplicate.shouldProcess).toBe(false);
@@ -53,7 +53,7 @@ describe("Stripe event processing state machine", () => {
     const first = await claimStripeEventForProcessing({ stripeEventId, type: "payment_intent.succeeded", payload: {} });
     expect(first.shouldProcess).toBe(true);
     assertClaimed(first);
-    await markStripeEventFailed(first.eventRecordId, new Error("simulated transient DB failure"));
+    await markStripeEventFailed(first.eventRecordId, first.leaseToken, new Error("simulated transient DB failure"));
 
     const failedRecord = await prisma.stripeEvent.findUniqueOrThrow({ where: { stripeEventId } });
     expect(failedRecord.status).toBe("FAILED");
@@ -64,7 +64,7 @@ describe("Stripe event processing state machine", () => {
     const retry = await claimStripeEventForProcessing({ stripeEventId, type: "payment_intent.succeeded", payload: {} });
     expect(retry.shouldProcess).toBe(true);
     assertClaimed(retry);
-    await markStripeEventProcessed(retry.eventRecordId);
+    await markStripeEventProcessed(retry.eventRecordId, retry.leaseToken);
 
     const finalRecord = await prisma.stripeEvent.findUniqueOrThrow({ where: { stripeEventId } });
     expect(finalRecord.status).toBe("PROCESSED");
@@ -100,5 +100,34 @@ describe("Stripe event processing state machine", () => {
 
     const record = await prisma.stripeEvent.findUniqueOrThrow({ where: { stripeEventId } });
     expect(record.attemptCount).toBe(2);
+  });
+
+  it("a fenced-out stale worker can never overwrite the newer worker's outcome", async () => {
+    const stripeEventId = uniqueEventId("fenced");
+    const original = await claimStripeEventForProcessing({ stripeEventId, type: "payment_intent.succeeded", payload: {} });
+    assertClaimed(original);
+
+    // The original worker goes silent long enough to be considered
+    // abandoned; a recovery worker reclaims the same event, minting a
+    // fresh lease token.
+    await prisma.stripeEvent.update({
+      where: { id: original.eventRecordId },
+      data: { processingStartedAt: new Date(Date.now() - 10 * 60 * 1000) },
+    });
+    const recovered = await claimStripeEventForProcessing({ stripeEventId, type: "payment_intent.succeeded", payload: {} });
+    assertClaimed(recovered);
+    expect(recovered.leaseToken).not.toBe(original.leaseToken);
+
+    // The recovery worker finishes first and marks the event PROCESSED.
+    await markStripeEventProcessed(recovered.eventRecordId, recovered.leaseToken);
+
+    // The original, merely-slow worker finally wakes up and tries to
+    // settle the event with its OWN (now-stale) lease token — this must
+    // be a safe no-op, not an overwrite of PROCESSED back to FAILED.
+    await markStripeEventFailed(original.eventRecordId, original.leaseToken, new Error("stale worker finally failed"));
+
+    const finalRecord = await prisma.stripeEvent.findUniqueOrThrow({ where: { stripeEventId } });
+    expect(finalRecord.status).toBe("PROCESSED");
+    expect(finalRecord.lastError).toBeNull();
   });
 });

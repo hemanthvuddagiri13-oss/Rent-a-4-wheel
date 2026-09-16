@@ -40,11 +40,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     );
   }
 
-  const reservation = await prisma.reservation.findUnique({ where: { id } });
+  const reservation = await prisma.reservation.findUnique({ where: { id }, include: { documents: { where: { deletedAt: null } } } });
   if (!reservation) return NextResponse.json({ error: "Reservation not found." }, { status: 404 });
   if (reservation.customerId !== session.user.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  // Idempotent retry: this exact checkout already succeeded (e.g. the
+  // client's own retry after a dropped response, or the payment step
+  // remounting and re-finalizing before starting the PaymentIntent) — the
+  // reservation has already moved on to AWAITING_PAYMENT with these same
+  // documents and driver details attached. Resume rather than returning
+  // an unrecoverable 409 (item 13); a request with genuinely DIFFERENT
+  // inputs than what was already finalized is still rejected below.
+  if (reservation.status === "AWAITING_PAYMENT") {
+    const docTypesById = Object.fromEntries(reservation.documents.map((d) => [d.id, d.type]));
+    const sameDocuments =
+      docTypesById[documentIds.front] === "LICENSE_FRONT" &&
+      docTypesById[documentIds.back] === "LICENSE_BACK" &&
+      docTypesById[documentIds.selfie] === "SELFIE_WITH_LICENSE";
+    const sameDriver = reservation.driverEmail === driver.email && reservation.licenseNumber === driver.licenseNumber;
+    if (sameDocuments && sameDriver) {
+      return NextResponse.json({ success: true });
+    }
+    return NextResponse.json({ error: "This reservation is no longer awaiting checkout." }, { status: 409 });
+  }
+
   if (reservation.status !== "CHECKOUT_HOLD") {
     return NextResponse.json({ error: "This reservation is no longer awaiting checkout." }, { status: 409 });
   }

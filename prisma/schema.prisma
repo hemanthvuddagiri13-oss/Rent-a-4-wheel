@@ -536,22 +536,22 @@ model Reservation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  extras               ReservationExtra[]
-  payments             Payment[]
-  refunds              Refund[]
-  deposit              SecurityDeposit?
-  documents            DriverDocument[]
-  agreementAcceptances AgreementAcceptance[]
-  inspections          VehicleInspection[]
-  damageReports        DamageReport[]
-  notifications        Notification[]
-  trip                 Trip?
-  conditionReports     ConditionReport[]
-  identityHandoff      IdentityHandoffVerification?
-  tripChecklistEntries TripChecklist[]
-  tripEvents           TripEvent[]
+  extras                 ReservationExtra[]
+  payments               Payment[]
+  refunds                Refund[]
+  deposit                SecurityDeposit?
+  documents              DriverDocument[]
+  agreementAcceptances   AgreementAcceptance[]
+  inspections            VehicleInspection[]
+  damageReports          DamageReport[]
+  notifications          Notification[]
+  trip                   Trip?
+  conditionReports       ConditionReport[]
+  identityHandoff        IdentityHandoffVerification?
+  tripChecklistEntries   TripChecklist[]
+  tripEvents             TripEvent[]
   paymentReconciliations PaymentReconciliation[]
-  emergencyOverrides   EmergencyOverrideRecord[]
+  emergencyOverrides     EmergencyOverrideRecord[]
 
   // Postgres-only generated column backing the overlap exclusion constraint
   // added by hand in the phase1 migration SQL (Prisma Migrate can't express
@@ -646,8 +646,17 @@ enum RefundStatus {
   PENDING
   SUCCEEDED
   FAILED
+  CANCELLED
 }
 
+// Doubles as the durable, idempotent "refund operation" record: a row is
+// created here in PENDING status (with a deterministic, unique
+// `idempotencyKey`) BEFORE the Stripe refund API is ever called. Any
+// retry/replay (a crash between the Stripe call succeeding and this row
+// being updated, a webhook re-delivery, a duplicate staff click) looks up
+// the existing row by `idempotencyKey` first instead of re-calling
+// Stripe. Creating a Refund row is NOT refund completion — only
+// `status: SUCCEEDED` is; see src/lib/refund-operations.ts.
 model Refund {
   id            String      @id @default(cuid())
   reservationId String
@@ -660,6 +669,10 @@ model Refund {
   reason         String?
   status         RefundStatus @default(PENDING)
   stripeRefundId String?      @unique
+
+  idempotencyKey String  @unique
+  initiatedById  String? // null = system/reconciliation-initiated; set = staff-initiated
+  lastError      String? @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -678,6 +691,20 @@ model SecurityDeposit {
   capturedAmountCents   Int?
   failureReason         String?
   releasedAt            DateTime?
+
+  // The raw Stripe PaymentIntent status at last sync (e.g.
+  // "requires_capture", "canceled") — an authorization is only genuinely
+  // valid when this is "requires_capture"; a resolved create() call alone
+  // does not guarantee that (see src/lib/deposit-authorization.ts).
+  stripeStatus String?
+
+  // When the manual-capture authorization actually succeeded, and our
+  // conservative estimate of when Stripe will auto-release it if never
+  // captured (uncaptured card authorizations are not held indefinitely).
+  // Trip start requires `authorizationExpiresAt` to still be in the
+  // future — see src/lib/trip-gate.ts.
+  authorizedAt           DateTime?
+  authorizationExpiresAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -714,16 +741,55 @@ model StripeEvent {
   processedAt         DateTime?
   nextRetryAt         DateTime?
 
+  // Fencing token: a fresh random value generated on every successful
+  // claim (initial or recovery). `markProcessed`/`markFailed` require the
+  // caller's token to still match the row's current token — if a recovery
+  // worker has since reclaimed a stale PROCESSING row (generating a new
+  // token), the original, merely-slow worker's eventual completion can no
+  // longer overwrite the newer worker's outcome. See
+  // src/lib/stripe-event-ledger.ts.
+  leaseToken String?
+
   payload Json?
 
   @@index([type])
   @@index([status])
 }
 
+enum OutboxMessageStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// Transactional outbox: notifications and other required post-payment
+// side effects are written here in the SAME database transaction as the
+// state change that requires them, then dispatched separately (see
+// src/lib/outbox.ts) — so a crash after the state change commits can
+// never lose the notification, and a notification can never be sent for
+// a state change that itself rolled back.
+model OutboxMessage {
+  id      String              @id @default(cuid())
+  type    String
+  payload Json
+  status  OutboxMessageStatus @default(PENDING)
+
+  attempts  Int     @default(0)
+  lastError String? @db.Text
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+  nextRetryAt DateTime?
+
+  @@index([status, nextRetryAt])
+}
+
 enum ReconciliationReason {
   DEPOSIT_AUTH_SUCCEEDED_DB_UPDATE_FAILED
   PAYMENT_SUCCEEDED_AFTER_HOLD_EXPIRED
   PAYMENT_SUCCEEDED_DATES_UNAVAILABLE
+  PAYMENT_SUCCEEDED_AFTER_CANCELLATION
+  DEPOSIT_RECOVERY_WINDOW_EXPIRED
   WEBHOOK_PROCESSING_REPEATEDLY_FAILED
 }
 

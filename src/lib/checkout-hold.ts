@@ -21,11 +21,18 @@ export class HoldError extends Error {
  * Places (or refreshes) a 15-minute checkout hold for a customer on a
  * specific vehicle/date range.
  *
- * An existing CHECKOUT_HOLD row for the same (customer, vehicle, dates)
- * is only ever *refreshed* while it is still genuinely live
- * (`expiresAt > now`). If it has already expired, it is first explicitly
- * transitioned to EXPIRED and committed on its own — releasing it for
- * good regardless of what happens next — and only then does a fresh,
+ * An existing CHECKOUT_HOLD row for the same (customer, vehicle, EXACT
+ * dates) is only ever *refreshed* while it is still genuinely live
+ * (`expiresAt > now`), and that refresh is itself a conditional
+ * (`status`+`expiresAt`-guarded) update — not a blind write — so a
+ * refresh racing the background cleanup sweep's own expiry write can
+ * never resurrect a row the sweep just released (item 11). If it has
+ * already expired, or a request arrives with DIFFERENT dates/extras/
+ * coupon while an older hold for this (customer, vehicle) still sits in
+ * CHECKOUT_HOLD, that older hold is first explicitly transitioned to
+ * EXPIRED and committed on its own (item 12 — an edited search must
+ * never leave a stale hold silently blocking the old dates for the rest
+ * of its 15-minute window) — and only then does a fresh,
  * serializable-transaction availability check run before a brand-new
  * hold is created. The vehicle may have been booked by someone else in
  * the meantime, in which case this correctly fails with a conflict
@@ -46,22 +53,34 @@ export async function createOrRefreshHold(params: {
   }
 
   const now = new Date();
+  // Any other live CHECKOUT_HOLD this customer holds for this vehicle —
+  // regardless of dates/extras/coupon — so an edited search (item 12)
+  // reliably finds and releases it, not just an exact-match refresh.
   const existingHold = await prisma.reservation.findFirst({
-    where: { customerId, vehicleId, pickupAt, returnAt, status: "CHECKOUT_HOLD" },
+    where: { customerId, vehicleId, status: "CHECKOUT_HOLD" },
+    orderBy: { createdAt: "desc" },
   });
 
-  if (existingHold && existingHold.expiresAt && existingHold.expiresAt > now) {
-    // Still genuinely live — simple refresh, no availability re-check
-    // needed since this row already legitimately occupies the slot.
-    return prisma.reservation.update({
-      where: { id: existingHold.id },
+  const isExactSameSearch = existingHold?.pickupAt.getTime() === pickupAt.getTime() && existingHold?.returnAt.getTime() === returnAt.getTime();
+
+  if (existingHold && isExactSameSearch) {
+    // Conditional (CAS) refresh: only succeeds if the row is still
+    // genuinely CHECKOUT_HOLD with an unexpired deadline at WRITE time,
+    // not merely at the read a moment earlier.
+    const refreshed = await prisma.reservation.updateMany({
+      where: { id: existingHold.id, status: "CHECKOUT_HOLD", expiresAt: { gt: now } },
       data: { expiresAt: new Date(now.getTime() + HOLD_DURATION_MINUTES * 60 * 1000) },
     });
+    if (refreshed.count === 1) {
+      return prisma.reservation.findUniqueOrThrow({ where: { id: existingHold.id } });
+    }
+    // Lost the race to the cleanup sweep between the read and this CAS —
+    // fall through to the expire-then-recreate path below.
   }
 
   if (existingHold) {
-    // Expired but not yet swept by the background cleanup job — release
-    // it explicitly, as its OWN committed step, before attempting
+    // Either expired, or belongs to a different (now-abandoned) search —
+    // release it explicitly, as its OWN committed step, before attempting
     // anything else. This must be a separate, already-committed step
     // (not part of the transaction below): if the availability check that
     // follows finds the dates are gone, we still must not leave this

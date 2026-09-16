@@ -58,8 +58,10 @@ export function StepPayment({ state, onSuccess, onBack }: Props) {
         if (cancelled) return;
         if (data.devMode) {
           setDevMode(true);
-        } else {
+        } else if (data.clientSecret) {
           setClientSecret(data.clientSecret);
+        } else {
+          throw new Error("Payments are not available in this environment.");
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -124,9 +126,9 @@ export function StepPayment({ state, onSuccess, onBack }: Props) {
         </div>
       )}
 
-      {!initializing && clientSecret && stripePromise && (
+      {!initializing && clientSecret && stripePromise && state.reservationId && (
         <Elements stripe={stripePromise} options={{ clientSecret, appearance: { theme: "night", variables: { colorPrimary: "#D4AF37" } } }}>
-          <StripeCheckoutForm onSuccess={onSuccess} />
+          <StripeCheckoutForm reservationId={state.reservationId} onSuccess={onSuccess} />
         </Elements>
       )}
 
@@ -141,10 +143,34 @@ export function StepPayment({ state, onSuccess, onBack }: Props) {
   );
 }
 
-function StripeCheckoutForm({ onSuccess }: { onSuccess: () => void }) {
+const STATUS_POLL_INTERVAL_MS = 1500;
+const STATUS_POLL_TIMEOUT_MS = 45_000;
+
+type ReservationOutcome = "processing" | "confirmed" | "payment_failed" | "refunded" | "expired" | "cancelled";
+
+async function pollReservationOutcome(reservationId: string): Promise<ReservationOutcome> {
+  const deadline = Date.now() + STATUS_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const res = await fetch(`/api/reservations/${reservationId}/status`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.outcome !== "processing") return data.outcome as ReservationOutcome;
+    }
+    await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
+  }
+  return "processing";
+}
+
+function StripeCheckoutForm({ reservationId, onSuccess }: { reservationId: string; onSuccess: () => void }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
+  // Client-side confirmation only proves the PaymentIntent reached a
+  // confirmable state, not that the webhook has finished persisting the
+  // rental payment, authorizing the deposit, and confirming the
+  // reservation server-side. We must keep showing "Processing" — never
+  // "Confirmed" — until the server itself reports a terminal outcome.
+  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -160,7 +186,38 @@ function StripeCheckoutForm({ onSuccess }: { onSuccess: () => void }) {
       setError(confirmError.message || "Payment failed. Please try again.");
       return;
     }
-    onSuccess();
+
+    setProcessing(true);
+    const outcome = await pollReservationOutcome(reservationId);
+    setProcessing(false);
+
+    switch (outcome) {
+      case "confirmed":
+        onSuccess();
+        return;
+      case "payment_failed":
+        setError("We couldn't authorize your security deposit. Please try a different payment method.");
+        return;
+      case "refunded":
+        setError("Your payment could not be completed in time and has been automatically refunded.");
+        return;
+      case "expired":
+        setError("Your checkout window expired. Please start again.");
+        return;
+      case "cancelled":
+        setError("This reservation was cancelled.");
+        return;
+      default:
+        setError("Your payment is still being processed. We'll email you a confirmation shortly.");
+    }
+  }
+
+  if (processing) {
+    return (
+      <div className="mt-6 flex items-center gap-2 text-muted">
+        <Loader2 className="h-5 w-5 animate-spin" /> Processing your payment — do not close this page…
+      </div>
+    );
   }
 
   return (

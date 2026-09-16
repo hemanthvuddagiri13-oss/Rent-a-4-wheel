@@ -23,6 +23,7 @@ export async function evaluateTripStartGate(reservationId: string): Promise<Trip
     include: {
       payments: true,
       deposit: true,
+      refunds: true,
       documents: { where: { deletedAt: null } },
       agreementAcceptances: { where: { type: "RENTAL_AGREEMENT" } },
       identityHandoff: true,
@@ -43,8 +44,25 @@ export async function evaluateTripStartGate(reservationId: string): Promise<Trip
 
   const rentalPaid = reservation.payments.some((p) => p.type === "RENTAL" && p.status === "SUCCEEDED");
   if (!rentalPaid) reasons.push("Rental payment has not succeeded.");
-  if (reservation.deposit && reservation.deposit.status !== "SUCCEEDED") {
-    reasons.push("Security deposit has not been authorized.");
+
+  // A reservation refunded back to zero (or below) net paid must never
+  // start a trip, even if a RENTAL payment once succeeded — the money the
+  // trip is predicated on is no longer actually held.
+  const paidCents = reservation.payments
+    .filter((p) => p.type === "RENTAL" && p.status === "SUCCEEDED")
+    .reduce((sum, p) => sum + p.amountCents, 0);
+  const refundedCents = reservation.refunds
+    .filter((r) => r.status === "SUCCEEDED")
+    .reduce((sum, r) => sum + r.amountCents, 0);
+  if (rentalPaid && paidCents - refundedCents <= 0) {
+    reasons.push("Rental payment has been fully refunded; this reservation cannot start a trip.");
+  }
+
+  if (reservation.deposit) {
+    const authValid = reservation.deposit.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt > new Date();
+    if (reservation.deposit.status !== "SUCCEEDED" || !authValid) {
+      reasons.push("Security deposit does not have a currently valid authorization.");
+    }
   }
 
   for (const type of REQUIRED_DOCUMENT_TYPES) {

@@ -125,6 +125,55 @@ describe("isVehicleAvailable — overlap detection", () => {
   });
 });
 
+describe("item 2 — a durable-blocking reservation is never released by an old expiresAt", () => {
+  it("a CONFIRMED reservation still blocks even if it carries a long-past expiresAt (e.g. a stale value from before it was confirmed)", async () => {
+    const customer = await prisma.user.create({
+      data: { email: `test-availability-stale-expiry-${Date.now()}@example.com`, role: "CUSTOMER" },
+    });
+    const pickupAt = new Date("2027-09-10T10:00:00Z");
+    const returnAt = new Date("2027-09-13T10:00:00Z");
+
+    const reservation = await prisma.reservation.create({
+      data: {
+        confirmationNumber: `RA4W-SE${Date.now() % 1000000}`,
+        customerId: customer.id,
+        vehicleId,
+        pickupAt,
+        returnAt,
+        rateType: "DAILY",
+        rateAmountCents: 5000,
+        units: 3,
+        subtotalCents: 15000,
+        totalCents: 15000,
+        status: "CONFIRMED",
+        // A stale checkout-hold deadline that has long since passed — the
+        // availability query must NEVER treat this as "free" once the
+        // status is a durable-blocking one; only CHECKOUT_HOLD/
+        // AWAITING_PAYMENT are ever gated by expiresAt.
+        expiresAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+        driverFirstName: "Test",
+        driverLastName: "User",
+        driverDob: new Date("1990-01-01"),
+        driverEmail: "test@example.com",
+        driverPhone: "555-0100",
+        driverAddress: "123 St",
+        driverCity: "Dallas",
+        driverState: "TX",
+        driverZip: "75201",
+        licenseNumber: "TX123",
+        licenseState: "TX",
+        licenseExpiration: new Date("2030-01-01"),
+      },
+    });
+
+    const available = await isVehicleAvailable(vehicleId, pickupAt, returnAt);
+    expect(available).toBe(false);
+
+    await prisma.reservation.delete({ where: { id: reservation.id } });
+    await prisma.user.delete({ where: { id: customer.id } });
+  });
+});
+
 describe("getAvailableVehicleIds", () => {
   it("excludes a booked vehicle and includes an unbooked one for an overlapping window", async () => {
     const ids = await getAvailableVehicleIds(new Date("2027-01-11"), new Date("2027-01-12"));

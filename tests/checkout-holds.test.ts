@@ -264,3 +264,64 @@ describe("expired-hold refresh must not silently hand back dates someone else to
     expect(refreshed.expiresAt!.getTime()).toBeGreaterThan(originalHold.expiresAt!.getTime());
   });
 });
+
+describe("item 11 — atomic checkout-hold refresh vs. the cleanup sweep", () => {
+  it("a refresh attempt loses the CAS race to a concurrent cleanup expiry and correctly starts a fresh hold rather than reviving the stale row", async () => {
+    const vehicle = await createTestVehicle();
+    const customer = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customer.id);
+
+    const pickupAt = new Date("2029-08-01T10:00:00Z");
+    const returnAt = new Date("2029-08-04T10:00:00Z");
+
+    const originalHold = await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customer.id,
+      pickupAt,
+      returnAt,
+      status: "CHECKOUT_HOLD",
+      expiresAt: new Date(Date.now() + 1000), // technically still "live" at read time
+    });
+
+    // The cleanup sweep runs first and wins: by the time the refresh's
+    // own conditional write executes, the row is already EXPIRED.
+    await expireStaleReservations(new Date(Date.now() + 2000));
+    const sweepResult = await prisma.reservation.findUniqueOrThrow({ where: { id: originalHold.id } });
+    expect(sweepResult.status).toBe("EXPIRED");
+
+    const refreshed = await createOrRefreshHold({ customerId: customer.id, vehicleId: vehicle.id, pickupAt, returnAt, extraIds: [] });
+    expect(refreshed.id).not.toBe(originalHold.id);
+    expect(refreshed.status).toBe("CHECKOUT_HOLD");
+  });
+});
+
+describe("item 12 — editing a hold's dates/extras/coupon invalidates the prior hold", () => {
+  it("requesting new dates for the same vehicle expires the customer's old hold instead of leaving it dangling", async () => {
+    const vehicle = await createTestVehicle();
+    const customer = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customer.id);
+
+    const oldPickup = new Date("2029-09-01T10:00:00Z");
+    const oldReturn = new Date("2029-09-04T10:00:00Z");
+    const oldHold = await createOrRefreshHold({ customerId: customer.id, vehicleId: vehicle.id, pickupAt: oldPickup, returnAt: oldReturn, extraIds: [] });
+    expect(oldHold.status).toBe("CHECKOUT_HOLD");
+
+    const newPickup = new Date("2029-09-10T10:00:00Z");
+    const newReturn = new Date("2029-09-13T10:00:00Z");
+    const newHold = await createOrRefreshHold({ customerId: customer.id, vehicleId: vehicle.id, pickupAt: newPickup, returnAt: newReturn, extraIds: [] });
+
+    expect(newHold.id).not.toBe(oldHold.id);
+    expect(newHold.pickupAt.toISOString()).toBe(newPickup.toISOString());
+
+    // The old hold must be explicitly released, not left sitting in
+    // CHECKOUT_HOLD blocking the abandoned dates for the rest of its
+    // 15-minute window.
+    const reloadedOldHold = await prisma.reservation.findUniqueOrThrow({ where: { id: oldHold.id } });
+    expect(reloadedOldHold.status).toBe("EXPIRED");
+
+    const oldDatesAvailable = await isVehicleAvailable(vehicle.id, oldPickup, oldReturn);
+    expect(oldDatesAvailable).toBe(true);
+  });
+});

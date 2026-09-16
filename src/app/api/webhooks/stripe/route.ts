@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import type { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
-import { handlePaymentIntentSucceeded, handlePaymentIntentFailed } from "@/lib/stripe-webhook-handlers";
-import { claimStripeEventForProcessing, markStripeEventProcessed, markStripeEventFailed } from "@/lib/stripe-event-ledger";
-import { flagRepeatedProcessingFailure } from "@/lib/payment-reconciliation";
-
-const MAX_ATTEMPTS_BEFORE_FLAGGING = 5;
+import { claimStripeEventForProcessing } from "@/lib/stripe-event-ledger";
+import { dispatchClaimedStripeEvent } from "@/lib/stripe-event-dispatch";
 
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -40,45 +36,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true, claimed: false, reason: claim.reason });
   }
 
-  try {
-    switch (event.type) {
-      case "payment_intent.succeeded":
-        await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
-        break;
-      case "payment_intent.payment_failed":
-        await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
-        break;
-      case "charge.refunded":
-        // Refund state is authoritatively tracked via our own /api/admin/refunds
-        // flow; this case is a placeholder for reconciling refunds initiated
-        // directly from the Stripe dashboard.
-        break;
-      default:
-        break;
-    }
-  } catch (err) {
-    console.error(`Stripe webhook processing failed for event ${event.id} (${event.type})`, err);
-    await markStripeEventFailed(claim.eventRecordId, err);
+  const result = await dispatchClaimedStripeEvent({ eventRecordId: claim.eventRecordId, leaseToken: claim.leaseToken, event });
 
-    const record = await prisma.stripeEvent.findUnique({ where: { id: claim.eventRecordId } });
-    if (record && record.attemptCount >= MAX_ATTEMPTS_BEFORE_FLAGGING) {
-      const reservationId =
-        event.type === "payment_intent.succeeded" || event.type === "payment_intent.payment_failed"
-          ? (
-              await prisma.payment.findUnique({
-                where: { stripePaymentIntentId: (event.data.object as Stripe.PaymentIntent).id },
-                select: { reservationId: true },
-              })
-            )?.reservationId
-          : undefined;
-      await flagRepeatedProcessingFailure({
-        reservationId,
-        stripeEventId: event.id,
-        attemptCount: record.attemptCount,
-        lastError: record.lastError ?? "unknown error",
-      });
-    }
-
+  if (!result.ok) {
     // Do NOT swallow this and return 200 — a non-2xx response tells
     // Stripe to retry per its own schedule, on top of our own ledger
     // making the next delivery (or a manual replay) retryable rather than
@@ -86,6 +46,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Processing failed; will retry." }, { status: 500 });
   }
 
-  await markStripeEventProcessed(claim.eventRecordId);
   return NextResponse.json({ received: true });
 }

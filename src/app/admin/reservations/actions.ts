@@ -4,9 +4,9 @@ import { canAccessAdmin } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { stripe } from "@/lib/stripe";
 import { queueNotification } from "@/lib/notifications";
 import { transitionReservation } from "@/lib/reservation-state-machine";
+import { getOrCreateRefundOperation, executeRefundOperation } from "@/lib/refund-operations";
 
 async function requireAdmin() {
   const session = await auth();
@@ -66,35 +66,64 @@ export async function cancelReservation(reservationId: string, notes?: string) {
   revalidatePath("/admin/reservations");
 }
 
-export async function issueRefund(reservationId: string, amountCents: number, reason?: string) {
+/**
+ * Staff-initiated refund. `requestId` must be a client-generated token
+ * that is stable across retries of the SAME submission (so a network
+ * retry or a double-click while the button is still disabled resumes the
+ * same durable Refund row instead of calling Stripe a second time) but
+ * fresh for each genuinely new refund a staff member issues. Amount is
+ * validated against the reservation's actual remaining refundable
+ * balance — never trusted as-is from the client.
+ */
+export async function issueRefund(reservationId: string, amountCents: number, requestId: string, reason?: string) {
   const session = await requireAdmin();
+  if (!Number.isInteger(amountCents) || amountCents <= 0) {
+    throw new Error("Refund amount must be a positive number.");
+  }
+  if (!requestId) {
+    throw new Error("Missing request id.");
+  }
+
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
-    include: { payments: { where: { type: "RENTAL", status: "SUCCEEDED" } } },
+    include: {
+      payments: { where: { type: "RENTAL", status: "SUCCEEDED" } },
+      refunds: true,
+    },
   });
   if (!reservation) throw new Error("Reservation not found.");
   const payment = reservation.payments[0];
   if (!payment) throw new Error("No successful payment found to refund.");
 
-  let stripeRefundId: string | undefined;
-  if (stripe && payment.stripePaymentIntentId) {
-    const refund = await stripe.refunds.create({ payment_intent: payment.stripePaymentIntentId, amount: amountCents });
-    stripeRefundId = refund.id;
+  // Exclude this exact requestId's own prior attempt (if any) from the
+  // "already refunded" total — resuming an idempotent retry must never
+  // be rejected as exceeding the balance against itself.
+  const idempotencyKey = `staff-${requestId}`;
+  const alreadyRefundedCents = reservation.refunds
+    .filter((r) => r.idempotencyKey !== idempotencyKey && (r.status === "SUCCEEDED" || r.status === "PENDING"))
+    .reduce((sum, r) => sum + r.amountCents, 0);
+  const remainingCents = payment.amountCents - alreadyRefundedCents;
+  if (amountCents > remainingCents) {
+    throw new Error(`Refund amount exceeds the remaining refundable balance ($${(remainingCents / 100).toFixed(2)}).`);
   }
 
-  await prisma.refund.create({
-    data: {
-      reservationId,
-      paymentId: payment.id,
-      amountCents,
-      reason,
-      status: "SUCCEEDED",
-      stripeRefundId,
-    },
+  const refund = await getOrCreateRefundOperation({
+    idempotencyKey,
+    reservationId,
+    paymentId: payment.id,
+    amountCents,
+    reason,
+    initiatedById: session.user.id,
   });
+  const result = await executeRefundOperation(refund.id, payment.stripePaymentIntentId);
+  const succeeded = result.status === "SUCCEEDED" || (result.status === "already_terminal" && result.refund.status === "SUCCEEDED");
+  if (!succeeded) {
+    const error = result.status === "FAILED" ? result.error : "Refund did not complete.";
+    throw new Error(`Refund failed: ${error}`);
+  }
 
   await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "reservation.refund", entityType: "Reservation", entityId: reservationId, metadata: { amountCents } },
+    data: { actorId: session.user.id, action: "reservation.refund", entityType: "Reservation", entityId: reservationId, metadata: { amountCents, refundId: refund.id } },
   });
 
   await queueNotification({ userId: reservation.customerId, reservationId, type: "REFUND", extra: { amountCents } });

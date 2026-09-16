@@ -1,87 +1,72 @@
-import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
-import { stripe } from "@/lib/stripe";
-import { queueNotification } from "@/lib/notifications";
+import { enqueueOutboxNotification } from "@/lib/outbox";
+import { getOrCreateRefundOperation, executeRefundOperation } from "@/lib/refund-operations";
 import type { Payment, Reservation, ReconciliationReason } from "@prisma/client";
 
 /**
- * Automatically refunds a rental payment that succeeded but cannot be
- * turned into a valid reservation (the hold expired and someone else took
- * the dates, or the dates are otherwise no longer available), and leaves
- * an explicit, permanent PaymentReconciliation record either way — a
- * successful Stripe refund closes the case (REFUNDED); a failed refund
- * attempt is flagged NEEDS_MANUAL_REVIEW rather than silently retried
- * forever, since refund failures need a human, not a robot, to resolve.
+ * Automatically refunds a rental payment that succeeded but cannot (or,
+ * per policy, must not — e.g. a cancellation) be turned into an active
+ * reservation, and leaves an explicit, permanent PaymentReconciliation
+ * record either way. Uses the idempotent Refund-operation primitive
+ * (src/lib/refund-operations.ts): a durable, deterministically-keyed
+ * refund row is created before Stripe is ever called, so a crash between
+ * a successful Stripe refund and this function recording that success is
+ * safe to retry — the retry resumes the same row rather than issuing a
+ * second refund. A successful refund closes the case (REFUNDED); a
+ * failed refund attempt is flagged NEEDS_MANUAL_REVIEW rather than
+ * retried forever, since refund failures need a human, not a robot, to
+ * resolve.
  */
 export async function refundUnhonorableCharge(params: {
   reservation: Reservation;
   payment: Payment;
-  intent: Stripe.PaymentIntent;
+  stripePaymentIntentId: string;
   reason: ReconciliationReason;
+  idempotencyKeySuffix: string;
 }): Promise<void> {
-  const { reservation, payment, intent, reason } = params;
+  const { reservation, payment, stripePaymentIntentId, reason, idempotencyKeySuffix } = params;
 
-  let refundId: string | undefined;
-  let refundError: string | undefined;
-
-  if (stripe) {
-    try {
-      const refund = await stripe.refunds.create(
-        { payment_intent: intent.id, reason: "requested_by_customer" },
-        { idempotencyKey: `refund-unhonorable-${intent.id}` }
-      );
-      refundId = refund.id;
-    } catch (err) {
-      refundError = err instanceof Error ? err.message : "Refund attempt failed.";
-      console.error("Automatic refund failed for an unhonorable charge — needs manual review", err);
-    }
-  } else {
-    refundError = "Stripe client unavailable when attempting automatic refund.";
-  }
+  const refund = await getOrCreateRefundOperation({
+    idempotencyKey: `reconciliation-${idempotencyKeySuffix}-${payment.id}`,
+    reservationId: reservation.id,
+    paymentId: payment.id,
+    amountCents: payment.amountCents,
+    reason: `Automatic refund: ${reason}`,
+  });
+  const result = await executeRefundOperation(refund.id, stripePaymentIntentId);
+  const succeeded = result.status === "SUCCEEDED" || (result.status === "already_terminal" && result.refund.status === "SUCCEEDED");
+  const refundError = result.status === "FAILED" ? result.error : undefined;
 
   await prisma.$transaction(async (tx) => {
-    if (refundId) {
-      await tx.refund.create({
-        data: {
-          reservationId: reservation.id,
-          paymentId: payment.id,
-          amountCents: payment.amountCents,
-          reason: `Automatic refund: ${reason}`,
-          status: "SUCCEEDED",
-          stripeRefundId: refundId,
-        },
-      });
-    }
-
     await tx.paymentReconciliation.create({
       data: {
         reservationId: reservation.id,
         paymentId: payment.id,
-        stripePaymentIntentId: intent.id,
+        stripePaymentIntentId,
         reason,
-        status: refundId ? "REFUNDED" : "NEEDS_MANUAL_REVIEW",
-        refundId,
-        detail: { refundError, reservationStatusAtReconciliation: reservation.status },
+        status: succeeded ? "REFUNDED" : "NEEDS_MANUAL_REVIEW",
+        refundId: refund.stripeRefundId ?? undefined,
+        detail: { refundError, reservationStatusAtReconciliation: reservation.status, refundRecordId: refund.id },
       },
     });
 
     await tx.tripEvent.create({
       data: {
         reservationId: reservation.id,
-        type: refundId ? "PAYMENT_RECONCILED_REFUNDED" : "PAYMENT_RECONCILIATION_NEEDS_REVIEW",
-        metadata: { reason, refundId, refundError },
+        type: succeeded ? "PAYMENT_RECONCILED_REFUNDED" : "PAYMENT_RECONCILIATION_NEEDS_REVIEW",
+        metadata: { reason, refundError },
       },
     });
-  });
 
-  if (refundId) {
-    await queueNotification({
-      userId: reservation.customerId,
-      reservationId: reservation.id,
-      type: "REFUND",
-      extra: { amountCents: payment.amountCents },
-    });
-  }
+    if (succeeded) {
+      await enqueueOutboxNotification(tx, {
+        userId: reservation.customerId,
+        reservationId: reservation.id,
+        type: "REFUND",
+        extra: { amountCents: payment.amountCents },
+      });
+    }
+  });
 }
 
 /**

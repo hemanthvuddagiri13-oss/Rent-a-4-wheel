@@ -4,9 +4,10 @@ import { prisma as appPrisma } from "@/lib/prisma";
 
 const createPaymentIntent = vi.fn();
 const createRefund = vi.fn();
+const retrievePaymentIntent = vi.fn().mockResolvedValue({ status: "requires_payment_method" });
 
 vi.mock("@/lib/stripe", () => ({
-  stripe: { paymentIntents: { create: createPaymentIntent }, refunds: { create: createRefund } },
+  stripe: { paymentIntents: { create: createPaymentIntent, retrieve: retrievePaymentIntent }, refunds: { create: createRefund } },
   isStripeConfigured: () => true,
 }));
 
@@ -20,6 +21,7 @@ const cleanupUserIds: string[] = [];
 afterEach(() => {
   createPaymentIntent.mockReset();
   createRefund.mockReset();
+  retrievePaymentIntent.mockReset().mockResolvedValue({ status: "requires_payment_method" });
 });
 
 afterAll(async () => {
@@ -87,7 +89,7 @@ describe("handlePaymentIntentSucceeded — payment/deposit gating", () => {
 
   it("confirms the reservation when the deposit authorization succeeds", async () => {
     const { reservation, payment } = await setupAwaitingPaymentReservation(30000);
-    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_success_${reservation.id}` });
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_success_${reservation.id}`, status: "requires_capture" });
 
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
 
@@ -186,7 +188,7 @@ describe("temporary Stripe failure during deposit authorization", () => {
     expect(reloadedPayment.status).toBe("REQUIRES_PAYMENT");
 
     // A subsequent retry (the network blip having cleared) succeeds normally.
-    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}` });
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}`, status: "requires_capture" });
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
     const finalReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
     expect(finalReservation.status).toBe("DOCUMENTS_REQUIRED");
@@ -292,7 +294,7 @@ describe("late payment reconciliation — hold expired mid-payment", () => {
         stripePaymentIntentId: `pi_test_late_unavailable_${expiredReservation.id}`,
       },
     });
-    createRefund.mockResolvedValueOnce({ id: `re_test_${expiredReservation.id}` });
+    createRefund.mockResolvedValueOnce({ id: `re_test_${expiredReservation.id}`, status: "succeeded" });
 
     await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
 
@@ -306,7 +308,7 @@ describe("late payment reconciliation — hold expired mid-payment", () => {
     expect(refundRow?.status).toBe("SUCCEEDED");
 
     const reconciliation = await prisma.paymentReconciliation.findFirst({ where: { reservationId: expiredReservation.id } });
-    expect(reconciliation?.reason).toBe("PAYMENT_SUCCEEDED_AFTER_HOLD_EXPIRED");
+    expect(reconciliation?.reason).toBe("PAYMENT_SUCCEEDED_DATES_UNAVAILABLE");
     expect(reconciliation?.status).toBe("REFUNDED");
   });
 });

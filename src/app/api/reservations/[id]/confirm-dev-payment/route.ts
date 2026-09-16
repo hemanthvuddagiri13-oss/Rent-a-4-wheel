@@ -1,21 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { isStripeConfigured } from "@/lib/stripe";
+import { isDevPaymentSimulationAllowed } from "@/lib/stripe";
 import { queueNotification } from "@/lib/notifications";
 import { transitionReservation } from "@/lib/reservation-state-machine";
 
 /**
- * Development-only endpoint that simulates a successful payment when no
- * Stripe credentials are configured, so the full booking flow can be
- * exercised end-to-end in local/dev environments. Refuses to run in
- * production (regardless of Stripe configuration) and refuses to run once
- * real Stripe keys are present anywhere — production payments always go
- * through the real PaymentIntent + webhook flow. This route must never be
- * reachable in a real deployment.
+ * Development-only endpoint that simulates a successful payment, so the
+ * full booking flow can be exercised end-to-end in local/dev environments
+ * without real Stripe credentials. Requires an explicit local-dev opt-in
+ * (`ALLOW_DEV_PAYMENT_SIMULATION=true`) AND `NODE_ENV === "development"`
+ * AND the total absence of any Stripe configuration, even partial — see
+ * `isDevPaymentSimulationAllowed()` in src/lib/stripe.ts. Refuses in
+ * production, staging, and test, and refuses the instant any live Stripe
+ * key/config is present anywhere. This route must never be reachable in a
+ * real deployment.
  */
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  if (process.env.NODE_ENV === "production" || isStripeConfigured()) {
+  if (!isDevPaymentSimulationAllowed()) {
     return NextResponse.json({ error: "Not available in this environment." }, { status: 403 });
   }
 
