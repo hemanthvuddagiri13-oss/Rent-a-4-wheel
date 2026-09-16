@@ -120,6 +120,10 @@ describe("financial routes over HTTP with the real database", () => {
         const allowed = ["status", "resume"].includes(route) ? 200 : 409;
         expect(response.status, String(principal?.role)+' '+route).toBe(!principal ? 401 : principal.id===owner.id ? allowed : 403);
       }
+      if (!principal || principal.id !== owner.id) {
+        const checkoutBody = {agreementAccepted:true,documentIds:{front:"front",back:"back",selfie:"selfie"},driver:{firstName:"Test",lastName:"Driver",dob:"1990-01-01",email:"test@example.com",phone:"5551234567",address:"1 Test Street",city:"Dallas",state:"TX",zip:"75001",country:"US",licenseNumber:"SYNTHETIC",licenseState:"TX",licenseExpiration:"2038-01-01"}};
+        expect((await post('/r/'+r.id+'/checkout',checkoutBody)).status).toBe(principal?403:401);
+      }
       const cancelled = await post('/r/'+r.id+'/cancel', {});
       expect(cancelled.status).toBe(!principal ? 401 : principal.id===owner.id ? 200 : 403);
     }
@@ -175,6 +179,16 @@ describe("financial routes over HTTP with the real database", () => {
     const marker="SYNTHETIC_LICENSE_ADDRESS_DOB_SECRET";
     const error=await workerDb.reservation.update({where:{id:marker},data:{driverFirstName:marker,driverAddress:marker,licenseNumber:marker,driverDob:new Date("invalid")}}).catch(e=>e);
     expect(error).toBeInstanceOf(Error);expect(String(error)).toBe("Error: DATABASE_OPERATION_FAILED");expect(String(error)).not.toContain(marker);
+  });
+
+  it("reports partial and failed refunds through the authoritative status endpoint",async()=>{
+    const v=await createTestVehicle(),u=await createTestCustomer();vehicles.push(v.id);users.push(u.id);mocks.session={user:{id:u.id}};
+    const r=await createTestReservation({vehicleId:v.id,customerId:u.id,pickupAt:new Date("2040-01-01"),returnAt:new Date("2040-01-02"),status:"CONFIRMED"});
+    const p=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:15000}});
+    await prisma.refund.create({data:{reservationId:r.id,paymentId:p.id,amountCents:1000,status:"SUCCEEDED",idempotencyKey:'partial-http:'+r.id}});
+    let projection=await (await fetch(base+'/r/'+r.id+'/status')).json();expect(projection.refundStatus).toBe("partial");expect(projection.outcome).toBe("confirmed");expect(projection.refundedCents).toBe(1000);
+    await prisma.refund.create({data:{reservationId:r.id,paymentId:p.id,amountCents:1000,status:"FAILED",idempotencyKey:'failed-http:'+r.id}});
+    projection=await (await fetch(base+'/r/'+r.id+'/status')).json();expect(projection.refundStatus).toBe("failed");expect(projection.outcome).toBe("refund_failed");expect(projection.refundedCents).toBe(1000);
   });
 
 });

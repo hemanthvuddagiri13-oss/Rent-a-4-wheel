@@ -12,6 +12,7 @@ import { fingerprint } from "@/lib/financial-operations";
 import { withReservationLock, assertFinancialTripStart } from "@/lib/financial-locks";
 import { transitionReservation } from "@/lib/reservation-state-machine";
 import { createOrRefreshHold } from "@/lib/checkout-hold";
+import { expireStaleReservations } from "@/lib/cleanup";
 const provider = vi.hoisted(() => ({ refunds: { create: vi.fn(), retrieve: vi.fn(), list: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn(), cancel: vi.fn() } }));
 vi.mock("@/lib/stripe", () => ({ stripe: provider }));
 const vehicles: string[] = [], users: string[] = [];
@@ -31,6 +32,20 @@ const rental = {payment_method:"pm_fixture",customer:"cus_fixture"} as never;
 async function snapshot(id:string){return prisma.reservation.findUniqueOrThrow({where:{id},include:{payments:true,refunds:true,deposit:true}})}
 async function waitLock(pid:number) { const deadline=Date.now()+4000; while(Date.now()<deadline){const rows=await prisma.$queryRaw<Array<{wait_event_type:string}>>`SELECT wait_event_type FROM pg_stat_activity WHERE pid=${pid}`; if(rows[0]?.wait_event_type==="Lock") return;await new Promise(r=>setTimeout(r,5));}throw new Error("No concurrent lock wait observed"); }
 describe("Batch 1C financial regressions",()=>{
+ it("timeout recovery cannot convert REVIEW into an automatic refund mandate", async () => {
+   const {r}=await fixture();await prisma.reservation.update({where:{id:r.id},data:{status:"PAYMENT_FAILED",financialDisposition:"REVIEW",expiresAt:new Date(0)}});
+   await expireStaleReservations();const saved=await snapshot(r.id);
+   expect(saved.financialDisposition).toBe("REVIEW");expect(saved.status).toBe("PAYMENT_FAILED");expect(saved.refunds).toHaveLength(0);expect(provider.refunds.create).not.toHaveBeenCalled();
+ });
+ it("quarantines migrated unknown deposit/refund outcomes without sending replacement operations", async () => {
+   const {r,p}=await fixture(30000);
+   await prisma.securityDeposit.update({where:{reservationId:r.id},data:{legacyUncertain:true}});
+   const refund=await prisma.refund.create({data:{reservationId:r.id,paymentId:p.id,amountCents:1000,status:"PENDING",idempotencyKey:`legacy-key:${r.id}`,legacyUncertain:true}});
+   await expect(attemptDepositAuthorization(await snapshot(r.id),rental,true)).rejects.toThrow("Legacy deposit");
+   await expect(executeRefundOperation(refund.id,p.stripePaymentIntentId)).rejects.toThrow("Legacy refund");
+   expect(provider.paymentIntents.create).not.toHaveBeenCalled();expect(provider.refunds.create).not.toHaveBeenCalled();
+   expect(await prisma.financialOperation.count({where:{reservationId:r.id}})).toBe(0);
+ });
  it("two overlapping renewals cannot release a replacement that subsequently starts a trip", async () => {
    const {r}=await fixture(30000); const old=capture(`pi_old_${r.id}`), next=capture(`pi_next_${r.id}`);
    provider.paymentIntents.create.mockResolvedValueOnce(old);

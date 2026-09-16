@@ -76,7 +76,10 @@ export async function executeRefundOperation(refundId: string, suppliedPaymentIn
   if (refund.status !== "PENDING") return { status: "already_terminal", refund };
   if (!stripe || !refund.payment.stripePaymentIntentId) throw new Error("Stripe refund provider unavailable");
   const client = stripe, intentId = refund.payment.stripePaymentIntentId;
-  if (refund.legacyUncertain && !refund.stripeRefundId) throw new Error("Legacy refund outcome requires manual reconciliation");
+  if (refund.legacyUncertain && !refund.stripeRefundId) {
+    await prisma.refund.update({ where: { id: refund.id }, data: { lastError: "LEGACY_OUTCOME_UNKNOWN_REVIEW_REQUIRED" } });
+    throw new Error("Legacy refund outcome requires manual reconciliation");
+  }
   const operation = await withReservationLock(refund.reservationId, async tx => {
     const existing = await tx.financialOperation.findUnique({ where: { key: refund.idempotencyKey } });
     if (existing) return existing;

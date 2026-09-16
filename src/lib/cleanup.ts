@@ -12,6 +12,7 @@ export async function expireStaleReservations(now: Date = new Date()) {
     const expired = await withReservationLock(row.id, async tx => {
       const r = await tx.reservation.findUniqueOrThrow({ where: { id: row.id }, include: { payments: true } });
       if (!["CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED"].includes(r.status) || !r.expiresAt || r.expiresAt > now) return false;
+      if (!["OPEN", "REFUND_REQUIRED"].includes(r.financialDisposition)) return false;
       const paid = r.payments.filter(p => p.type === "RENTAL" && p.status === "SUCCEEDED");
       for (const payment of paid) await requireRefund(tx, r.id, payment, "Recovery window expired");
       await tx.reservation.update({ where: { id: r.id }, data: { status: "EXPIRED", expiresAt: null } });

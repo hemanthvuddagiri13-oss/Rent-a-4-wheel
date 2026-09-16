@@ -10,6 +10,8 @@ import { reserveRefund, executeRefundOperation } from "@/lib/refund-operations";
 import { attemptDepositAuthorization, releaseDeposits, handleDepositAuthorizationCanceled } from "@/lib/deposit-authorization";
 
 export async function requireRefund(tx: Prisma.TransactionClient, reservationId: string, payment: Payment, reason: string) {
+  const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservationId } });
+  if (current.financialDisposition !== "REFUND_REQUIRED" && (current.financialDisposition !== "OPEN" || !FULFILLMENT_RECOVERY_STATES.includes(current.status))) throw new Error("Automatic refund disposition is not authorized");
   await tx.reservation.update({ where: { id: reservationId }, data: { financialDisposition: "REFUND_REQUIRED" } });
   const existing = await tx.refund.findUnique({ where: { idempotencyKey: `terminal-refund:${payment.id}` } });
   if (existing) return existing;
@@ -70,9 +72,9 @@ export async function confirmAfterRentalPaymentSuccess(
     return true;
   });
   if (!eligible) {
-    const current = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
+    const current = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { payments: true, refunds: true, deposit: true } });
     if (current.financialDisposition !== "OPEN") await settleTerminatedReservation(current.id);
-    return { confirmed: ["CONFIRMED", "DOCUMENTS_REQUIRED"].includes(current.status) };
+    return { confirmed: financialProjection(current).outcome === "confirmed" };
   }
   await attemptDepositAuthorization(reservation, intent, retry);
   const confirmed = await withReservationLock(reservation.id, async tx => {
