@@ -94,6 +94,8 @@ export async function cleanupReservationsForVehicles(vehicleIds: string[]) {
   const reservationIds = reservations.map((r) => r.id);
   if (reservationIds.length === 0) return;
 
+  await prisma.emergencyOverrideRecord.deleteMany({ where: { reservationId: { in: reservationIds } } });
+  await prisma.paymentReconciliation.deleteMany({ where: { reservationId: { in: reservationIds } } });
   await prisma.tripEvent.deleteMany({ where: { reservationId: { in: reservationIds } } });
   await prisma.tripChecklist.deleteMany({ where: { reservationId: { in: reservationIds } } });
   await prisma.conditionPhoto.deleteMany({ where: { conditionReport: { reservationId: { in: reservationIds } } } });

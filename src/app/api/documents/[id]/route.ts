@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { readPrivateDocument } from "@/lib/storage";
-import { logDocumentAccess } from "@/lib/documents";
+import { logDocumentAccess, assertDocumentViewable, InvalidDocumentError } from "@/lib/documents";
 import { getRequestIp } from "@/lib/auth-code";
 import { getHostContext, hostOwnsVehicle } from "@/lib/host-access";
 
@@ -43,6 +43,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   if (!isOwner && !isReviewer && !isHostReviewer) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Fail-closed malware-scan gate: only the document's own owner may view
+  // it before it has actually cleared scanning. A staff reviewer or host
+  // is refused until `malwareScanStatus` is CLEAN — in this deployment
+  // (no scanner configured) that means non-owner access never succeeds,
+  // which is the intended fail-closed behavior, not a bug.
+  try {
+    assertDocumentViewable(document, session.user.id);
+  } catch (err) {
+    if (err instanceof InvalidDocumentError) {
+      return NextResponse.json({ error: err.message }, { status: 403 });
+    }
+    throw err;
   }
 
   await logDocumentAccess({

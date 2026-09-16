@@ -101,90 +101,14 @@ export async function issueRefund(reservationId: string, amountCents: number, re
   revalidatePath(`/admin/reservations/${reservationId}`);
 }
 
-export async function startRental(formData: FormData) {
-  const session = await requireAdmin();
-  const reservationId = String(formData.get("reservationId"));
-  const mileage = Number(formData.get("mileage"));
-  const fuelLevel = Number(formData.get("fuelLevel"));
-  const notes = String(formData.get("notes") || "");
-
-  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
-
-  // Staff "quick desk" override: skips the granular self-serve check-in/
-  // trip-start gate (src/lib/trip-gate.ts) entirely. This is an audited
-  // manual override path for in-person staff-assisted pickups, not the
-  // ordinary customer/host self-serve flow.
-  await prisma.$transaction(async (tx) => {
-    await tx.vehicleInspection.create({
-      data: {
-        vehicleId: reservation.vehicleId,
-        reservationId,
-        type: "CHECK_OUT",
-        mileage,
-        fuelLevel,
-        photoUrls: [],
-        damageNotes: notes || null,
-        performedById: session.user.id,
-      },
-    });
-    await transitionReservation(tx, { id: reservationId, from: reservation.status, to: "ACTIVE", force: true });
-    await tx.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } });
-    await tx.tripEvent.create({
-      data: { reservationId, type: "TRIP_STARTED", actorId: session.user.id, metadata: { staffOverride: true } },
-    });
-  });
-
-  await queueNotification({ userId: reservation.customerId, reservationId, type: "PICKUP_REMINDER" });
-  revalidatePath(`/admin/reservations/${reservationId}`);
-}
-
-export async function completeRental(formData: FormData) {
-  const session = await requireAdmin();
-  const reservationId = String(formData.get("reservationId"));
-  const mileage = Number(formData.get("mileage"));
-  const fuelLevel = Number(formData.get("fuelLevel"));
-  const notes = String(formData.get("notes") || "");
-  const lateReturn = formData.get("lateReturn") === "on";
-  const additionalChargeCents = Math.round(Number(formData.get("additionalCharge") || 0) * 100);
-
-  const reservation = await prisma.reservation.findUniqueOrThrow({
-    where: { id: reservationId },
-    include: { vehicle: true },
-  });
-  const checkOut = await prisma.vehicleInspection.findFirst({
-    where: { reservationId, type: "CHECK_OUT" },
-    orderBy: { performedAt: "desc" },
-  });
-  const milesDriven = checkOut ? Math.max(0, mileage - checkOut.mileage) : 0;
-  const allowance = reservation.vehicle.mileageAllowancePerDay * Math.max(1, reservation.units);
-  const additionalMileage = Math.max(0, milesDriven - allowance);
-
-  await prisma.$transaction(async (tx) => {
-    await tx.vehicleInspection.create({
-      data: {
-        vehicleId: reservation.vehicleId,
-        reservationId,
-        type: "CHECK_IN",
-        mileage,
-        fuelLevel,
-        photoUrls: [],
-        damageNotes: notes || null,
-        performedById: session.user.id,
-        lateReturn,
-        additionalMileage,
-        additionalChargeCents,
-      },
-    });
-    await transitionReservation(tx, { id: reservationId, from: reservation.status, to: "COMPLETED", force: true });
-    await tx.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } });
-    await tx.tripEvent.create({
-      data: { reservationId, type: "TRIP_COMPLETED", actorId: session.user.id, metadata: { staffOverride: true } },
-    });
-  });
-
-  if (lateReturn && additionalChargeCents > 0) {
-    await queueNotification({ userId: reservation.customerId, reservationId, type: "LATE_RETURN", extra: { additionalChargeCents } });
-  }
-  await queueNotification({ userId: reservation.customerId, reservationId, type: "RETURN_REMINDER" });
-  revalidatePath(`/admin/reservations/${reservationId}`);
-}
+// NOTE: the ordinary "quick start rental" / "quick complete rental" staff
+// shortcuts that used to live here (bypassing src/lib/trip-gate.ts via a
+// bare admin-role check, with no step-up verification, no mandatory
+// reason, and no confirmation step) have been removed following security
+// review — an ordinary ADMIN/STAFF session must never be able to force a
+// reservation into ACTIVE/COMPLETED on its own. The only remaining path
+// to force a reservation past an unmet gate is the dedicated,
+// SUPER_ADMIN-only, step-up-verified, reason-required, confirmed, and
+// fully audited emergency override — see src/lib/emergency-override.ts
+// and POST /api/admin/reservations/[id]/emergency-override. It is
+// intentionally not linked from this ordinary admin UI.

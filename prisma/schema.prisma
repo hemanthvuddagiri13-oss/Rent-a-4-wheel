@@ -21,6 +21,7 @@ enum Role {
   HOST_EMPLOYEE
   STAFF
   ADMIN
+  SUPER_ADMIN
 }
 
 model User {
@@ -54,6 +55,7 @@ model User {
   tripChecklistEntries TripChecklist[]               @relation("TripChecklistActor")
   identityHandoffs     IdentityHandoffVerification[] @relation("IdentityHandoffHost")
   conditionReports     ConditionReport[]             @relation("ConditionReportSubmitter")
+  emergencyOverrides   EmergencyOverrideRecord[]     @relation("EmergencyOverrideActor")
   reviews              Review[]
   contactMessages      ContactMessage[]
 
@@ -66,6 +68,7 @@ model User {
 
 enum AuthCodePurpose {
   SIGN_IN
+  EMERGENCY_OVERRIDE_STEP_UP
 }
 
 // Six-digit, single-use, short-lived, hashed sign-in codes. Never store the
@@ -547,6 +550,8 @@ model Reservation {
   identityHandoff      IdentityHandoffVerification?
   tripChecklistEntries TripChecklist[]
   tripEvents           TripEvent[]
+  paymentReconciliations PaymentReconciliation[]
+  emergencyOverrides   EmergencyOverrideRecord[]
 
   // Postgres-only generated column backing the overlap exclusion constraint
   // added by hand in the phase1 migration SQL (Prisma Migrate can't express
@@ -678,18 +683,118 @@ model SecurityDeposit {
   updatedAt DateTime @updatedAt
 }
 
-// Idempotency ledger for Stripe webhook deliveries. Stripe (and any proxy in
-// front of it) may deliver the same event more than once, or deliver events
-// out of order; every event is claimed here by its unique Stripe event ID
-// before any side effect runs, so retries and duplicates are always no-ops.
+enum StripeEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+// Idempotency + retry ledger for Stripe webhook deliveries. Stripe (and any
+// proxy in front of it) may deliver the same event more than once, or
+// deliver events out of order. Every event is claimed here by its unique
+// Stripe event ID before any side effect runs, moves through
+// RECEIVED -> PROCESSING -> PROCESSED (success) or FAILED (retryable), and
+// is only ever considered "done" once `status = PROCESSED` — a duplicate
+// PROCESSED event is a no-op, a duplicate RECEIVED/FAILED event (or a
+// PROCESSING event whose `processingStartedAt` is stale) is safely
+// re-claimable. See src/lib/stripe-event-ledger.ts.
 model StripeEvent {
-  id            String   @id @default(cuid())
-  stripeEventId String   @unique
+  id            String            @id @default(cuid())
+  stripeEventId String            @unique
   type          String
-  processedAt   DateTime @default(now())
-  payload       Json?
+  status        StripeEventStatus @default(RECEIVED)
+
+  attemptCount Int @default(0)
+
+  lastError String? @db.Text
+
+  receivedAt          DateTime  @default(now())
+  processingStartedAt DateTime?
+  processedAt         DateTime?
+  nextRetryAt         DateTime?
+
+  payload Json?
 
   @@index([type])
+  @@index([status])
+}
+
+enum ReconciliationReason {
+  DEPOSIT_AUTH_SUCCEEDED_DB_UPDATE_FAILED
+  PAYMENT_SUCCEEDED_AFTER_HOLD_EXPIRED
+  PAYMENT_SUCCEEDED_DATES_UNAVAILABLE
+  WEBHOOK_PROCESSING_REPEATEDLY_FAILED
+}
+
+enum ReconciliationStatus {
+  OPEN
+  AUTO_RESOLVED
+  REFUNDED
+  NEEDS_MANUAL_REVIEW
+  RESOLVED
+}
+
+// Records every case where a Stripe payment succeeded but could not be
+// cleanly turned into a confirmed reservation (hold expired mid-payment,
+// dates became unavailable, or a DB failure struck after a successful
+// Stripe-side charge/authorization). The invariant this model exists to
+// guarantee: a successful charge never silently disappears — it always
+// ends up either auto-resolved into a valid reservation, refunded, or
+// flagged here for a human. See src/lib/payment-reconciliation.ts.
+model PaymentReconciliation {
+  id String @id @default(cuid())
+
+  reservationId String?
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+
+  paymentId             String?
+  stripePaymentIntentId String?
+
+  reason ReconciliationReason
+  status ReconciliationStatus @default(OPEN)
+
+  detail   Json?
+  refundId String?
+
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+
+  @@index([status])
+  @@index([reservationId])
+}
+
+// An audited, step-up-verified escape hatch for staff to force a
+// reservation past a gate it hasn't actually satisfied (e.g. starting a
+// trip whose documents/identity-handoff/condition-reports aren't
+// complete). Never exposed as an ordinary admin action — see
+// src/lib/emergency-override.ts and the SUPER_ADMIN-only route that
+// creates these.
+model EmergencyOverrideRecord {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  actorId String
+  actor   User   @relation("EmergencyOverrideActor", fields: [actorId], references: [id])
+
+  action           String // e.g. "FORCE_START_TRIP", "FORCE_COMPLETE_TRIP"
+  reason           String            @db.Text
+  originalStatus   ReservationStatus
+  resultingStatus  ReservationStatus
+  unmetGateReasons Json
+
+  // Timestamp of the fresh step-up email-code verification required
+  // immediately before this override (AuthCodePurpose.EMERGENCY_OVERRIDE_STEP_UP)
+  // — the closest equivalent to "recent MFA" this system can enforce, since
+  // no TOTP/WebAuthn factor exists yet. Documented explicitly as a scoping
+  // decision, not silently substituted.
+  stepUpVerifiedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([reservationId])
 }
 
 // ---------------------------------------------------------------------------
@@ -710,7 +815,7 @@ enum DocumentType {
 }
 
 enum MalwareScanStatus {
-  NOT_SCANNED
+  QUARANTINED
   CLEAN
   INFECTED
   SCAN_UNAVAILABLE
@@ -735,7 +840,7 @@ model DriverDocument {
   fileSizeBytes Int
   contentSha256 String // integrity fingerprint of the re-encoded file, not the raw upload
 
-  malwareScanStatus MalwareScanStatus @default(NOT_SCANNED)
+  malwareScanStatus MalwareScanStatus @default(QUARANTINED)
 
   // Configurable retention: documents are eligible for deletion by the
   // retention-cleanup job once this passes (see PlatformSetting-driven
@@ -1204,6 +1309,7 @@ enum NotificationType {
   CANCELLATION
   REFUND
   LATE_RETURN
+  TRIP_EMERGENCY_OVERRIDE
 }
 
 enum NotificationChannel {

@@ -157,7 +157,25 @@ export async function verifyAuthCode(params: { email: string; code: string; ip: 
     return { ok: false, reason: "mismatch" };
   }
 
-  await prisma.authCode.update({ where: { id: authCode.id }, data: { consumedAt: new Date() } });
+  // Atomic, conditional claim: two concurrent requests can both read this
+  // row and both find the hash matches (bcrypt.compare has no shared
+  // state), so single-use MUST be enforced by the write, not the read.
+  // `updateMany` guarded by the exact conditions re-checked above
+  // (unconsumed, under the attempt limit, not expired) means only one
+  // concurrent caller's update can ever affect a row — Postgres serializes
+  // concurrent UPDATEs to the same row, so exactly one of two simultaneous
+  // claims sees count === 1 and the other sees count === 0.
+  const now = new Date();
+  const claim = await prisma.authCode.updateMany({
+    where: { id: authCode.id, consumedAt: null, attempts: { lt: authCode.maxAttempts }, expiresAt: { gt: now } },
+    data: { consumedAt: now },
+  });
+
+  if (claim.count !== 1) {
+    await auditAuthEvent({ action: "auth.code_verify_failed", email, metadata: { reason: "already_consumed", ip: params.ip } });
+    return { ok: false, reason: "no_code" };
+  }
+
   await auditAuthEvent({ action: "auth.code_verify_succeeded", email, metadata: { ip: params.ip } });
   return { ok: true };
 }

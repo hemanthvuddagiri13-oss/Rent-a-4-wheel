@@ -206,7 +206,6 @@ export function StepDriver({ vehicle, state, update, onNext, onBack }: Props) {
         <DocumentUpload
           label="Selfie Holding License"
           documentType="SELFIE_WITH_LICENSE"
-          imageOnly
           uploaded={Boolean(state.documentIds.selfie)}
           onUploaded={(id) => update((prev) => ({ documentIds: { ...prev.documentIds, selfie: id } }))}
         />

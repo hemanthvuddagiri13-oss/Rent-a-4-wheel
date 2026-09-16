@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "NotificationType" ADD VALUE 'TRIP_EMERGENCY_OVERRIDE';
+

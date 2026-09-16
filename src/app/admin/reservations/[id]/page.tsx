@@ -5,13 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatCurrency } from "@/lib/utils";
 import { RESERVATION_STATUS_LABELS } from "@/lib/constants";
-import {
-  DocumentReviewRow,
-  CancelReservationAdminButton,
-  RefundForm,
-  CheckOutForm,
-  CheckInForm,
-} from "@/components/admin/reservation-actions";
+import { DocumentReviewRow, CancelReservationAdminButton, RefundForm } from "@/components/admin/reservation-actions";
 
 export const metadata: Metadata = { title: "Reservation Detail", robots: { index: false } };
 export const revalidate = 0;
@@ -109,11 +103,6 @@ export default async function AdminReservationDetailPage({ params }: { params: P
           </a>
         </div>
       )}
-
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {reservation.status === "CONFIRMED" && <CheckOutForm reservationId={reservation.id} />}
-        {reservation.status === "ACTIVE" && <CheckInForm reservationId={reservation.id} />}
-      </div>
 
       {(["AWAITING_PAYMENT", "CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN"] as string[]).includes(
         reservation.status

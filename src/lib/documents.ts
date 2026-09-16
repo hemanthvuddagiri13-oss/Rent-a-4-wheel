@@ -12,60 +12,56 @@ export const MAX_DOCUMENT_SIZE_BYTES = 8 * 1024 * 1024; // 8MB
 // single source of truth for the current default.
 const DEFAULT_RETENTION_DAYS = 365 * 3;
 
-const PDF_MAGIC = Buffer.from("%PDF-");
-
 export class InvalidDocumentError extends Error {}
 
 /**
  * Validates that `buffer` actually is what its declared mime type claims
  * (a real file-signature check, not just trusting the browser-supplied
- * Content-Type), then:
- *  - for images: re-encodes through sharp, which both proves the bytes
- *    decode as a genuine image and strips all EXIF/IPTC/XMP metadata
- *    (sharp's output never carries the source metadata unless
- *    `.withMetadata()` is called, which we don't call);
- *  - for PDFs: checks the `%PDF-` magic header.
+ * Content-Type) by re-encoding it through sharp, which both proves the
+ * bytes decode as a genuine image and strips all EXIF/IPTC/XMP metadata
+ * (sharp's output never carries the source metadata unless
+ * `.withMetadata()` is called, which we don't call).
  *
- * Returns the bytes that should actually be stored (the re-encoded image,
- * or the original buffer for PDFs) plus a sha256 of those stored bytes for
- * later integrity checks.
+ * PDF is intentionally NOT accepted for identity documents: a PDF can
+ * embed active content (JavaScript, launch actions) that a
+ * magic-byte-only check does nothing to rule out, and this deployment has
+ * no PDF-capable malware scanner. Only re-encoded raster images are
+ * accepted — see README "Identity Verification" for the reasoning if PDF
+ * support is reintroduced later, which would first require routing PDFs
+ * through a real scanner before they're ever readable.
+ *
+ * Returns the re-encoded bytes that should actually be stored, plus a
+ * sha256 of those stored bytes for later integrity checks.
  */
 export async function validateAndSanitizeDocument(
   buffer: Buffer,
   declaredMimeType: string
 ): Promise<{ buffer: Buffer; mimeType: string; sha256: string }> {
-  if (declaredMimeType === "application/pdf") {
-    if (!buffer.subarray(0, 5).equals(PDF_MAGIC)) {
-      throw new InvalidDocumentError("File does not appear to be a valid PDF.");
-    }
-    return { buffer, mimeType: "application/pdf", sha256: sha256Hex(buffer) };
+  if (!["image/jpeg", "image/png", "image/webp"].includes(declaredMimeType)) {
+    throw new InvalidDocumentError("Unsupported file type. Upload a JPG, PNG, or WEBP image.");
   }
 
-  if (["image/jpeg", "image/png", "image/webp"].includes(declaredMimeType)) {
-    let reencoded: Buffer;
-    let outputMimeType: string;
-    try {
-      const image = sharp(buffer, { failOn: "error" });
-      const metadata = await image.metadata();
-      if (!metadata.format) throw new Error("Unrecognized image format.");
+  let reencoded: Buffer;
+  let outputMimeType: string;
+  try {
+    const image = sharp(buffer, { failOn: "error" });
+    const metadata = await image.metadata();
+    if (!metadata.format) throw new Error("Unrecognized image format.");
 
-      if (metadata.format === "png") {
-        reencoded = await image.png().toBuffer();
-        outputMimeType = "image/png";
-      } else if (metadata.format === "webp") {
-        reencoded = await image.webp({ quality: 90 }).toBuffer();
-        outputMimeType = "image/webp";
-      } else {
-        reencoded = await image.jpeg({ quality: 90 }).toBuffer();
-        outputMimeType = "image/jpeg";
-      }
-    } catch {
-      throw new InvalidDocumentError("File does not appear to be a valid image.");
+    if (metadata.format === "png") {
+      reencoded = await image.png().toBuffer();
+      outputMimeType = "image/png";
+    } else if (metadata.format === "webp") {
+      reencoded = await image.webp({ quality: 90 }).toBuffer();
+      outputMimeType = "image/webp";
+    } else {
+      reencoded = await image.jpeg({ quality: 90 }).toBuffer();
+      outputMimeType = "image/jpeg";
     }
-    return { buffer: reencoded, mimeType: outputMimeType, sha256: sha256Hex(reencoded) };
+  } catch {
+    throw new InvalidDocumentError("File does not appear to be a valid image.");
   }
-
-  throw new InvalidDocumentError("Unsupported file type. Upload a JPG, PNG, WEBP, or PDF.");
+  return { buffer: reencoded, mimeType: outputMimeType, sha256: sha256Hex(reencoded) };
 }
 
 function sha256Hex(buffer: Buffer): string {
@@ -77,9 +73,8 @@ export type MalwareScanResult = { status: "CLEAN" | "INFECTED" | "SCAN_UNAVAILAB
 /**
  * Integration point for a malware scanner (e.g. ClamAV, VirusTotal, an S3
  * Object Lambda scanner). No scanning provider is configured in this
- * environment, so this always returns SCAN_UNAVAILABLE rather than
- * silently/falsely reporting CLEAN — callers must not treat
- * SCAN_UNAVAILABLE as a pass. Wire a real provider here before accepting
+ * environment, so this always returns SCAN_UNAVAILABLE — callers must
+ * never treat that as a pass. Wire a real provider here before accepting
  * uploads in production; see README "Identity Verification" for notes.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature documents the intended integration point
@@ -91,6 +86,21 @@ export function computeRetentionExpiresAt(from: Date = new Date()): Date {
   return new Date(from.getTime() + DEFAULT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
 }
 
+/**
+ * Stores an identity document with fail-closed malware-scan semantics:
+ *  - INFECTED is always rejected outright.
+ *  - SCAN_UNAVAILABLE (the only possible outcome until a real scanner is
+ *    wired up) is rejected in production — an unscanned file is not an
+ *    accepted file, full stop. It is only accepted in non-production
+ *    environments, and only via an explicit opt-in
+ *    (`ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV=true`), so a developer
+ *    without a scanner configured can still exercise the booking flow
+ *    locally without silently normalizing "unscanned" as "safe" anywhere
+ *    that matters.
+ * A document that is accepted without a CLEAN result is stored with
+ * `malwareScanStatus: QUARANTINED` and is not readable by anyone but its
+ * owner until it actually becomes CLEAN — see `assertDocumentViewable`.
+ */
 export async function storeIdentityDocument(params: {
   userId: string;
   reservationId: string | null;
@@ -104,8 +114,21 @@ export async function storeIdentityDocument(params: {
 
   const sanitized = await validateAndSanitizeDocument(params.rawBuffer, params.declaredMimeType);
   const scan = await scanForMalware(sanitized.buffer);
+
   if (scan.status === "INFECTED") {
     throw new InvalidDocumentError("This file failed a security scan and was rejected.");
+  }
+
+  if (scan.status === "SCAN_UNAVAILABLE") {
+    const isProduction = process.env.NODE_ENV === "production";
+    const devBypassEnabled = process.env.ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV === "true";
+    if (isProduction || !devBypassEnabled) {
+      throw new InvalidDocumentError(
+        isProduction
+          ? "Document uploads are temporarily unavailable (malware scanning is not configured). Please try again later or contact support."
+          : "Document uploads require a malware scanner in this environment. Set ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV=true to bypass locally for development only."
+      );
+    }
   }
 
   const { storageKey } = await storePrivateDocument(sanitized.buffer, sanitized.mimeType);
@@ -119,11 +142,27 @@ export async function storeIdentityDocument(params: {
       mimeType: sanitized.mimeType,
       fileSizeBytes: sanitized.buffer.byteLength,
       contentSha256: sanitized.sha256,
-      malwareScanStatus: scan.status,
+      malwareScanStatus: scan.status === "CLEAN" ? "CLEAN" : "QUARANTINED",
       status: "PENDING_VERIFICATION",
       retentionExpiresAt: computeRetentionExpiresAt(),
     },
   });
+}
+
+/**
+ * Enforces "no host [or staff reviewer] access until CLEAN": the
+ * document's own uploader may always view it (it's already fully theirs
+ * to see), but any other viewer — a host verifying identity at pickup, a
+ * staff reviewer — is refused until the scan status is actually CLEAN.
+ * In this environment that means non-owner access to any document is
+ * refused entirely (scanning is never configured here), which is the
+ * correct fail-closed behavior, not a bug.
+ */
+export function assertDocumentViewable(document: { userId: string; malwareScanStatus: string }, viewerId: string): void {
+  if (document.userId === viewerId) return;
+  if (document.malwareScanStatus !== "CLEAN") {
+    throw new InvalidDocumentError("This document has not cleared malware scanning and cannot be viewed yet.");
+  }
 }
 
 /**

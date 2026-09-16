@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Prisma } from "@prisma/client";
 import type Stripe from "stripe";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { handlePaymentIntentSucceeded, handlePaymentIntentFailed } from "@/lib/stripe-webhook-handlers";
+import { claimStripeEventForProcessing, markStripeEventProcessed, markStripeEventFailed } from "@/lib/stripe-event-ledger";
+import { flagRepeatedProcessingFailure } from "@/lib/payment-reconciliation";
+
+const MAX_ATTEMPTS_BEFORE_FLAGGING = 5;
 
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -23,36 +27,65 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
 
-  // Idempotency ledger: claim this exact Stripe event ID before any side
-  // effect runs. A duplicate delivery (retry, or a second webhook endpoint
-  // receiving the same event) hits the unique constraint and is a no-op —
-  // Stripe always gets a 200 either way so it stops retrying.
+  const claim = await claimStripeEventForProcessing({
+    stripeEventId: event.id,
+    type: event.type,
+    payload: event as unknown as Prisma.InputJsonValue,
+  });
+
+  if (!claim.shouldProcess) {
+    // Either already fully processed (true duplicate — no-op) or another
+    // in-flight request is handling it right now (not stale yet). Either
+    // way, tell Stripe we're done; it should not treat this as a failure.
+    return NextResponse.json({ received: true, claimed: false, reason: claim.reason });
+  }
+
   try {
-    await prisma.stripeEvent.create({
-      data: { stripeEventId: event.id, type: event.type, payload: event as unknown as Prisma.InputJsonValue },
-    });
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return NextResponse.json({ received: true, duplicate: true });
+    switch (event.type) {
+      case "payment_intent.succeeded":
+        await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
+        break;
+      case "payment_intent.payment_failed":
+        await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
+        break;
+      case "charge.refunded":
+        // Refund state is authoritatively tracked via our own /api/admin/refunds
+        // flow; this case is a placeholder for reconciling refunds initiated
+        // directly from the Stripe dashboard.
+        break;
+      default:
+        break;
     }
-    throw err;
+  } catch (err) {
+    console.error(`Stripe webhook processing failed for event ${event.id} (${event.type})`, err);
+    await markStripeEventFailed(claim.eventRecordId, err);
+
+    const record = await prisma.stripeEvent.findUnique({ where: { id: claim.eventRecordId } });
+    if (record && record.attemptCount >= MAX_ATTEMPTS_BEFORE_FLAGGING) {
+      const reservationId =
+        event.type === "payment_intent.succeeded" || event.type === "payment_intent.payment_failed"
+          ? (
+              await prisma.payment.findUnique({
+                where: { stripePaymentIntentId: (event.data.object as Stripe.PaymentIntent).id },
+                select: { reservationId: true },
+              })
+            )?.reservationId
+          : undefined;
+      await flagRepeatedProcessingFailure({
+        reservationId,
+        stripeEventId: event.id,
+        attemptCount: record.attemptCount,
+        lastError: record.lastError ?? "unknown error",
+      });
+    }
+
+    // Do NOT swallow this and return 200 — a non-2xx response tells
+    // Stripe to retry per its own schedule, on top of our own ledger
+    // making the next delivery (or a manual replay) retryable rather than
+    // a rejected duplicate.
+    return NextResponse.json({ error: "Processing failed; will retry." }, { status: 500 });
   }
 
-  switch (event.type) {
-    case "payment_intent.succeeded":
-      await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
-      break;
-    case "payment_intent.payment_failed":
-      await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
-      break;
-    case "charge.refunded":
-      // Refund state is authoritatively tracked via our own /api/admin/refunds
-      // flow; this case is a placeholder for reconciling refunds initiated
-      // directly from the Stripe dashboard.
-      break;
-    default:
-      break;
-  }
-
+  await markStripeEventProcessed(claim.eventRecordId);
   return NextResponse.json({ received: true });
 }

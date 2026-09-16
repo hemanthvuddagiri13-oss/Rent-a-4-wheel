@@ -31,15 +31,78 @@ CREATE TYPE "TripChecklistPhase" AS ENUM ('PICKUP', 'RETURN');
 -- AlterEnum
 ALTER TYPE "LegalDocumentType" ADD VALUE 'HOST_AGREEMENT';
 
--- AlterEnum
+-- AlterEnum: ReservationStatus
+-- The old enum (PENDING, CONFIRMED, ACTIVE, COMPLETED, CANCELLED) does not
+-- have an identical member for every new value: PENDING and CANCELLED have
+-- no exact counterpart in the new 17-state enum. A bare
+-- `"status"::text::"ReservationStatus_new"` cast (as an earlier version of
+-- this migration did) fails outright on any database with existing rows,
+-- since Postgres has no enum-label matching 'PENDING' or 'CANCELLED' in
+-- the new type. This migration instead maps explicitly:
+--
+--   PENDING   -> AWAITING_PAYMENT     Old PENDING meant "reservation row
+--               exists, payment not yet completed." The pre-Phase-1 flow
+--               collected all driver/agreement info up front and created
+--               the reservation immediately before charging — there was
+--               no separate hold-before-payment concept — so PENDING maps
+--               to AWAITING_PAYMENT, not the new CHECKOUT_HOLD state.
+--   CONFIRMED -> CONFIRMED             Unchanged.
+--   ACTIVE    -> ACTIVE                Unchanged.
+--   COMPLETED -> COMPLETED             Unchanged.
+--   CANCELLED -> CANCELLED_BY_CUSTOMER The old schema never recorded who
+--               cancelled a reservation. CANCELLED_BY_CUSTOMER is an
+--               explicit, documented default for this migration: the only
+--               cancellation path that existed pre-Phase-1 was customer
+--               self-service (see the removed `canCustomerCancel`-gated
+--               /api/reservations/[id]/cancel route; staff cancellations
+--               went through the same endpoint and status). Operators can
+--               reclassify individual legacy rows to CANCELLED_BY_HOST
+--               after migration if their own records show otherwise.
+--
+-- Any row whose legacy status somehow falls outside this exhaustive list
+-- aborts the migration with a clear error rather than being silently
+-- dropped or null-ed out.
 BEGIN;
+
 CREATE TYPE "ReservationStatus_new" AS ENUM ('DRAFT', 'CHECKOUT_HOLD', 'AWAITING_PAYMENT', 'CONFIRMED', 'DOCUMENTS_REQUIRED', 'READY_FOR_CHECK_IN', 'CHECK_IN_PROGRESS', 'READY_TO_START', 'ACTIVE', 'RETURN_IN_PROGRESS', 'COMPLETED', 'CANCELLED_BY_CUSTOMER', 'CANCELLED_BY_HOST', 'PAYMENT_FAILED', 'EXPIRED', 'DISPUTED', 'UNDER_CLAIM_REVIEW');
+
 ALTER TABLE "public"."Reservation" ALTER COLUMN "status" DROP DEFAULT;
-ALTER TABLE "Reservation" ALTER COLUMN "status" TYPE "ReservationStatus_new" USING ("status"::text::"ReservationStatus_new");
-ALTER TYPE "ReservationStatus" RENAME TO "ReservationStatus_old";
+
+ALTER TABLE "Reservation" ADD COLUMN "status_new" "ReservationStatus_new";
+
+UPDATE "Reservation" SET "status_new" = (CASE "status"::text
+  WHEN 'PENDING' THEN 'AWAITING_PAYMENT'
+  WHEN 'CONFIRMED' THEN 'CONFIRMED'
+  WHEN 'ACTIVE' THEN 'ACTIVE'
+  WHEN 'COMPLETED' THEN 'COMPLETED'
+  WHEN 'CANCELLED' THEN 'CANCELLED_BY_CUSTOMER'
+  ELSE NULL
+END)::"ReservationStatus_new";
+
+DO $$
+DECLARE
+  unmapped_count integer;
+BEGIN
+  SELECT count(*) INTO unmapped_count FROM "Reservation" WHERE "status_new" IS NULL;
+  IF unmapped_count > 0 THEN
+    RAISE EXCEPTION 'Migration cannot proceed: % Reservation row(s) have a status value not covered by the PENDING/CONFIRMED/ACTIVE/COMPLETED/CANCELLED mapping. Resolve these rows manually before re-running.', unmapped_count;
+  END IF;
+END $$;
+
+ALTER TABLE "Reservation" DROP COLUMN "status";
+ALTER TABLE "Reservation" RENAME COLUMN "status_new" TO "status";
+ALTER TABLE "Reservation" ALTER COLUMN "status" SET NOT NULL;
+
+DROP TYPE "ReservationStatus";
 ALTER TYPE "ReservationStatus_new" RENAME TO "ReservationStatus";
-DROP TYPE "public"."ReservationStatus_old";
 ALTER TABLE "Reservation" ALTER COLUMN "status" SET DEFAULT 'CHECKOUT_HOLD';
+
+-- Dropping/renaming the "status" column drops any index that referenced
+-- it (including the original `Reservation_status_idx` from the init
+-- migration) — recreate it now so the schema still matches
+-- `@@index([status])` in prisma/schema.prisma.
+CREATE INDEX "Reservation_status_idx" ON "Reservation"("status");
+
 COMMIT;
 
 -- AlterEnum
@@ -53,18 +116,52 @@ COMMIT;
 ALTER TYPE "Role" ADD VALUE 'HOST';
 ALTER TYPE "Role" ADD VALUE 'HOST_EMPLOYEE';
 
--- DropForeignKey
-ALTER TABLE "RentalAgreement" DROP CONSTRAINT "RentalAgreement_reservationId_fkey";
+-- Note: the RentalAgreement table's data is preserved, not dropped here —
+-- see the backfill INSERT into AgreementAcceptance further down this file,
+-- once that table exists. The table and its FK are only actually dropped
+-- at the very end, after that backfill runs.
 
--- AlterTable
-ALTER TABLE "DriverDocument" DROP COLUMN "side",
-ADD COLUMN     "contentSha256" TEXT NOT NULL,
+-- AlterTable: DriverDocument
+-- The new required columns (type, contentSha256, fileSizeBytes, mimeType)
+-- are added NULLABLE first and backfilled from the old `side` column
+-- before being made NOT NULL, so this migration does not fail — or
+-- silently drop rows — on a database that already has DriverDocument
+-- rows. `contentSha256`/`fileSizeBytes`/`mimeType` genuinely can't be
+-- reconstructed without re-reading the original file bytes during
+-- migration, so legacy rows get an explicit, greppable sentinel
+-- ('legacy-unmigrated-<id>' / 0 / 'application/octet-stream') rather than
+-- a fabricated real-looking value — these rows should be re-processed
+-- (re-fetch from storage, re-hash, re-size) by an operator after
+-- migration if exact values are needed; existing files themselves are
+-- untouched and remain readable via storageKey either way.
+ALTER TABLE "DriverDocument"
+ADD COLUMN     "contentSha256" TEXT,
 ADD COLUMN     "deletedAt" TIMESTAMP(3),
-ADD COLUMN     "fileSizeBytes" INTEGER NOT NULL,
+ADD COLUMN     "fileSizeBytes" INTEGER,
 ADD COLUMN     "malwareScanStatus" "MalwareScanStatus" NOT NULL DEFAULT 'NOT_SCANNED',
-ADD COLUMN     "mimeType" TEXT NOT NULL,
+ADD COLUMN     "mimeType" TEXT,
 ADD COLUMN     "retentionExpiresAt" TIMESTAMP(3),
-ADD COLUMN     "type" "DocumentType" NOT NULL;
+ADD COLUMN     "type" "DocumentType";
+
+UPDATE "DriverDocument" SET "type" = (CASE "side"::text
+  WHEN 'FRONT' THEN 'LICENSE_FRONT'
+  WHEN 'BACK' THEN 'LICENSE_BACK'
+  ELSE 'LICENSE_FRONT' -- defensive fallback; DocumentSide only ever had FRONT/BACK
+END)::"DocumentType"
+WHERE "type" IS NULL;
+
+UPDATE "DriverDocument" SET
+  "contentSha256" = COALESCE("contentSha256", 'legacy-unmigrated-' || "id"),
+  "fileSizeBytes" = COALESCE("fileSizeBytes", 0),
+  "mimeType" = COALESCE("mimeType", 'application/octet-stream')
+WHERE "contentSha256" IS NULL OR "fileSizeBytes" IS NULL OR "mimeType" IS NULL;
+
+ALTER TABLE "DriverDocument"
+DROP COLUMN "side",
+ALTER COLUMN "type" SET NOT NULL,
+ALTER COLUMN "contentSha256" SET NOT NULL,
+ALTER COLUMN "fileSizeBytes" SET NOT NULL,
+ALTER COLUMN "mimeType" SET NOT NULL;
 
 -- AlterTable
 ALTER TABLE "Reservation" DROP COLUMN "agreementAcceptedAt",
@@ -93,9 +190,6 @@ ADD COLUMN     "stripeCustomerId" TEXT;
 
 -- AlterTable
 ALTER TABLE "Vehicle" ADD COLUMN     "hostId" TEXT;
-
--- DropTable
-DROP TABLE "RentalAgreement";
 
 -- DropEnum
 DROP TYPE "DocumentSide";
@@ -379,6 +473,42 @@ ALTER TABLE "AgreementAcceptance" ADD CONSTRAINT "AgreementAcceptance_vehicleId_
 
 -- AddForeignKey
 ALTER TABLE "AgreementAcceptance" ADD CONSTRAINT "AgreementAcceptance_signedByUserId_fkey" FOREIGN KEY ("signedByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- Preserve legacy signed-agreement records instead of silently dropping
+-- them when RentalAgreement is retired below: every existing row becomes
+-- an AgreementAcceptance row. The pre-Phase-1 schema had no content-hash/
+-- snapshot mechanism, so those two fields get an explicit 'legacy-migrated'
+-- marker (never a fabricated hash) rather than being guessed; `signerName`,
+-- `signedAt` (from `acceptedAt`), `documentVersion`, and the link back to
+-- the reservation/customer are all carried over faithfully. The old
+-- `pdfUrl` (a plain string, not a private-storage key in the same format
+-- `signedPdfStorageKey` expects) is intentionally not copied — any
+-- pre-migration agreement PDF remains at that original URL/location but
+-- is no longer linked from this row; regenerate via
+-- generateAndStoreSignedAgreementPdf if needed.
+INSERT INTO "AgreementAcceptance" (
+  "id", "type", "documentVersion", "contentHash", "contentSnapshot",
+  "reservationId", "signedByUserId", "signerName", "signedAt", "createdAt"
+)
+SELECT
+  ra."id",
+  'RENTAL_AGREEMENT'::"LegalDocumentType",
+  ra."documentVersion",
+  'legacy-migrated-no-hash-available',
+  'This acceptance was migrated from the pre-Phase-1 schema, which had no content-hash/snapshot mechanism. Recorded document version: ' || ra."documentVersion",
+  ra."reservationId",
+  r."customerId",
+  ra."signerName",
+  ra."acceptedAt",
+  ra."createdAt"
+FROM "RentalAgreement" ra
+JOIN "Reservation" r ON r."id" = ra."reservationId";
+
+-- DropForeignKey
+ALTER TABLE "RentalAgreement" DROP CONSTRAINT "RentalAgreement_reservationId_fkey";
+
+-- DropTable (data already preserved in AgreementAcceptance above)
+DROP TABLE "RentalAgreement";
 
 -- AddForeignKey
 ALTER TABLE "Trip" ADD CONSTRAINT "Trip_reservationId_fkey" FOREIGN KEY ("reservationId") REFERENCES "Reservation"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

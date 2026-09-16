@@ -1,9 +1,12 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import Stripe from "stripe";
+import { prisma as appPrisma } from "@/lib/prisma";
 
 const createPaymentIntent = vi.fn();
+const createRefund = vi.fn();
 
 vi.mock("@/lib/stripe", () => ({
-  stripe: { paymentIntents: { create: createPaymentIntent } },
+  stripe: { paymentIntents: { create: createPaymentIntent }, refunds: { create: createRefund } },
   isStripeConfigured: () => true,
 }));
 
@@ -16,6 +19,7 @@ const cleanupUserIds: string[] = [];
 
 afterEach(() => {
   createPaymentIntent.mockReset();
+  createRefund.mockReset();
 });
 
 afterAll(async () => {
@@ -160,5 +164,149 @@ describe("Stripe webhook event idempotency ledger", () => {
     ).rejects.toThrow();
 
     await prisma.stripeEvent.deleteMany({ where: { stripeEventId: eventId } });
+  });
+});
+
+describe("temporary Stripe failure during deposit authorization", () => {
+  it("propagates the error instead of recording a permanent deposit decline, leaving the reservation retryable", async () => {
+    const { reservation, payment } = await setupAwaitingPaymentReservation(30000);
+    createPaymentIntent.mockRejectedValueOnce(new Stripe.errors.StripeConnectionError({ message: "network blip" }));
+
+    await expect(handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!))).rejects.toThrow(
+      "network blip"
+    );
+
+    // Must NOT have been recorded as a permanent decline — a transient
+    // Stripe-side failure has to come back as retryable, not
+    // PAYMENT_FAILED (which would be indistinguishable from a real
+    // card decline to the customer).
+    const reloadedReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
+    expect(reloadedReservation.status).toBe("AWAITING_PAYMENT");
+    const reloadedPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(reloadedPayment.status).toBe("REQUIRES_PAYMENT");
+
+    // A subsequent retry (the network blip having cleared) succeeds normally.
+    createPaymentIntent.mockResolvedValueOnce({ id: `pi_deposit_retry_${reservation.id}` });
+    await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
+    const finalReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
+    expect(finalReservation.status).toBe("DOCUMENTS_REQUIRED");
+  });
+});
+
+describe("database failure after a successful Stripe call is never swallowed", () => {
+  it("propagates a DB persistence failure instead of silently returning success", async () => {
+    const { payment } = await setupAwaitingPaymentReservation(0);
+
+    // Spy on the exact same `prisma` singleton stripe-webhook-handlers.ts
+    // imports from "@/lib/prisma" (not the standalone client
+    // tests/helpers/factories.ts creates for test setup/teardown) — only
+    // that instance is actually called by the code under test.
+    const spy = vi
+      .spyOn(appPrisma, "$transaction")
+      .mockImplementationOnce(() => Promise.reject(new Error("simulated DB outage")));
+
+    try {
+      await expect(handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!))).rejects.toThrow(
+        "simulated DB outage"
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Payment must still show as unresolved — nothing was silently marked
+    // successful despite the persistence failure.
+    const reloadedPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(reloadedPayment.status).toBe("REQUIRES_PAYMENT");
+  });
+});
+
+describe("late payment reconciliation — hold expired mid-payment", () => {
+  it("auto-resolves by reopening the same reservation when the dates are still available", async () => {
+    const vehicle = await createTestVehicle();
+    const customer = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customer.id);
+
+    const reservation = await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customer.id,
+      pickupAt: new Date("2029-06-10T10:00:00Z"),
+      returnAt: new Date("2029-06-13T10:00:00Z"),
+      status: "EXPIRED", // the hold expired while the PaymentIntent was still confirming
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        reservationId: reservation.id,
+        type: "RENTAL",
+        status: "REQUIRES_PAYMENT",
+        amountCents: 15000,
+        stripePaymentIntentId: `pi_test_late_${reservation.id}`,
+      },
+    });
+
+    await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
+
+    const reloaded = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
+    // The customer must not silently lose money: the exact same
+    // reservation is confirmed rather than left expired with a captured
+    // charge and nothing to show for it.
+    expect(reloaded.status).toBe("DOCUMENTS_REQUIRED");
+
+    const reconciliation = await prisma.paymentReconciliation.findFirst({ where: { reservationId: reservation.id } });
+    expect(reconciliation?.reason).toBe("PAYMENT_SUCCEEDED_AFTER_HOLD_EXPIRED");
+    expect(reconciliation?.status).toBe("AUTO_RESOLVED");
+  });
+
+  it("automatically refunds the charge and flags for review when someone else already has the dates", async () => {
+    const vehicle = await createTestVehicle();
+    const customerA = await createTestCustomer();
+    const customerB = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customerA.id, customerB.id);
+
+    const pickupAt = new Date("2029-07-10T10:00:00Z");
+    const returnAt = new Date("2029-07-13T10:00:00Z");
+
+    const expiredReservation = await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customerA.id,
+      pickupAt,
+      returnAt,
+      status: "EXPIRED",
+    });
+    // Someone else confirmed the same dates before A's late payment landed.
+    await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customerB.id,
+      pickupAt,
+      returnAt,
+      status: "CONFIRMED",
+    });
+
+    const payment = await prisma.payment.create({
+      data: {
+        reservationId: expiredReservation.id,
+        type: "RENTAL",
+        status: "REQUIRES_PAYMENT",
+        amountCents: 15000,
+        stripePaymentIntentId: `pi_test_late_unavailable_${expiredReservation.id}`,
+      },
+    });
+    createRefund.mockResolvedValueOnce({ id: `re_test_${expiredReservation.id}` });
+
+    await handlePaymentIntentSucceeded(fakeIntent(payment.stripePaymentIntentId!));
+
+    // The now-doubly-booked reservation must NOT be resurrected — it stays
+    // exactly as it was (EXPIRED, historically accurate).
+    const reloadedReservation = await prisma.reservation.findUniqueOrThrow({ where: { id: expiredReservation.id } });
+    expect(reloadedReservation.status).toBe("EXPIRED");
+
+    expect(createRefund).toHaveBeenCalledOnce();
+    const refundRow = await prisma.refund.findFirst({ where: { reservationId: expiredReservation.id } });
+    expect(refundRow?.status).toBe("SUCCEEDED");
+
+    const reconciliation = await prisma.paymentReconciliation.findFirst({ where: { reservationId: expiredReservation.id } });
+    expect(reconciliation?.reason).toBe("PAYMENT_SUCCEEDED_AFTER_HOLD_EXPIRED");
+    expect(reconciliation?.status).toBe("REFUNDED");
   });
 });

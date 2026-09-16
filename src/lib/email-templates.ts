@@ -72,6 +72,13 @@ export function depositAuthFailedEmail(params: { confirmationNumber: string }) {
   );
 }
 
+export function tripEmergencyOverrideEmail(params: { confirmationNumber: string; action: string }) {
+  return layout(
+    "A Staff Action Was Taken On Your Trip",
+    `<p style="color:#D9D9D9;font-size:14px;line-height:1.6;">Rent A 4Wheel staff performed an emergency override (${params.action}) on reservation <strong>${params.confirmationNumber}</strong>. This is logged and reviewed — contact support if you have questions.</p>`
+  );
+}
+
 export function bookingConfirmationEmail(r: ReservationSummary) {
   return layout(
     "Your Reservation is Confirmed",

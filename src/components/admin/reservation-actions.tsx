@@ -6,13 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  updateDocumentStatus,
-  cancelReservation,
-  issueRefund,
-  startRental,
-  completeRental,
-} from "@/app/admin/reservations/actions";
+import { updateDocumentStatus, cancelReservation, issueRefund } from "@/app/admin/reservations/actions";
 
 export function DocumentReviewRow({ id, type, status }: { id: string; type: string; status: string }) {
   const [isPending, startTransitionFn] = useTransition();
@@ -106,58 +100,11 @@ export function RefundForm({ reservationId, maxCents }: { reservationId: string;
   );
 }
 
-export function CheckOutForm({ reservationId }: { reservationId: string }) {
-  return (
-    <form action={startRental} className="rounded-xl border border-white/10 bg-card p-4 space-y-3">
-      <p className="text-sm font-semibold text-white">Start Rental (Check-Out)</p>
-      <input type="hidden" name="reservationId" value={reservationId} />
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label htmlFor="co-mileage">Starting Mileage</Label>
-          <Input id="co-mileage" name="mileage" type="number" required className="mt-1.5" />
-        </div>
-        <div>
-          <Label htmlFor="co-fuel">Fuel Level (%)</Label>
-          <Input id="co-fuel" name="fuelLevel" type="number" min={0} max={100} required className="mt-1.5" />
-        </div>
-      </div>
-      <div>
-        <Label htmlFor="co-notes">Exterior/Interior Notes</Label>
-        <Input id="co-notes" name="notes" className="mt-1.5" />
-      </div>
-      <Button type="submit">Start Rental</Button>
-    </form>
-  );
-}
-
-export function CheckInForm({ reservationId }: { reservationId: string }) {
-  return (
-    <form action={completeRental} className="rounded-xl border border-white/10 bg-card p-4 space-y-3">
-      <p className="text-sm font-semibold text-white">Complete Rental (Check-In)</p>
-      <input type="hidden" name="reservationId" value={reservationId} />
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label htmlFor="ci-mileage">Ending Mileage</Label>
-          <Input id="ci-mileage" name="mileage" type="number" required className="mt-1.5" />
-        </div>
-        <div>
-          <Label htmlFor="ci-fuel">Fuel Level (%)</Label>
-          <Input id="ci-fuel" name="fuelLevel" type="number" min={0} max={100} required className="mt-1.5" />
-        </div>
-      </div>
-      <div>
-        <Label htmlFor="ci-notes">New Damage Notes</Label>
-        <Input id="ci-notes" name="notes" className="mt-1.5" />
-      </div>
-      <div className="flex items-center gap-2">
-        <input id="ci-late" name="lateReturn" type="checkbox" className="h-4 w-4 rounded border-white/25 bg-card accent-gold" />
-        <Label htmlFor="ci-late">Returned Late</Label>
-      </div>
-      <div>
-        <Label htmlFor="ci-charge">Additional Charge ($)</Label>
-        <Input id="ci-charge" name="additionalCharge" type="number" step="0.01" defaultValue="0" className="mt-1.5 w-40" />
-      </div>
-      <Button type="submit">Complete Rental</Button>
-    </form>
-  );
-}
+// The ordinary "quick start / quick complete" staff forms that used to
+// live here were removed following security review — starting or
+// completing a trip must go through the customer/host self-serve
+// trip-start gate (src/lib/trip-gate.ts), or, only in a genuine
+// emergency, the separate SUPER_ADMIN-only, step-up-verified,
+// reason-required, confirmed, and fully audited override
+// (src/lib/emergency-override.ts). Neither is an ordinary admin-role
+// action, so neither is exposed here.

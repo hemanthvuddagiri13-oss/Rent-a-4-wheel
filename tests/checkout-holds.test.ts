@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { isVehicleAvailable } from "@/lib/availability";
 import { expireStaleReservations } from "@/lib/cleanup";
+import { createOrRefreshHold, HoldError } from "@/lib/checkout-hold";
 import {
   prisma,
   createTestVehicle,
@@ -158,5 +159,108 @@ describe("simultaneous overlapping checkout-hold attempts", () => {
 
     expect(succeeded).toHaveLength(1);
     expect(failed).toHaveLength(1);
+  });
+});
+
+describe("expired-hold refresh must not silently hand back dates someone else took", () => {
+  it("customer A's expired hold refresh is rejected once customer B has confirmed the same dates", async () => {
+    const vehicle = await createTestVehicle();
+    const customerA = await createTestCustomer();
+    const customerB = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customerA.id, customerB.id);
+
+    const pickupAt = new Date("2028-10-01T10:00:00Z");
+    const returnAt = new Date("2028-10-04T10:00:00Z");
+
+    // Customer A holds the dates, then the hold expires (simulated by
+    // backdating expiresAt, exactly as a real 15-minute-old hold would
+    // look once its window has passed).
+    const holdA = await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customerA.id,
+      pickupAt,
+      returnAt,
+      status: "CHECKOUT_HOLD",
+      expiresAt: new Date(Date.now() - 60 * 1000),
+    });
+
+    // Customer B confirms the exact same dates in the meantime.
+    await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customerB.id,
+      pickupAt,
+      returnAt,
+      status: "CONFIRMED",
+    });
+
+    // Customer A's client retries the hold endpoint, unaware the dates are
+    // gone — this must fail with a conflict, never silently succeed.
+    await expect(
+      createOrRefreshHold({ customerId: customerA.id, vehicleId: vehicle.id, pickupAt, returnAt, extraIds: [] })
+    ).rejects.toThrow(HoldError);
+
+    // Customer A's original hold must have been explicitly released
+    // (EXPIRED), not left dangling in CHECKOUT_HOLD, and must NOT have
+    // regained the dates.
+    const reloadedHoldA = await prisma.reservation.findUniqueOrThrow({ where: { id: holdA.id } });
+    expect(reloadedHoldA.status).toBe("EXPIRED");
+
+    const availableForAnyoneElse = await isVehicleAvailable(vehicle.id, pickupAt, returnAt, {
+      excludeReservationId: holdA.id,
+    });
+    expect(availableForAnyoneElse).toBe(false); // still correctly held by B's CONFIRMED reservation
+  });
+
+  it("a genuinely expired hold with no competing booking refreshes into a brand-new hold, not a silent extension of the stale row", async () => {
+    const vehicle = await createTestVehicle();
+    const customer = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customer.id);
+
+    const pickupAt = new Date("2028-11-01T10:00:00Z");
+    const returnAt = new Date("2028-11-04T10:00:00Z");
+
+    const originalHold = await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customer.id,
+      pickupAt,
+      returnAt,
+      status: "CHECKOUT_HOLD",
+      expiresAt: new Date(Date.now() - 60 * 1000),
+    });
+
+    const refreshed = await createOrRefreshHold({ customerId: customer.id, vehicleId: vehicle.id, pickupAt, returnAt, extraIds: [] });
+
+    expect(refreshed.id).not.toBe(originalHold.id);
+    expect(refreshed.status).toBe("CHECKOUT_HOLD");
+    expect(refreshed.expiresAt!.getTime()).toBeGreaterThan(Date.now());
+
+    const reloadedOriginal = await prisma.reservation.findUniqueOrThrow({ where: { id: originalHold.id } });
+    expect(reloadedOriginal.status).toBe("EXPIRED");
+  });
+
+  it("a still-live hold refreshes in place (same row, extended expiresAt)", async () => {
+    const vehicle = await createTestVehicle();
+    const customer = await createTestCustomer();
+    cleanupVehicleIds.push(vehicle.id);
+    cleanupUserIds.push(customer.id);
+
+    const pickupAt = new Date("2028-12-01T10:00:00Z");
+    const returnAt = new Date("2028-12-04T10:00:00Z");
+
+    const originalHold = await createTestReservation({
+      vehicleId: vehicle.id,
+      customerId: customer.id,
+      pickupAt,
+      returnAt,
+      status: "CHECKOUT_HOLD",
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // still has 5 minutes left
+    });
+
+    const refreshed = await createOrRefreshHold({ customerId: customer.id, vehicleId: vehicle.id, pickupAt, returnAt, extraIds: [] });
+
+    expect(refreshed.id).toBe(originalHold.id);
+    expect(refreshed.expiresAt!.getTime()).toBeGreaterThan(originalHold.expiresAt!.getTime());
   });
 });

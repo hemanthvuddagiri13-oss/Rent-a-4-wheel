@@ -266,6 +266,78 @@ every row they create, in FK-safe order. The webhook tests mock the Stripe
 SDK client (`vi.mock("@/lib/stripe")`) so deposit-authorization
 success/failure is deterministic without a real Stripe account.
 
+### Hardening pass (post-review corrections)
+
+Following an independent review of the Phase 1 foundation, a second pass
+fixed several correctness/deployment issues and added their tests:
+
+- **Stripe webhook processing is a real state machine**
+  (`RECEIVED -> PROCESSING -> PROCESSED`/`FAILED`, with `attemptCount`,
+  `lastError`, `nextRetryAt`) instead of "claim by row existence" — a
+  failed processing attempt is retryable, a stale `PROCESSING` row (the
+  process handling it crashed) is reclaimable, and the webhook route
+  returns HTTP 500 on failure so Stripe's own retry schedule kicks in too.
+  See `src/lib/stripe-event-ledger.ts` and `tests/stripe-event-ledger.test.ts`.
+- **Payment reconciliation** (`src/lib/payment-reconciliation.ts`,
+  `PaymentReconciliation` model) handles every case where a Stripe charge
+  succeeded but couldn't cleanly produce a confirmed reservation: a
+  temporary Stripe-side error during deposit authorization propagates and
+  retries rather than being recorded as a permanent decline; a rental
+  payment that succeeds after its checkout hold expired is either
+  auto-resolved (the exact reservation is narrowly reopened and confirmed,
+  under a fresh serializable availability check) or automatically refunded
+  with an explicit review record if the dates are genuinely gone — a
+  successful charge is never silently lost. See
+  `tests/payments-webhook.test.ts`.
+- **Checkout-hold refresh no longer resurrects a lost slot**: refreshing
+  an already-expired hold now explicitly releases it (its own committed
+  step) and re-checks availability from scratch before creating a new
+  one, so a customer whose hold expired while someone else booked the
+  same dates gets a conflict, not their old dates back. See
+  `src/lib/checkout-hold.ts` and `tests/checkout-holds.test.ts`.
+- **The Phase-1 migration now safely handles a database that already has
+  data**, not just a fresh one: legacy `PENDING`/`CONFIRMED`/`ACTIVE`/
+  `COMPLETED`/`CANCELLED` reservation statuses are explicitly mapped
+  (documented in the migration file) instead of a bare enum cast that
+  fails outright on existing rows; `DriverDocument`'s new required columns
+  are backfilled before being made `NOT NULL`; and the retired
+  `RentalAgreement` table's rows are migrated into `AgreementAcceptance`
+  before the table is dropped. `tests/migration-existing-data.test.ts`
+  spins up a throwaway database, applies the original pre-Phase-1 schema,
+  inserts old-shaped fixture rows, then runs `prisma migrate deploy` for
+  real and asserts every row survived correctly mapped.
+- **Auth-code verification is atomically single-use**: the final "mark
+  consumed" step is a conditional `updateMany` (matching ID + unconsumed +
+  under the attempt limit + unexpired) rather than an unconditional
+  update, so two simultaneous submissions of the same valid code can never
+  both succeed. See `tests/auth-code-concurrency.test.ts`.
+- **The ordinary admin "quick start rental" / "quick complete rental"
+  buttons have been removed.** The only way to force a reservation past an
+  unmet Start Trip / Return gate is now a dedicated, `SUPER_ADMIN`-only,
+  step-up-verified (a fresh email-code check — the closest equivalent to
+  MFA this system has, since no TOTP/WebAuthn factor exists yet),
+  reason-required, explicitly confirmed, and fully audited emergency
+  override (`src/lib/emergency-override.ts`, `EmergencyOverrideRecord`,
+  `POST /api/admin/reservations/[id]/emergency-override`), which also
+  notifies both the customer and the host. See
+  `tests/emergency-override.test.ts`.
+- **Malware scanning is fail-closed.** `MalwareScanStatus.NOT_SCANNED` was
+  renamed to `QUARANTINED` (a newly uploaded, unscanned document is
+  actively held back, not merely "pending"). Since no scanner is
+  configured in this environment, every upload is rejected in production;
+  in development it requires an explicit
+  `ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV=true` opt-in. A non-owner (host,
+  staff reviewer) can never view a document until its scan status is
+  actually `CLEAN`. Identity documents also no longer accept PDF — images
+  only, re-encoded through sharp — since this deployment has no
+  PDF-capable scanner and an unscanned PDF can carry active content. See
+  `src/lib/documents.ts` and `tests/malware-scan-fail-closed.test.ts`.
+
+Every scenario above has a dedicated test, and the full suite
+(`npm test`) was run twice in a row for stability alongside a fresh-database
+migration, a populated-old-database migration, seed, typecheck, lint, and
+a production build — see the PR description for exact results.
+
 ## Architecture Overview
 
 ```

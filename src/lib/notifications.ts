@@ -9,6 +9,7 @@ import {
   pickupReminderEmail,
   refundEmail,
   returnReminderEmail,
+  tripEmergencyOverrideEmail,
   upcomingRentalReminderEmail,
 } from "@/lib/email-templates";
 import type { NotificationType } from "@prisma/client";
@@ -24,6 +25,7 @@ const SUBJECTS: Record<NotificationType, string> = {
   BOOKING_CONFIRMATION: "Your Rent A 4Wheel reservation is confirmed",
   PAYMENT_RECEIPT: "Your Rent A 4Wheel payment receipt",
   DEPOSIT_AUTH_FAILED: "Action needed: security deposit could not be authorized",
+  TRIP_EMERGENCY_OVERRIDE: "A staff action was taken on your trip",
   UPCOMING_RENTAL_REMINDER: "Your Rent A 4Wheel rental is coming up",
   DRIVER_VERIFICATION_REQUEST: "Action needed: verify your driver information",
   PICKUP_REMINDER: "Pickup reminder — Rent A 4Wheel",
@@ -77,6 +79,12 @@ export async function queueNotification({ userId, reservationId, type, extra }: 
         break;
       case "DEPOSIT_AUTH_FAILED":
         html = depositAuthFailedEmail({ confirmationNumber: reservation?.confirmationNumber ?? "" });
+        break;
+      case "TRIP_EMERGENCY_OVERRIDE":
+        html = tripEmergencyOverrideEmail({
+          confirmationNumber: reservation?.confirmationNumber ?? "",
+          action: (extra?.action as string) ?? "override",
+        });
         break;
       case "UPCOMING_RENTAL_REMINDER":
         html = summary ? upcomingRentalReminderEmail(summary) : "";
