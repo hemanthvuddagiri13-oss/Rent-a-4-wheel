@@ -56,9 +56,9 @@ export async function recoverDeposits() {
     await executeDepositOperation(operation);
     if (["REFUND_REQUIRED", "TERMINATED"].includes(r.financialDisposition)) await releaseDeposits(r.id);
     else {
-      const latest = await prisma.financialOperation.findFirst({ where: { reservationId: r.id, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+      const deposit = await prisma.securityDeposit.findUnique({ where: { reservationId: r.id } });
       const observed = await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } });
-      if (latest?.id !== observed.id && observed.providerId) await releaseDeposits(r.id, observed.providerId);
+      if (deposit?.operationId && deposit.operationId !== observed.id && observed.providerId) await releaseDeposits(r.id, observed.providerId);
     }
   });
 }

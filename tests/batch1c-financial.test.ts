@@ -7,7 +7,7 @@ import { handlePaymentIntentSucceeded } from "@/lib/stripe-webhook-handlers";
 import { syncDepositIntent, attemptDepositAuthorization, releaseDeposits } from "@/lib/deposit-authorization";
 import { getOrCreateRefundOperation, executeRefundOperation, reconcileRefundStatus } from "@/lib/refund-operations";
 import { financialProjection } from "@/lib/financial-projection";
-import { recoverRefunds } from "@/lib/financial-workers";
+import { recoverRefunds, recoverDeposits } from "@/lib/financial-workers";
 import { fingerprint } from "@/lib/financial-operations";
 import { withReservationLock, assertFinancialTripStart } from "@/lib/financial-locks";
 import { transitionReservation } from "@/lib/reservation-state-machine";
@@ -32,6 +32,22 @@ const rental = {payment_method:"pm_fixture",customer:"cus_fixture"} as never;
 async function snapshot(id:string){return prisma.reservation.findUniqueOrThrow({where:{id},include:{payments:true,refunds:true,deposit:true}})}
 async function waitLock(pid:number) { const deadline=Date.now()+4000; while(Date.now()<deadline){const rows=await prisma.$queryRaw<Array<{wait_event_type:string}>>`SELECT wait_event_type FROM pg_stat_activity WHERE pid=${pid}`; if(rows[0]?.wait_event_type==="Lock") return;await new Promise(r=>setTimeout(r,5));}throw new Error("No concurrent lock wait observed"); }
 describe("Batch 1C financial regressions",()=>{
+ it("deposit recovery uses the explicit generation owner rather than timestamp ordering",async()=>{
+   const {r}=await fixture(30000);const old=capture(`pi_order_old_${r.id}`),next=capture(`pi_order_new_${r.id}`);
+   const ledger=new Map([[old.id,old],[next.id,next]]);
+   provider.paymentIntents.create.mockResolvedValueOnce(old).mockResolvedValueOnce(next);
+   provider.paymentIntents.retrieve.mockImplementation(async id=>ledger.get(id));
+   provider.paymentIntents.cancel.mockImplementation(async id=>{const value={...ledger.get(id)!,status:"canceled"};ledger.set(id,value);return value});
+   await attemptDepositAuthorization(await snapshot(r.id),rental);
+   await prisma.securityDeposit.update({where:{reservationId:r.id},data:{authorizationExpiresAt:new Date(0)}});
+   await attemptDepositAuthorization(await snapshot(r.id),rental,true);
+   await prisma.financialOperation.updateMany({where:{reservationId:r.id,providerId:old.id,kind:"DEPOSIT"},data:{createdAt:new Date(Date.now()+60000)}});
+   const find=workerDb.financialOperation.findMany.bind(workerDb.financialOperation);
+   vi.spyOn(workerDb.financialOperation,"findMany").mockImplementation(args=>find({...args,where:{...args?.where,reservationId:r.id}}) as never);
+   await recoverDeposits();
+   expect(provider.paymentIntents.cancel.mock.calls.every(([id])=>id===old.id)).toBe(true);
+   expect((await snapshot(r.id)).deposit?.stripePaymentIntentId).toBe(next.id);expect((await snapshot(r.id)).deposit?.status).toBe("SUCCEEDED");
+ });
  it("timeout recovery cannot convert REVIEW into an automatic refund mandate", async () => {
    const {r}=await fixture();await prisma.reservation.update({where:{id:r.id},data:{status:"PAYMENT_FAILED",financialDisposition:"REVIEW",expiresAt:new Date(0)}});
    await expireStaleReservations();const saved=await snapshot(r.id);
