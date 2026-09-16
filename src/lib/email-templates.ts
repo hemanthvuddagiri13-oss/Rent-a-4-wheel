@@ -53,6 +53,25 @@ function fmtDate(d: Date) {
   return d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
+export function signInCodeEmail(params: { code: string; expiresInMinutes: number }) {
+  return layout(
+    "Your Sign-In Code",
+    `<p style="color:#D9D9D9;font-size:14px;line-height:1.6;">Enter this code to sign in to Rent A 4Wheel. It expires in ${params.expiresInMinutes} minutes and can only be used once.</p>
+     <p style="margin:24px 0;text-align:center;">
+       <span style="display:inline-block;padding:14px 28px;background:#1a1a1a;border:1px solid #D4AF37;border-radius:8px;font-size:28px;font-weight:700;letter-spacing:8px;color:#F5C542;">${params.code}</span>
+     </p>
+     <p style="color:#8A8A8A;font-size:12px;line-height:1.6;">If you didn't request this code, you can safely ignore this email — no one can access your account without it.</p>`
+  );
+}
+
+export function depositAuthFailedEmail(params: { confirmationNumber: string }) {
+  return layout(
+    "We Couldn't Authorize Your Security Deposit",
+    `<p style="color:#D9D9D9;font-size:14px;line-height:1.6;">Your rental payment for reservation <strong>${params.confirmationNumber}</strong> succeeded, but we were unable to authorize the required security deposit hold on your card. Your reservation is not yet confirmed.</p>
+     <p style="color:#D9D9D9;font-size:14px;line-height:1.6;">Please sign in and try again with a different card, or contact support for help.</p>`
+  );
+}
+
 export function bookingConfirmationEmail(r: ReservationSummary) {
   return layout(
     "Your Reservation is Confirmed",

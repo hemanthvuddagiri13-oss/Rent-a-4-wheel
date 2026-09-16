@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { CancelReservationButton } from "@/components/account/cancel-reservation-button";
 import { formatCurrency } from "@/lib/utils";
 import { RESERVATION_STATUS_LABELS } from "@/lib/constants";
+import { canCustomerCancel } from "@/lib/reservation-rules";
 
 export const metadata: Metadata = { title: "Reservation Details", robots: { index: false } };
 
@@ -29,7 +30,7 @@ export default async function ReservationDetailPage({ params }: { params: Promis
   });
   if (!reservation || reservation.customerId !== session.user.id) notFound();
 
-  const canCancel = ["PENDING", "CONFIRMED"].includes(reservation.status) && reservation.pickupAt > new Date();
+  const canCancel = canCustomerCancel(reservation).allowed;
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">

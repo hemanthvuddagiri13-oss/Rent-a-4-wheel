@@ -14,7 +14,7 @@ import {
   completeRental,
 } from "@/app/admin/reservations/actions";
 
-export function DocumentReviewRow({ id, side, status }: { id: string; side: string; status: string }) {
+export function DocumentReviewRow({ id, type, status }: { id: string; type: string; status: string }) {
   const [isPending, startTransitionFn] = useTransition();
   const router = useRouter();
 
@@ -29,7 +29,7 @@ export function DocumentReviewRow({ id, side, status }: { id: string; side: stri
   return (
     <div className="flex items-center justify-between rounded-lg border border-white/10 bg-surface/60 p-3">
       <div>
-        <p className="text-sm font-medium text-white">License — {side}</p>
+        <p className="text-sm font-medium text-white">License — {type}</p>
         <p className="text-xs text-muted">Status: {status.replace(/_/g, " ")}</p>
       </div>
       <div className="flex gap-2">

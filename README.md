@@ -35,7 +35,7 @@ NextAuth (Auth.js), Stripe, Resend, and Cloudinary.
 - **Language:** TypeScript
 - **Styling:** Tailwind CSS v4 + hand-rolled shadcn/ui-style components (Radix primitives)
 - **Database/ORM:** PostgreSQL + Prisma
-- **Auth:** Auth.js (NextAuth v5) — credentials provider, JWT sessions, role-based access
+- **Auth:** Auth.js (NextAuth v5) — passwordless six-digit email-code sign-in (no passwords anywhere in the system), JWT sessions, role-based access
 - **Payments:** Stripe (PaymentIntents, webhooks)
 - **Email:** Resend (transactional templates)
 - **Images/Documents:** Cloudinary (public vehicle photos + private, authenticated document storage), with a local-disk fallback for development
@@ -79,7 +79,14 @@ groups:
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Image/document storage |
 | `TWILIO_*` | SMS architecture (not wired to send until consent flow is built) |
 | `NEXT_PUBLIC_GA4_MEASUREMENT_ID`, `NEXT_PUBLIC_META_PIXEL_ID` | Analytics |
-| `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | Bootstrap admin login used by `npm run db:seed` |
+| `SEED_ADMIN_EMAIL` | Bootstrap admin account email used by `npm run db:seed` (no password — see Authentication below) |
+| `CRON_SECRET` | Bearer-token secret required to call `/api/cron/expire-holds` (background checkout-hold cleanup) |
+
+**Authentication is passwordless.** There is no password field anywhere in
+the schema. Signing in means: enter an email → receive a six-digit code
+(hashed, single-use, 10-minute expiry, rate-limited by email and IP, resend
+cooldown, attempt-limited) → enter the code. An account is created
+automatically on first verified sign-in. See `src/lib/auth-code.ts`.
 
 **Development without credentials:** Stripe, Resend, and Cloudinary all
 degrade gracefully when their keys are missing:
@@ -87,11 +94,14 @@ degrade gracefully when their keys are missing:
 - **Stripe absent** → the booking payment step shows a clearly labeled
   "Development Mode" panel with a **Simulate Successful Payment** button, so
   the full booking flow (through confirmation + PDF agreement) can be tested
-  end to end. This simulate-payment endpoint refuses to run once real Stripe
-  keys are present.
-- **Resend absent** → emails are logged to the server console instead of
-  sent, and `Notification` rows are still recorded with a `FAILED` status
-  and an explanatory error message.
+  end to end. This simulate-payment endpoint refuses to run in production or
+  once real Stripe keys are present, regardless of `NODE_ENV`.
+- **Resend absent** → emails (including sign-in codes) are logged to the
+  server console instead of sent, and `Notification` rows are still
+  recorded with a `FAILED` status and an explanatory error message. The
+  `/api/auth/request-code` response also echoes the code back in this case
+  (development only — never in production) so you can sign in without a
+  real inbox.
 - **Cloudinary absent** → uploaded driver's license documents are written to
   `private-storage/` on disk (git-ignored, served only via the authenticated
   `/api/documents/[id]` route — never from `/public`).
@@ -105,11 +115,26 @@ npx prisma generate    # regenerate the client after schema changes
 ```
 
 Schema lives at [`prisma/schema.prisma`](./prisma/schema.prisma) and models
-users/auth, vehicles, images, features, ownership, reservations, extras,
-payments, refunds, security deposits, driver documents, rental agreements,
-fleet operations (blocks, inspections, damage reports, maintenance),
-coupons, reviews, contact messages, FAQ, notifications, audit logs, and
-admin-editable site settings.
+users/passwordless auth codes, hosts (host profiles, employees, Stripe
+Connect fields), vehicles, images, features, ownership, the reservation
+state machine (17 statuses, checkout holds, exclusion-constraint-protected
+overlap prevention), extras, payments, the Stripe webhook idempotency
+ledger, refunds, security deposits, driver identity documents (with access
+audit logging and retention), versioned legal agreement acceptances, trip
+lifecycle models (Trip, ConditionReport/Photo, IdentityHandoffVerification,
+TripChecklist, TripEvent), fleet operations (blocks, inspections, damage
+reports, maintenance), coupons, reviews, contact messages, FAQ,
+notifications, audit logs, and admin-editable site settings.
+
+One migration (`prisma/migrations/*_phase1_booking_payment_identity_trip_foundation`)
+hand-adds a PostgreSQL `EXCLUDE USING gist` constraint (requires the
+`btree_gist` extension, created via `CREATE EXTENSION IF NOT EXISTS` in the
+same migration) that makes it *database-impossible* for two
+CONFIRMED-or-later reservations on the same vehicle to have overlapping
+date ranges — independent of and in addition to the application-level
+SERIALIZABLE-transaction checks. See the comments in that migration file
+for why checkout holds (which expire) are deliberately *not* covered by
+this hard constraint and rely on the transactional check instead.
 
 ## Seeding Demo Data
 
@@ -121,9 +146,9 @@ Seeds:
 - 10 **sample** vehicles (clearly flagged `isDemo: true`) across Economy,
   Sedan, SUV, Luxury, and Truck categories, with placeholder imagery
   (`public/images/vehicles/*.svg`) — **not real inventory**.
-- An admin account (`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, default
-  `admin@renta4wheel.com` / `ChangeMe123!` — change this immediately).
-- A demo customer account (`demo.customer@example.com` / `Demo1234!`).
+- An admin account (`SEED_ADMIN_EMAIL`, default `admin@renta4wheel.com`) —
+  sign in with a one-time email code, there is no password.
+- A demo customer account (`demo.customer@example.com`) — same, passwordless.
 - Optional extras, an inactive `WELCOME10` coupon, placeholder legal
   documents (all flagged `needsAttorneyReview: true`), FAQ content, sample
   published reviews (flagged `isDemo: true` — never fabricated Google
@@ -202,13 +227,44 @@ in the project brief:
   (`tests/reservation-rules.test.ts`).
 - **Admin permissions** — role-based access helpers used by middleware and
   every admin Server Action (`tests/rbac.test.ts`).
+- **Reservation state machine** — every legal/illegal transition, the
+  compare-and-swap guard against concurrent transitions, and the
+  stale-state error path (`tests/reservation-state-machine.test.ts`).
+- **Checkout holds** — a live hold blocks competing checkout, an expired
+  hold does not (even before the cleanup job runs), the background sweep
+  (`expireStaleReservations`) flips only truly-expired rows, and only one
+  of two simultaneous SERIALIZABLE hold-creation attempts for the same slot
+  succeeds (`tests/checkout-holds.test.ts`).
+- **Payments/deposit gating and webhook idempotency** — rental payment
+  success with no deposit required confirms the reservation; rental
+  payment success *with* a required deposit only confirms once the
+  deposit authorization also succeeds, and leaves it `PAYMENT_FAILED`
+  (never `CONFIRMED`) when the deposit authorization fails; re-delivering
+  an already-processed event, and an out-of-order failure event arriving
+  after a success event, are both safe no-ops; the `StripeEvent` ledger's
+  unique constraint rejects a duplicate event ID at the database level
+  (`tests/payments-webhook.test.ts`, Stripe SDK calls mocked).
+- **Identity document ownership** — a document can be attached to a
+  reservation its uploader owns, and is rejected when uploaded by a
+  different user or already attached to a different reservation
+  (`tests/document-ownership.test.ts`).
+- **Host cross-tenant access** — a host (or their employee) can access
+  their own vehicles/reservations and is denied access to another host's,
+  and a user with no host affiliation gets no host context at all
+  (`tests/host-access.test.ts`).
+- **Trip-start gate** — the complete happy path where every precondition
+  (payment, deposit, all three identity documents including the selfie,
+  signed agreement, host identity-handoff verification, both parties'
+  accepted pre-trip condition reports with photos, pickup within the
+  check-in window) is satisfied, plus one test per individually-missing
+  precondition (`tests/trip-gate.test.ts`).
 
-The availability/booking tests are integration tests that run against a
-real PostgreSQL database (`DATABASE_URL`) and clean up every row they
-create. Payment-webhook and full booking-API behavior were also verified
-manually end-to-end (see the PR/commit history) — expanding those into
-automated integration tests (spinning up the Next.js server + mocked Stripe
-events) is a natural next addition.
+The availability/booking/state-machine/checkout-hold/document/host-access/
+trip-gate tests are integration tests that run against a real PostgreSQL
+database (`DATABASE_URL`, via `tests/helpers/factories.ts`) and clean up
+every row they create, in FK-safe order. The webhook tests mock the Stripe
+SDK client (`vi.mock("@/lib/stripe")`) so deposit-authorization
+success/failure is deterministic without a real Stripe account.
 
 ## Architecture Overview
 
@@ -329,7 +385,8 @@ reviewed and approved final language for each document.**
 - [ ] `AUTH_SECRET` set to a strong, unique value (`openssl rand -base64 32`)
 - [ ] Production `DATABASE_URL` points at a managed, backed-up Postgres instance
 - [ ] `npx prisma migrate deploy` run against production database
-- [ ] Admin account created with a strong password; demo admin/customer accounts removed or disabled
+- [ ] Demo admin/customer seed accounts removed or disabled in production (sign-in is passwordless email-code — see Authentication)
+- [ ] `CRON_SECRET` set and a real scheduler (e.g. Vercel Cron) wired to POST `/api/cron/expire-holds` on an interval (every 1–5 minutes)
 - [ ] Demo/sample vehicles replaced with real inventory in `/admin/vehicles`
 - [ ] All legal documents reviewed and approved by a licensed Texas attorney; `needsAttorneyReview` cleared
 - [ ] Business settings (`/admin/settings`) filled in with real phone/email/hours/tax rate/deposit/minimum age

@@ -9,14 +9,39 @@ import type { ReservationStatus } from "@prisma/client";
 export const metadata: Metadata = { title: "Reservations", robots: { index: false } };
 export const revalidate = 0;
 
-const TABS: (ReservationStatus | "ALL")[] = ["ALL", "PENDING", "CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"];
+const TABS: (ReservationStatus | "ALL")[] = [
+  "ALL",
+  "CHECKOUT_HOLD",
+  "AWAITING_PAYMENT",
+  "CONFIRMED",
+  "DOCUMENTS_REQUIRED",
+  "READY_FOR_CHECK_IN",
+  "ACTIVE",
+  "COMPLETED",
+  "PAYMENT_FAILED",
+  "EXPIRED",
+  "CANCELLED_BY_CUSTOMER",
+  "CANCELLED_BY_HOST",
+  "DISPUTED",
+];
 
 const statusVariant: Record<string, "success" | "warning" | "secondary" | "destructive" | "default"> = {
-  PENDING: "warning",
+  CHECKOUT_HOLD: "warning",
+  AWAITING_PAYMENT: "warning",
   CONFIRMED: "default",
+  DOCUMENTS_REQUIRED: "warning",
+  READY_FOR_CHECK_IN: "default",
+  CHECK_IN_PROGRESS: "default",
+  READY_TO_START: "default",
   ACTIVE: "success",
+  RETURN_IN_PROGRESS: "default",
   COMPLETED: "secondary",
-  CANCELLED: "destructive",
+  CANCELLED_BY_CUSTOMER: "destructive",
+  CANCELLED_BY_HOST: "destructive",
+  PAYMENT_FAILED: "destructive",
+  EXPIRED: "secondary",
+  DISPUTED: "destructive",
+  UNDER_CLAIM_REVIEW: "destructive",
 };
 
 export default async function AdminReservationsPage({

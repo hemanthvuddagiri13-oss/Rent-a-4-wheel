@@ -6,14 +6,16 @@ import { cn } from "@/lib/utils";
 
 export function DocumentUpload({
   label,
-  side,
+  documentType,
   onUploaded,
   uploaded,
+  imageOnly = false,
 }: {
   label: string;
-  side: "FRONT" | "BACK";
+  documentType: "LICENSE_FRONT" | "LICENSE_BACK" | "SELFIE_WITH_LICENSE";
   onUploaded: (documentId: string) => void;
   uploaded: boolean;
+  imageOnly?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export function DocumentUpload({
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("side", side);
+    formData.append("type", documentType);
 
     try {
       const res = await fetch("/api/documents/upload", { method: "POST", body: formData });
@@ -49,7 +51,12 @@ export function DocumentUpload({
         uploaded ? "border-emerald-500/40 bg-emerald-500/5" : "border-white/15 bg-card hover:border-gold/40"
       )}
     >
-      <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="hidden" onChange={handleFile} />
+      <input
+        type="file"
+        accept={imageOnly ? "image/jpeg,image/png,image/webp" : "image/jpeg,image/png,image/webp,application/pdf"}
+        className="hidden"
+        onChange={handleFile}
+      />
       {loading ? (
         <Loader2 className="h-6 w-6 animate-spin text-gold" />
       ) : uploaded ? (
@@ -58,7 +65,7 @@ export function DocumentUpload({
         <Upload className="h-6 w-6 text-gold" />
       )}
       <span className="text-sm font-medium text-white">{label}</span>
-      <span className="text-xs text-muted">{fileName ?? "JPG, PNG, or PDF — max 8MB"}</span>
+      <span className="text-xs text-muted">{fileName ?? (imageOnly ? "JPG, PNG, or WEBP — max 8MB" : "JPG, PNG, or PDF — max 8MB")}</span>
       {error && <span className="text-xs text-red-400">{error}</span>}
     </label>
   );

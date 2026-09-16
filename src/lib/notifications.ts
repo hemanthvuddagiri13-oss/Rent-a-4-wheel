@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email";
 import {
   bookingConfirmationEmail,
   cancellationEmail,
+  depositAuthFailedEmail,
   lateReturnEmail,
   paymentReceiptEmail,
   pickupReminderEmail,
@@ -22,6 +23,7 @@ interface QueueNotificationParams {
 const SUBJECTS: Record<NotificationType, string> = {
   BOOKING_CONFIRMATION: "Your Rent A 4Wheel reservation is confirmed",
   PAYMENT_RECEIPT: "Your Rent A 4Wheel payment receipt",
+  DEPOSIT_AUTH_FAILED: "Action needed: security deposit could not be authorized",
   UPCOMING_RENTAL_REMINDER: "Your Rent A 4Wheel rental is coming up",
   DRIVER_VERIFICATION_REQUEST: "Action needed: verify your driver information",
   PICKUP_REMINDER: "Pickup reminder — Rent A 4Wheel",
@@ -72,6 +74,9 @@ export async function queueNotification({ userId, reservationId, type, extra }: 
           amountCents: (extra?.amountCents as number) ?? reservation?.totalCents ?? 0,
           description: (extra?.description as string) ?? "Rental payment",
         });
+        break;
+      case "DEPOSIT_AUTH_FAILED":
+        html = depositAuthFailedEmail({ confirmationNumber: reservation?.confirmationNumber ?? "" });
         break;
       case "UPCOMING_RENTAL_REMINDER":
         html = summary ? upcomingRentalReminderEmail(summary) : "";

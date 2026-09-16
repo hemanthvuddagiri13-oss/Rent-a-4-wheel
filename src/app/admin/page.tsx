@@ -31,7 +31,9 @@ async function getStats() {
     prisma.vehicle.count(),
     prisma.vehicle.count({ where: { status: "ACTIVE" } }),
     prisma.reservation.count({ where: { status: "ACTIVE" } }),
-    prisma.reservation.count({ where: { status: { in: ["PENDING", "CONFIRMED"] }, pickupAt: { gte: now } } }),
+    prisma.reservation.count({
+      where: { status: { in: ["AWAITING_PAYMENT", "CONFIRMED", "DOCUMENTS_REQUIRED"] }, pickupAt: { gte: now } },
+    }),
     prisma.payment.aggregate({ where: { status: "SUCCEEDED" }, _sum: { amountCents: true } }),
     prisma.payment.count({ where: { status: "REQUIRES_PAYMENT" } }),
     prisma.customer.count({ where: { verificationStatus: "PENDING_VERIFICATION" } }),
@@ -72,7 +74,15 @@ async function getMonthlyRevenue() {
 }
 
 async function getBookingsByStatus() {
-  const statuses = ["PENDING", "CONFIRMED", "ACTIVE", "COMPLETED", "CANCELLED"] as const;
+  const statuses = [
+    "AWAITING_PAYMENT",
+    "CONFIRMED",
+    "DOCUMENTS_REQUIRED",
+    "ACTIVE",
+    "COMPLETED",
+    "CANCELLED_BY_CUSTOMER",
+    "CANCELLED_BY_HOST",
+  ] as const;
   const counts = await Promise.all(statuses.map((s) => prisma.reservation.count({ where: { status: s } })));
   return statuses.map((status, i) => ({ status, count: counts[i] }));
 }

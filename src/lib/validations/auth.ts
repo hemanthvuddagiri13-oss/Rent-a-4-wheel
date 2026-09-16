@@ -1,10 +1,17 @@
 import { z } from "zod";
 
-export const registerSchema = z.object({
-  name: z.string().trim().min(2, "Please enter your full name."),
+export const requestCodeSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email address."),
-  password: z.string().min(8, "Password must be at least 8 characters."),
-  phone: z.string().trim().min(7, "Enter a valid phone number.").optional().or(z.literal("")),
 });
 
-export type RegisterInput = z.infer<typeof registerSchema>;
+export const verifyCodeSchema = z.object({
+  email: z.string().trim().toLowerCase().email("Enter a valid email address."),
+  code: z
+    .string()
+    .trim()
+    .length(6, "Enter the 6-digit code.")
+    .regex(/^\d{6}$/, "The code must be 6 digits."),
+});
+
+export type RequestCodeInput = z.infer<typeof requestCodeSchema>;
+export type VerifyCodeInput = z.infer<typeof verifyCodeSchema>;

@@ -60,6 +60,17 @@ export default async function AdminSettingsPage() {
               <Label htmlFor="minimumAge">Minimum Driver Age</Label>
               <Input id="minimumAge" name="minimumAge" type="number" defaultValue={settings.minimumAge} className="mt-1.5" />
             </div>
+            <div>
+              <Label htmlFor="checkInWindowHours">Check-In Window (hours before pickup)</Label>
+              <Input
+                id="checkInWindowHours"
+                name="checkInWindowHours"
+                type="number"
+                min={1}
+                defaultValue={settings.checkInWindowHours}
+                className="mt-1.5"
+              />
+            </div>
           </div>
           <div>
             <Label htmlFor="mileagePolicySummary">Mileage Policy Summary</Label>

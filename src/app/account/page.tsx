@@ -19,15 +19,16 @@ export default async function AccountPage() {
   const [user, reservations] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.user.id }, include: { customer: true } }),
     prisma.reservation.findMany({
-      where: { customerId: session.user.id },
+      where: { customerId: session.user.id, status: { not: "CHECKOUT_HOLD" } },
       include: { vehicle: { include: { images: { take: 1, orderBy: { position: "asc" } } } } },
       orderBy: { pickupAt: "desc" },
     }),
   ]);
 
   const now = new Date();
-  const upcoming = reservations.filter((r) => r.returnAt >= now && r.status !== "CANCELLED");
-  const past = reservations.filter((r) => r.returnAt < now || r.status === "CANCELLED");
+  const CANCELLED_STATUSES = ["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST", "EXPIRED"];
+  const upcoming = reservations.filter((r) => r.returnAt >= now && !CANCELLED_STATUSES.includes(r.status));
+  const past = reservations.filter((r) => r.returnAt < now || CANCELLED_STATUSES.includes(r.status));
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">

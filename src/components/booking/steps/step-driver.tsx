@@ -5,13 +5,12 @@ import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SignInForm } from "@/components/auth/sign-in-form";
-import { SignUpForm } from "@/components/auth/sign-up-form";
+import { EmailCodeForm } from "@/components/auth/email-code-form";
 import { DocumentUpload } from "@/components/booking/document-upload";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import type { BookingState, DriverFormState, UpdateBookingState } from "@/components/booking/types";
+import type { BookingState, BookingVehicle, DriverFormState, UpdateBookingState } from "@/components/booking/types";
 
 interface Props {
+  vehicle: BookingVehicle;
   state: BookingState;
   update: UpdateBookingState;
   onNext: () => void;
@@ -20,10 +19,11 @@ interface Props {
 
 const US_STATES_HINT = "e.g. TX";
 
-export function StepDriver({ state, update, onNext, onBack }: Props) {
+export function StepDriver({ vehicle, state, update, onNext, onBack }: Props) {
   const { data: session, status } = useSession();
-  const [authTab, setAuthTab] = useState("sign-in");
   const [formError, setFormError] = useState<string | null>(null);
+  const [holdError, setHoldError] = useState<string | null>(null);
+  const [creatingHold, setCreatingHold] = useState(false);
 
   useEffect(() => {
     if (!session?.user || state.driver.email) return;
@@ -36,6 +36,45 @@ export function StepDriver({ state, update, onNext, onBack }: Props) {
         email: session.user.email || "",
       },
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user]);
+
+  // As soon as the customer is authenticated, place a 15-minute checkout
+  // hold on these exact dates so nobody else can book the vehicle out from
+  // under them while they finish driver info, documents, and payment.
+  useEffect(() => {
+    if (!session?.user || state.reservationId) return;
+    let cancelled = false;
+    async function createHold() {
+      setCreatingHold(true);
+      setHoldError(null);
+      try {
+        const res = await fetch("/api/reservations/hold", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vehicleId: vehicle.id,
+            pickupAt: `${state.pickupDate}T${state.pickupTime}:00`,
+            returnAt: `${state.returnDate}T${state.returnTime}:00`,
+            extraIds: state.selectedExtraIds,
+            couponCode: state.couponCode || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Unable to hold this vehicle for you.");
+        if (!cancelled) {
+          update({ reservationId: data.id, confirmationNumber: data.confirmationNumber, holdExpiresAt: data.expiresAt });
+        }
+      } catch (err) {
+        if (!cancelled) setHoldError(err instanceof Error ? err.message : "Something went wrong.");
+      } finally {
+        if (!cancelled) setCreatingHold(false);
+      }
+    }
+    createHold();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user]);
 
@@ -66,6 +105,14 @@ export function StepDriver({ state, update, onNext, onBack }: Props) {
       setFormError("Please upload both the front and back of your driver's license.");
       return;
     }
+    if (!state.documentIds.selfie) {
+      setFormError("Please upload a selfie holding your physical license.");
+      return;
+    }
+    if (!state.reservationId) {
+      setFormError("We're still holding your dates — please wait a moment and try again.");
+      return;
+    }
     setFormError(null);
     onNext();
   }
@@ -78,20 +125,11 @@ export function StepDriver({ state, update, onNext, onBack }: Props) {
     return (
       <div>
         <h2 className="font-display text-2xl font-semibold text-white">Verify Your Information</h2>
-        <p className="mt-1 text-sm text-muted">Sign in or create an account to continue your booking.</p>
+        <p className="mt-1 text-sm text-muted">Sign in with a one-time email code to continue your booking.</p>
 
-        <Tabs value={authTab} onValueChange={setAuthTab} className="mt-6">
-          <TabsList>
-            <TabsTrigger value="sign-in">Sign In</TabsTrigger>
-            <TabsTrigger value="sign-up">Create Account</TabsTrigger>
-          </TabsList>
-          <TabsContent value="sign-in">
-            <SignInForm onSuccess={() => {}} />
-          </TabsContent>
-          <TabsContent value="sign-up">
-            <SignUpForm onSuccess={() => {}} />
-          </TabsContent>
-        </Tabs>
+        <div className="mt-6">
+          <EmailCodeForm onSuccess={() => {}} />
+        </div>
 
         <Button variant="outline" className="mt-8" onClick={onBack}>
           Back
@@ -104,6 +142,14 @@ export function StepDriver({ state, update, onNext, onBack }: Props) {
     <div>
       <h2 className="font-display text-2xl font-semibold text-white">Driver Information</h2>
       <p className="mt-1 text-sm text-muted">This information will appear on your rental agreement.</p>
+
+      {creatingHold && <p className="mt-2 text-xs text-muted">Holding these dates for you…</p>}
+      {holdError && <p className="mt-2 text-xs text-red-400">{holdError}</p>}
+      {state.holdExpiresAt && !holdError && (
+        <p className="mt-2 text-xs text-gold">
+          These dates are held for you until {new Date(state.holdExpiresAt).toLocaleTimeString("en-US")}.
+        </p>
+      )}
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="First Name" value={state.driver.firstName} onChange={(v) => setDriverField("firstName", v)} />
@@ -139,15 +185,30 @@ export function StepDriver({ state, update, onNext, onBack }: Props) {
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <DocumentUpload
           label="Front of License"
-          side="FRONT"
+          documentType="LICENSE_FRONT"
           uploaded={Boolean(state.documentIds.front)}
           onUploaded={(id) => update((prev) => ({ documentIds: { ...prev.documentIds, front: id } }))}
         />
         <DocumentUpload
           label="Back of License"
-          side="BACK"
+          documentType="LICENSE_BACK"
           uploaded={Boolean(state.documentIds.back)}
           onUploaded={(id) => update((prev) => ({ documentIds: { ...prev.documentIds, back: id } }))}
+        />
+      </div>
+
+      <h3 className="mt-8 font-display text-lg font-semibold text-white">Selfie Verification</h3>
+      <p className="mt-1 text-sm text-muted">
+        Take a photo of yourself holding your physical license — this is compared against your uploaded documents
+        by the host at pickup.
+      </p>
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <DocumentUpload
+          label="Selfie Holding License"
+          documentType="SELFIE_WITH_LICENSE"
+          imageOnly
+          uploaded={Boolean(state.documentIds.selfie)}
+          onUploaded={(id) => update((prev) => ({ documentIds: { ...prev.documentIds, selfie: id } }))}
         />
       </div>
 

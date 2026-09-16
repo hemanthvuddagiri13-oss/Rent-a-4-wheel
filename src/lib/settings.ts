@@ -12,6 +12,10 @@ export interface SiteSettings {
   mileagePolicySummary: string;
   cancellationPolicySummary: string;
   socialLinks: { instagram?: string; facebook?: string; tiktok?: string };
+  // How many hours before pickup the customer/host check-in workflow (and
+  // the trip-start gate's "pickup time is within the permitted window"
+  // check) opens up. Admin-configurable per README "Customer Check-In".
+  checkInWindowHours: number;
 }
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
@@ -26,6 +30,7 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   mileagePolicySummary: "Daily mileage allowance varies by vehicle; see vehicle details.",
   cancellationPolicySummary: "PLACEHOLDER — pending attorney review.",
   socialLinks: {},
+  checkInWindowHours: 24,
 };
 
 /**

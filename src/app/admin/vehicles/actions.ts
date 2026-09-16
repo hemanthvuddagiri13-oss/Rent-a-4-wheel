@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/utils";
+import { BLOCKING_RESERVATION_STATUSES } from "@/lib/reservation-state-machine";
 import type { VehicleCategory, Transmission, FuelType, VehicleStatus, OwnershipType } from "@prisma/client";
 
 async function requireAdmin() {
@@ -149,7 +150,7 @@ export async function setVehicleStatus(vehicleId: string, status: VehicleStatus)
 export async function deleteVehicle(vehicleId: string) {
   const session = await requireAdmin();
   const activeReservations = await prisma.reservation.count({
-    where: { vehicleId, status: { in: ["PENDING", "CONFIRMED", "ACTIVE"] } },
+    where: { vehicleId, status: { in: BLOCKING_RESERVATION_STATUSES } },
   });
   if (activeReservations > 0) {
     throw new Error("Cannot delete a vehicle with active or upcoming reservations. Retire it instead.");

@@ -23,6 +23,7 @@ export async function updateSettings(formData: FormData) {
     ["taxRatePercent", Number(formData.get("taxRatePercent"))],
     ["defaultDepositCents", Math.round(Number(formData.get("defaultDeposit")) * 100)],
     ["minimumAge", Number(formData.get("minimumAge"))],
+    ["checkInWindowHours", Number(formData.get("checkInWindowHours"))],
     ["mileagePolicySummary", String(formData.get("mileagePolicySummary"))],
     ["cancellationPolicySummary", String(formData.get("cancellationPolicySummary"))],
     [

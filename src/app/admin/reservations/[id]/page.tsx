@@ -29,7 +29,7 @@ export default async function AdminReservationDetailPage({ params }: { params: P
       deposit: true,
       documents: true,
       extras: { include: { extra: true } },
-      agreement: true,
+      agreementAcceptances: { where: { type: "RENTAL_AGREEMENT" }, orderBy: { signedAt: "desc" }, take: 1 },
     },
   });
   if (!reservation) notFound();
@@ -92,16 +92,17 @@ export default async function AdminReservationDetailPage({ params }: { params: P
         <div className="mt-3 space-y-2">
           {reservation.documents.length === 0 && <p className="text-sm text-muted">No documents uploaded yet.</p>}
           {reservation.documents.map((d) => (
-            <DocumentReviewRow key={d.id} id={d.id} side={d.side} status={d.status} />
+            <DocumentReviewRow key={d.id} id={d.id} type={d.type} status={d.status} />
           ))}
         </div>
       </div>
 
-      {reservation.agreement && (
+      {reservation.agreementAcceptances[0] && (
         <div className="mt-6 rounded-xl border border-white/10 bg-card p-5">
           <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-gold-bright">Rental Agreement</h2>
           <p className="mt-2 text-sm text-muted">
-            Accepted {reservation.agreement.acceptedAt.toLocaleString()} &middot; version {reservation.agreement.documentVersion}
+            Signed {reservation.agreementAcceptances[0].signedAt.toLocaleString()} &middot; version{" "}
+            {reservation.agreementAcceptances[0].documentVersion}
           </p>
           <a href={`/api/reservations/${reservation.id}/agreement`} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-gold hover:underline">
             View PDF
@@ -114,7 +115,9 @@ export default async function AdminReservationDetailPage({ params }: { params: P
         {reservation.status === "ACTIVE" && <CheckInForm reservationId={reservation.id} />}
       </div>
 
-      {["PENDING", "CONFIRMED"].includes(reservation.status) && (
+      {(["AWAITING_PAYMENT", "CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN"] as string[]).includes(
+        reservation.status
+      ) && (
         <div className="mt-6">
           <CancelReservationAdminButton reservationId={reservation.id} />
         </div>

@@ -36,6 +36,7 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
     breakdown: null,
     reservationId: null,
     confirmationNumber: null,
+    holdExpiresAt: null,
   });
 
   function update(patch: Partial<BookingState> | ((prev: BookingState) => Partial<BookingState>)) {
@@ -86,13 +87,13 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
             onBack={goBack}
           />
         )}
-        {step === 4 && <StepDriver state={state} update={update} onNext={goNext} onBack={goBack} />}
+        {step === 4 && (
+          <StepDriver vehicle={vehicle} state={state} update={update} onNext={goNext} onBack={goBack} />
+        )}
         {step === 5 && (
           <StepReview vehicle={vehicle} extras={extras} state={state} update={update} onNext={goNext} onBack={goBack} />
         )}
-        {step === 6 && (
-          <StepPayment vehicle={vehicle} extras={extras} state={state} update={update} onSuccess={goNext} onBack={goBack} />
-        )}
+        {step === 6 && <StepPayment state={state} onSuccess={goNext} onBack={goBack} />}
         {step === 7 && <StepConfirmation vehicle={vehicle} state={state} />}
       </div>
     </div>

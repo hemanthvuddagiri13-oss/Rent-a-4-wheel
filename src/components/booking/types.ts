@@ -63,11 +63,12 @@ export interface BookingState {
   selectedExtraIds: string[];
   couponCode: string;
   driver: DriverFormState;
-  documentIds: { front?: string; back?: string };
+  documentIds: { front?: string; back?: string; selfie?: string };
   agreementAccepted: boolean;
   breakdown: PricingBreakdown | null;
   reservationId: string | null;
   confirmationNumber: string | null;
+  holdExpiresAt: string | null;
 }
 
 export type UpdateBookingState = (

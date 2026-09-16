@@ -1,12 +1,16 @@
 import { prisma } from "@/lib/prisma";
+import { BLOCKING_RESERVATION_STATUSES } from "@/lib/reservation-state-machine";
 import type { Prisma } from "@prisma/client";
-
-// Reservation statuses that hold a vehicle unavailable for the same period.
-export const BLOCKING_RESERVATION_STATUSES = ["PENDING", "CONFIRMED", "ACTIVE"] as const;
 
 /**
  * Two date ranges [aStart, aEnd) and [bStart, bEnd) overlap when
  * aStart < bEnd && bStart < aEnd.
+ *
+ * A reservation only actually blocks the vehicle while its status is in
+ * `BLOCKING_RESERVATION_STATUSES` AND (for the two hold-phase statuses,
+ * CHECKOUT_HOLD/AWAITING_PAYMENT) its `expiresAt` hasn't passed yet — an
+ * expired hold releases inventory immediately, in real time, even before a
+ * cleanup job has gotten around to flipping its status to EXPIRED.
  */
 export async function isVehicleAvailable(
   vehicleId: string,
@@ -15,11 +19,13 @@ export async function isVehicleAvailable(
   opts: { excludeReservationId?: string; tx?: Prisma.TransactionClient } = {}
 ): Promise<boolean> {
   const client = opts.tx ?? prisma;
+  const now = new Date();
 
   const overlappingReservation = await client.reservation.findFirst({
     where: {
       vehicleId,
-      status: { in: [...BLOCKING_RESERVATION_STATUSES] },
+      status: { in: BLOCKING_RESERVATION_STATUSES },
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
       ...(opts.excludeReservationId ? { id: { not: opts.excludeReservationId } } : {}),
       pickupAt: { lt: returnAt },
       returnAt: { gt: pickupAt },
@@ -52,10 +58,12 @@ export async function getAvailableVehicleIds(
   pickupAt: Date,
   returnAt: Date
 ): Promise<string[]> {
+  const now = new Date();
   const [reserved, blocked] = await Promise.all([
     prisma.reservation.findMany({
       where: {
-        status: { in: [...BLOCKING_RESERVATION_STATUSES] },
+        status: { in: BLOCKING_RESERVATION_STATUSES },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
         pickupAt: { lt: returnAt },
         returnAt: { gt: pickupAt },
       },

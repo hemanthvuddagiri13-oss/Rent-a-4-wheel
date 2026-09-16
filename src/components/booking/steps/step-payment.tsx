@@ -6,42 +6,33 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
-import type { BookingState, BookingVehicle, BookingExtra, DriverFormState, UpdateBookingState } from "@/components/booking/types";
+import type { BookingState, DriverFormState } from "@/components/booking/types";
 
 const stripePromise = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
   ? loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY)
   : null;
 
 interface Props {
-  vehicle: BookingVehicle;
-  extras: BookingExtra[];
   state: BookingState;
-  update: UpdateBookingState;
   onSuccess: () => void;
   onBack: () => void;
 }
 
-async function createReservation(vehicle: BookingVehicle, state: BookingState) {
-  const res = await fetch("/api/reservations", {
+async function finalizeCheckout(reservationId: string, state: BookingState) {
+  const res = await fetch(`/api/reservations/${reservationId}/checkout`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      vehicleId: vehicle.id,
-      pickupAt: `${state.pickupDate}T${state.pickupTime}:00`,
-      returnAt: `${state.returnDate}T${state.returnTime}:00`,
-      extraIds: state.selectedExtraIds,
-      couponCode: state.couponCode || undefined,
       driver: state.driver satisfies DriverFormState,
       documentIds: state.documentIds,
       agreementAccepted: state.agreementAccepted,
     }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Unable to create reservation.");
-  return data as { id: string; confirmationNumber: string };
+  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Unable to complete checkout.");
 }
 
-export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props) {
+export function StepPayment({ state, onSuccess, onBack }: Props) {
   const [initializing, setInitializing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [devMode, setDevMode] = useState(false);
@@ -53,15 +44,12 @@ export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props
     async function init() {
       try {
         setInitializing(true);
-        let reservationId = state.reservationId;
-        let confirmationNumber = state.confirmationNumber;
-
+        const reservationId = state.reservationId;
         if (!reservationId) {
-          const reservation = await createReservation(vehicle, state);
-          reservationId = reservation.id;
-          confirmationNumber = reservation.confirmationNumber;
-          if (!cancelled) update({ reservationId, confirmationNumber });
+          throw new Error("We couldn't find your held reservation. Please go back and try again.");
         }
+
+        await finalizeCheckout(reservationId, state);
 
         const res = await fetch(`/api/reservations/${reservationId}/payment-intent`, { method: "POST" });
         const data = await res.json();

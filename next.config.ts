@@ -37,6 +37,11 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Default: camera/microphone/geolocation disabled everywhere. Only
+        // routes that actually need the camera (pickup/return photo
+        // capture — customer check-in and host inspection workflows) get a
+        // narrower override below; nothing currently uses geolocation, so
+        // it stays denied globally.
         source: "/(.*)",
         headers: [
           { key: "X-Frame-Options", value: "DENY" },
@@ -44,6 +49,16 @@ const nextConfig: NextConfig = {
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
         ],
+      },
+      {
+        // Customer check-in / condition-report photo capture.
+        source: "/account/trips/:path*",
+        headers: [{ key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" }],
+      },
+      {
+        // Host pickup/return inspection photo capture.
+        source: "/host/bookings/:path*",
+        headers: [{ key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" }],
       },
     ];
   },

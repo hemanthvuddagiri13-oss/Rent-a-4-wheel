@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { queueNotification } from "@/lib/notifications";
+import { transitionReservation } from "@/lib/reservation-state-machine";
 
 async function requireAdmin() {
   const session = await auth();
@@ -44,10 +45,19 @@ export async function updateDocumentStatus(documentId: string, status: "APPROVED
 
 export async function cancelReservation(reservationId: string, notes?: string) {
   const session = await requireAdmin();
-  const reservation = await prisma.reservation.update({
-    where: { id: reservationId },
-    data: { status: "CANCELLED", notes },
+  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
+
+  await prisma.$transaction(async (tx) => {
+    await transitionReservation(tx, {
+      id: reservationId,
+      from: reservation.status,
+      to: "CANCELLED_BY_HOST",
+      force: true, // staff can cancel from any pre-trip status, not just the ordinary customer-facing set
+      data: { notes, expiresAt: null },
+    });
+    await tx.tripEvent.create({ data: { reservationId, type: "CANCELLED_BY_HOST", actorId: session.user.id } });
   });
+
   await prisma.auditLog.create({
     data: { actorId: session.user.id, action: "reservation.cancel", entityType: "Reservation", entityId: reservationId, metadata: { initiatedBy: "staff" } },
   });
@@ -100,8 +110,12 @@ export async function startRental(formData: FormData) {
 
   const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
 
-  await prisma.$transaction([
-    prisma.vehicleInspection.create({
+  // Staff "quick desk" override: skips the granular self-serve check-in/
+  // trip-start gate (src/lib/trip-gate.ts) entirely. This is an audited
+  // manual override path for in-person staff-assisted pickups, not the
+  // ordinary customer/host self-serve flow.
+  await prisma.$transaction(async (tx) => {
+    await tx.vehicleInspection.create({
       data: {
         vehicleId: reservation.vehicleId,
         reservationId,
@@ -112,10 +126,13 @@ export async function startRental(formData: FormData) {
         damageNotes: notes || null,
         performedById: session.user.id,
       },
-    }),
-    prisma.reservation.update({ where: { id: reservationId }, data: { status: "ACTIVE" } }),
-    prisma.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } }),
-  ]);
+    });
+    await transitionReservation(tx, { id: reservationId, from: reservation.status, to: "ACTIVE", force: true });
+    await tx.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } });
+    await tx.tripEvent.create({
+      data: { reservationId, type: "TRIP_STARTED", actorId: session.user.id, metadata: { staffOverride: true } },
+    });
+  });
 
   await queueNotification({ userId: reservation.customerId, reservationId, type: "PICKUP_REMINDER" });
   revalidatePath(`/admin/reservations/${reservationId}`);
@@ -142,8 +159,8 @@ export async function completeRental(formData: FormData) {
   const allowance = reservation.vehicle.mileageAllowancePerDay * Math.max(1, reservation.units);
   const additionalMileage = Math.max(0, milesDriven - allowance);
 
-  await prisma.$transaction([
-    prisma.vehicleInspection.create({
+  await prisma.$transaction(async (tx) => {
+    await tx.vehicleInspection.create({
       data: {
         vehicleId: reservation.vehicleId,
         reservationId,
@@ -157,10 +174,13 @@ export async function completeRental(formData: FormData) {
         additionalMileage,
         additionalChargeCents,
       },
-    }),
-    prisma.reservation.update({ where: { id: reservationId }, data: { status: "COMPLETED" } }),
-    prisma.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } }),
-  ]);
+    });
+    await transitionReservation(tx, { id: reservationId, from: reservation.status, to: "COMPLETED", force: true });
+    await tx.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } });
+    await tx.tripEvent.create({
+      data: { reservationId, type: "TRIP_COMPLETED", actorId: session.user.id, metadata: { staffOverride: true } },
+    });
+  });
 
   if (lateReturn && additionalChargeCents > 0) {
     await queueNotification({ userId: reservation.customerId, reservationId, type: "LATE_RETURN", extra: { additionalChargeCents } });

@@ -3,13 +3,14 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { queueNotification } from "@/lib/notifications";
 import { canCustomerCancel } from "@/lib/reservation-rules";
+import { transitionReservation } from "@/lib/reservation-state-machine";
 
 /**
  * Customer-initiated cancellation request. This marks the reservation
- * CANCELLED immediately for reservations that haven't started yet; actual
- * refund issuance (full/partial, per the Cancellation Policy) is handled
- * by staff from /admin/reservations, since it may depend on manual policy
- * judgment calls the schema doesn't automate.
+ * CANCELLED_BY_CUSTOMER immediately for reservations that haven't started
+ * yet; actual refund issuance (full/partial, per the Cancellation Policy)
+ * is handled by staff from /admin/reservations, since it may depend on
+ * manual policy judgment calls the schema doesn't automate.
  */
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -25,18 +26,30 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: eligibility.reason }, { status: 409 });
   }
 
-  await prisma.$transaction([
-    prisma.reservation.update({ where: { id }, data: { status: "CANCELLED" } }),
-    prisma.auditLog.create({
-      data: {
-        actorId: session.user.id,
-        action: "reservation.cancel",
-        entityType: "Reservation",
-        entityId: id,
-        metadata: { initiatedBy: "customer" },
-      },
-    }),
-  ]);
+  try {
+    await prisma.$transaction(async (tx) => {
+      await transitionReservation(tx, {
+        id,
+        from: reservation.status,
+        to: "CANCELLED_BY_CUSTOMER",
+        data: { expiresAt: null },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: session.user.id,
+          action: "reservation.cancel",
+          entityType: "Reservation",
+          entityId: id,
+          metadata: { initiatedBy: "customer" },
+        },
+      });
+      await tx.tripEvent.create({
+        data: { reservationId: id, type: "CANCELLED_BY_CUSTOMER", actorId: session.user.id },
+      });
+    });
+  } catch {
+    return NextResponse.json({ error: "This reservation was already updated. Please refresh and try again." }, { status: 409 });
+  }
 
   await queueNotification({ userId: session.user.id, reservationId: id, type: "CANCELLATION" });
 

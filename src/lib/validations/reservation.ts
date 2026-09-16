@@ -16,18 +16,23 @@ export const driverInfoSchema = z.object({
   licenseExpiration: z.string().min(1, "License expiration is required."),
 });
 
-export const createReservationSchema = z.object({
+export const createHoldSchema = z.object({
   vehicleId: z.string().min(1),
   pickupAt: z.string().min(1),
   returnAt: z.string().min(1),
   extraIds: z.array(z.string()).default([]),
   couponCode: z.string().trim().optional(),
+});
+
+export const checkoutSchema = z.object({
   driver: driverInfoSchema,
   documentIds: z.object({
     front: z.string().optional(),
     back: z.string().optional(),
+    selfie: z.string().optional(),
   }),
   agreementAccepted: z.literal(true, { message: "You must accept the Rental Agreement to continue." }),
 });
 
-export type CreateReservationInput = z.infer<typeof createReservationSchema>;
+export type CreateHoldInput = z.infer<typeof createHoldSchema>;
+export type CheckoutInput = z.infer<typeof checkoutSchema>;
