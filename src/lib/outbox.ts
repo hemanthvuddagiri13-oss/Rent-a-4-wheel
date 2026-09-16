@@ -18,7 +18,7 @@ export async function processOutboxOnce(limit = 50, ids?: string[]) {
     const token = randomUUID();
     const firstAttemptAt = message.firstAttemptAt ?? (message.attempts > 0 ? message.createdAt : new Date());
     const claim = await prisma.outboxMessage.updateMany({
-      where: { id: message.id, status: "PENDING", OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }] },
+      where: { id: message.id, status: "PENDING", attempts: message.attempts, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }] },
       data: { leaseToken: token, leaseExpiresAt: new Date(Date.now() + 120000), firstAttemptAt, attempts: { increment: 1 } },
     });
     if (!claim.count) continue;
