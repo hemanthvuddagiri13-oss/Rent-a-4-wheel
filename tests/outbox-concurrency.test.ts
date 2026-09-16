@@ -26,7 +26,7 @@ describe("outbox execution", () => {
       entered.release(); await release.wait; return update(args);
     };
     // The caller awaits the result; the test barrier replaces Prisma's lazy promise.
-    const spy = vi.spyOn(workerDb.outboxMessage, "updateMany").mockImplementationOnce(delayed as typeof update);
+    const spy = vi.spyOn(workerDb.outboxMessage, "updateMany").mockImplementationOnce(delayed as unknown as typeof update);
     const stale = processOutboxOnce(1, [message.id]);
     await entered.wait;
     try {
