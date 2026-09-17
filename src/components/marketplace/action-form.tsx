@@ -1,7 +1,11 @@
 "use client";
 
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+
+const subscribeHydration = () => () => {};
+const clientReady = () => true;
+const serverReady = () => false;
 
 export type WorkspaceField = {
   name: string; label: string; type?: string; value?: string | number;
@@ -13,6 +17,7 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
   label?: string; children?: ReactNode; redirectTo?: string; multipart?: boolean;
 }) {
   const router = useRouter(), prefix = useId();
+  const hydrated = useSyncExternalStore(subscribeHydration, clientReady, serverReady);
   const [pending, setPending] = useState(false), [message, setMessage] = useState(""), [failed, setFailed] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setPending(true); setMessage("");
@@ -36,8 +41,8 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
     } catch (error) { setFailed(true); setMessage(error instanceof Error ? error.message : "Please try again."); }
     finally { setPending(false); }
   }
-  return <form onSubmit={submit} className="space-y-5">
-    <fieldset disabled={pending} className="grid min-w-0 gap-4 sm:grid-cols-2">
+  return <form data-hydrated={hydrated ? "true" : "false"} onSubmit={submit} className="space-y-5">
+    <fieldset disabled={pending || !hydrated} className="grid min-w-0 gap-4 sm:grid-cols-2">
       {fields.map(field => <div key={field.name} className={`grid min-w-0 gap-2 text-sm text-silver ${field.type === "textarea" ? "sm:col-span-2" : ""}`}>
         <label htmlFor={`${prefix}-${field.name}`}>{field.label}</label>
         {field.options ? <select id={`${prefix}-${field.name}`} name={field.name} defaultValue={field.value} required={field.required !== false} className="workspace-input">{field.options.map(option => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}</select>
