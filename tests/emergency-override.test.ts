@@ -162,3 +162,11 @@ describe("emergency override — unauthorized force-start attempts are all rejec
     expect(record.stepUpVerifiedAt).toBeInstanceOf(Date);
   });
 });
+
+it("rejects a revoked super-admin role even when supplied session claims are stale", async () => {
+  const { actor, reservation } = await setupReservationAndActor("SUPER_ADMIN");
+  const code = await issueValidStepUpCode(actor.email);
+  await prisma.user.update({ where: { id: actor.id }, data: { role: "CUSTOMER" } });
+  await expect(performEmergencyOverride({ actorId: actor.id, actorRole: "SUPER_ADMIN", actorEmail: actor.email, reservationId: reservation.id, action: "FORCE_START_TRIP", reason: "Stale role cannot authorize an emergency action", stepUpCode: code, confirm: true, ip: null })).rejects.toThrow("super administrator");
+  expect(await prisma.emergencyOverrideRecord.count({ where: { reservationId: reservation.id } })).toBe(0);
+});

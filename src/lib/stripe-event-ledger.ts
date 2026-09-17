@@ -74,7 +74,9 @@ export async function claimStripeEventForProcessing(params: {
 }
 
 async function claimExistingRecord(recordId: string, leaseToken: string, staleThreshold: Date): Promise<ClaimResult> {
-  const claim = await prisma.stripeEvent.updateMany({
+  const claim = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT financial_guard_xact(${"event:" + recordId})`;
+    return tx.stripeEvent.updateMany({
     where: {
       id: recordId,
       OR: [
@@ -85,6 +87,7 @@ async function claimExistingRecord(recordId: string, leaseToken: string, staleTh
     data: { status: StripeEventStatus.PROCESSING, processingStartedAt: new Date(), attemptCount: { increment: 1 }, leaseToken },
   });
 
+  });
   if (claim.count !== 1) {
     const reloaded = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: recordId } });
     return {
@@ -146,9 +149,12 @@ export async function claimRecoverableStripeEvents(limit = 25): Promise<
  * outcome.
  */
 export async function markStripeEventProcessed(eventRecordId: string, leaseToken: string): Promise<void> {
-  await prisma.stripeEvent.updateMany({
+  await prisma.$transaction(async tx => {
+  await tx.$queryRaw`SELECT financial_guard_xact(${"event:" + eventRecordId})`;
+  await tx.stripeEvent.updateMany({
     where: { id: eventRecordId, leaseToken },
     data: { status: StripeEventStatus.PROCESSED, processedAt: new Date() },
+  });
   });
 }
 
@@ -156,12 +162,15 @@ export async function markStripeEventFailed(eventRecordId: string, leaseToken: s
   const record = await prisma.stripeEvent.findUnique({ where: { id: eventRecordId } });
   if (!record || record.leaseToken !== leaseToken) return; // fenced out by a newer claim
   const message = safeErrorCode(error);
-  await prisma.stripeEvent.updateMany({
+  await prisma.$transaction(async tx => {
+  await tx.$queryRaw`SELECT financial_guard_xact(${"event:" + eventRecordId})`;
+  await tx.stripeEvent.updateMany({
     where: { id: eventRecordId, leaseToken },
     data: {
       status: StripeEventStatus.FAILED,
       lastError: message.slice(0, 4000),
       nextRetryAt: new Date(Date.now() + nextRetryDelayMs(record.attemptCount)),
     },
+  });
   });
 }

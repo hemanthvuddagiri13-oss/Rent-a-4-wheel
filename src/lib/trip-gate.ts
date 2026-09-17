@@ -51,8 +51,8 @@ export async function evaluateTripStartGate(reservationId: string, db: Prisma.Tr
   if (!financial.depositValid) reasons.push("Required security deposit does not have a currently valid authorization.");
 
   for (const type of REQUIRED_DOCUMENT_TYPES) {
-    if (!reservation.documents.some((d) => d.type === type)) {
-      reasons.push(`Missing required document: ${type}.`);
+    if (!reservation.documents.some((d) => d.type === type && d.userId === reservation.customerId && d.malwareScanStatus === "CLEAN" && d.status !== "REJECTED")) {
+      reasons.push(`Missing clean required document: ${type}.`);
     }
   }
 

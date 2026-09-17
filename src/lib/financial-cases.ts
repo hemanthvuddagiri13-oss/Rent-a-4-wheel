@@ -11,10 +11,14 @@ export async function quarantineOperation(tx: Prisma.TransactionClient, id: stri
   const payment = op.kind === "RENTAL" ? await tx.payment.findFirst({ where: { reservationId: r.id, type: "RENTAL", idempotencyKey: op.key } }) : null;
   const amountCents = payment?.amountCents ?? terms?.amount ?? deposit?.amountCents ?? null;
   const currency = payment?.currency ?? terms?.currency ?? deposit?.currency ?? null;
-  await tx.financialCase.upsert({ where: { sourceKey: "operation:" + id }, update: { attempts: op.attempts, lastError: reason }, create: {
+  const dispatches = await tx.financialDispatch.findMany({ where: { operationId: id }, orderBy: { createdAt: "asc" }, select: { id: true, phase: true, providerId: true, createdAt: true, errorCode: true } });
+  const evidence = JSON.parse(JSON.stringify({ generation: op.generation, target, dispatches }));
+  const previous = await tx.financialCase.findUnique({ where: { sourceKey: "operation:" + id } });
+  const c = await tx.financialCase.upsert({ where: { sourceKey: "operation:" + id }, update: { attempts: op.attempts, lastError: reason, evidence }, create: {
     sourceKey: "operation:" + id, reservationId: r.id, customerId: r.customerId, operationId: id, kind: op.kind,
-    amountCents, currency, originalKey: op.key, providerId: op.providerId, reason, attempts: op.attempts,
+    amountCents, currency, originalKey: op.key, providerId: target ?? op.providerId, reason, attempts: op.attempts, evidence,
   } });
+  if (!previous || previous.lastError !== reason) await tx.auditLog.create({ data: { action: "financial-case.operation-quarantined", entityType: "FinancialCase", entityId: c.id, metadata: { reason, evidence } } });
   await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "REVIEW" } });
 }
 

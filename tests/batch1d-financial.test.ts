@@ -50,8 +50,8 @@ describe("Batch 1D durable boundaries",()=>{
   const snapshot=await prisma.reservation.findUniqueOrThrow({where:{id:r.id},include:{deposit:true}});
   const running=attemptDepositAuthorization(snapshot,{payment_method:"pm_x",customer:"cus_x"} as never);
   await entered.wait;
-  await withReservationLock(r.id,tx=>transitionReservation(tx,{id:r.id,from:"CONFIRMED",to:"CANCELLED_BY_CUSTOMER"}),other);
-  release.release();await running;
+  const cancellation=withReservationLock(r.id,tx=>transitionReservation(tx,{id:r.id,from:"CONFIRMED",to:"CANCELLED_BY_CUSTOMER"}),other);
+  release.release();await Promise.all([running,cancellation]);
   // No live-handler compensation is invoked. The process can disappear now.
   const obligation=await prisma.financialOperation.findUniqueOrThrow({where:{key:"deposit-release:"+intent.id}});
   expect(obligation.state).toBe("READY");expect(provider.paymentIntents.cancel).not.toHaveBeenCalled();

@@ -20,7 +20,8 @@ export async function checkDepositReleaseOwnership(operationId: string, reservat
     const priorCase = firstQuarantine ? await tx.financialCase.findUnique({ where: { sourceKey: "operation:" + op.id } }) : null;
     await tx.financialOperation.update({ where: { id: op.id }, data: { state: "REVIEW", nextAttemptAt: null, leaseToken: null, leaseExpiresAt: null, lastError: reason } });
     await quarantineOperation(tx, op.id, reason);
-    const evidence = json({ intentId: target ?? null, generation: op.generation, ownership, originalAuthorizations: originals, deposit, reason });
+    const dispatches = await tx.financialDispatch.findMany({ where: { operationId: op.id }, select: { phase: true, providerId: true, createdAt: true } });
+    const evidence = json({ intentId: target ?? null, generation: op.generation, ownership, originalAuthorizations: originals, deposit, reason, dispatches });
     const c = await tx.financialCase.update({ where: { sourceKey: "operation:" + op.id }, data: { providerId: target ?? op.providerId, evidence, reason, ...(firstQuarantine ? { status: "OPEN", resolution: null, resolvedAt: null } : {}) } });
     if (firstQuarantine) await tx.auditLog.create({ data: { action: "financial-case.release-ownership-quarantined", entityType: "FinancialCase", entityId: c.id, metadata: json({ evidence, previousState: op.state, previousError: op.lastError, previousCaseReason: priorCase?.reason ?? null }) } });
     return false;

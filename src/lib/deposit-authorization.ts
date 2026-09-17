@@ -1,3 +1,4 @@
+import { recordRelease, type ReleaseOutcome } from "@/lib/release-outcomes";
 import { planDepositRelease } from "@/lib/deposit-release-plan";
 import { checkDepositReleaseOwnership } from "@/lib/deposit-release-ownership";
 import Stripe from "stripe";
@@ -55,7 +56,10 @@ export async function attemptDepositAuthorization(
   reservation: { id: string; deposit: SecurityDeposit | null }, intent: Stripe.PaymentIntent, retry = false
 ): Promise<DepositAuthorizationOutcome> {
   const observedGeneration = reservation.deposit?.generation;
-  if (retry && reservation.deposit?.stripePaymentIntentId && reservation.deposit.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt <= new Date()) await releaseDeposits(reservation.id, reservation.deposit.stripePaymentIntentId);
+  if (retry && reservation.deposit?.stripePaymentIntentId && reservation.deposit.authorizationExpiresAt && reservation.deposit.authorizationExpiresAt <= new Date()) {
+    const releases = await releaseDeposits(reservation.id, reservation.deposit.stripePaymentIntentId);
+    if (releases.some(r => r.status !== "processed")) throw new Error("Previous deposit release requires recovery");
+  }
   const prepared = await withReservationLock(reservation.id, async tx => {
     const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: true } });
     if (current.depositCents === 0) return null;
@@ -113,44 +117,55 @@ export async function releaseDeposits(reservationId: string, onlyIntentId?: stri
   const targets = new Set(attempts.map(a => a.providerId!));
   const deposit = await prisma.securityDeposit.findUnique({ where: { reservationId } });
   if (deposit?.stripePaymentIntentId && (!onlyIntentId || onlyIntentId === deposit.stripePaymentIntentId)) targets.add(deposit.stripePaymentIntentId);
+  const outcomes: ReleaseOutcome[] = [];
   for (const intentId of targets) {
     const operation = await withReservationLock(reservationId, tx => prepareOperation(tx, {
       key: `deposit-release:${intentId}`, kind: "DEPOSIT_RELEASE", reservationId, payload: { intentId },
     }));
-    await executeDepositReleaseOperation(operation);
+    outcomes.push(await executeDepositReleaseOperation(operation));
   }
+  return outcomes;
 }
 
-export async function executeDepositReleaseOperation(operation: FinancialOperation): Promise<"processed" | "quarantined"> {
+export async function executeDepositReleaseOperation(operation: FinancialOperation): Promise<ReleaseOutcome> {
+    const report = (status: ReleaseOutcome["status"]) => recordRelease({ operationId: operation.id, status });
+    try {
     const reservationId = operation.reservationId;
     if (!reservationId) throw new Error("Release reservation missing");
-    if (!await checkDepositReleaseOwnership(operation.id, reservationId)) return "quarantined";
+    if (!await checkDepositReleaseOwnership(operation.id, reservationId)) return report("quarantined");
     if (!stripe) throw new Error("Stripe unavailable");
     const client = stripe;
     const intentId = (operation.payload as { intentId: string }).intentId;
-    const cancelExactIntent = async () => {
-      if (!await checkDepositReleaseOwnership(operation.id, reservationId)) throw new UncertainOutcomeError("Deposit release quarantined");
+    const readExactIntent = async () => {
       const current = await client.paymentIntents.retrieve(intentId);
-      if (current.status === "canceled") return current;
+      if (current.id !== intentId) throw new UncertainOutcomeError("Deposit release provider identity mismatch");
       if (current.status === "succeeded") throw new UncertainOutcomeError("Captured deposit requires manual resolution");
-      if (!await checkDepositReleaseOwnership(operation.id, reservationId)) throw new UncertainOutcomeError("Deposit release quarantined before cancellation");
+      return current;
+    };
+    const cancelExactIntent = async () => {
       const canceled = await client.paymentIntents.cancel(intentId, {}, { idempotencyKey: operation.key });
+      if (canceled.id !== intentId) throw new UncertainOutcomeError("Deposit cancellation provider identity mismatch");
       if (canceled.status !== "canceled") throw new Error("Deposit release unresolved");
       return canceled;
     };
-    try { await runOperation(operation, {
+    await runOperation(operation, {
       apply: (tx, result) => syncDepositIntent(reservationId, result, tx),
       // A release's provider ID identifies its immutable target, not proof of
       // cancellation. It is safe to cancel that exact still-live target again.
       create: cancelExactIntent,
-      retrieve: cancelExactIntent,
-      discover: cancelExactIntent,
-    }); } catch (error) {
+      retrieve: readExactIntent,
+      discover: readExactIntent,
+      readBeforeDispatch: readExactIntent,
+      requiresDispatch: result => result.status !== "canceled",
+    });
+    return report("processed");
+    } catch {
       const current = await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } });
-      if (current.state === "REVIEW") return "quarantined";
-      throw error;
+      if (current.state === "REVIEW") return report("quarantined");
+      if (current.state === "OBSERVED" && (current.result as { status?: string } | null)?.status === "canceled") return report("processed");
+      const dispatched = await prisma.financialDispatch.count({ where: { operationId: operation.id, phase: { in: ["DISPATCHED", "UNCERTAIN"] } } });
+      return report(dispatched ? "uncertain" : "failed");
     }
-    return "processed";
 }
 
 export async function handleDepositAuthorizationCanceled(intent: Stripe.PaymentIntent) {

@@ -32,7 +32,7 @@ describe("ownership-blocked release recovery", () => {
     provider.paymentIntents.retrieve.mockResolvedValue({ id: validId, status: "requires_capture" });
     provider.paymentIntents.cancel.mockResolvedValue({ id: validId, status: "canceled", amount_capturable: 0 });
     const first = await recoverDeposits();
-    expect(first.releases).toEqual({ processed: 0, failed: 0, quarantined: 25 });
+    expect(first.releases).toEqual({ processed: 0, failed: 0, quarantined: 25, uncertain: 0 });
     expect(first.quarantined).toBe(25); expect(first.processed).toBe(first.deposits.processed);
     expect(first.pending).toBe(first.deposits.pending); expect(first.failed).toBe(first.deposits.pending);
     expect(provider.paymentIntents.retrieve).not.toHaveBeenCalled(); expect(provider.paymentIntents.cancel).not.toHaveBeenCalled();
@@ -45,9 +45,9 @@ describe("ownership-blocked release recovery", () => {
       expect(cases.find(c => c.operationId === op.id)).toMatchObject({ providerId: originals[i].providerId, evidence: expect.objectContaining({ generation: i + 1, ownership: expect.objectContaining({ kind: "BLOCKED" }) }) });
     }
     expect((await dueOperations("DEPOSIT_RELEASE")).filter(o => o.reservationId === r.id).map(o => o.id)).toEqual([releases[25].id]);
-    expect((await recoverDeposits()).releases).toEqual({ processed: 1, failed: 0, quarantined: 0 });
+    expect((await recoverDeposits()).releases).toEqual({ processed: 1, failed: 0, quarantined: 0, uncertain: 0 });
     expect(provider.paymentIntents.cancel).toHaveBeenCalledTimes(1); expect(provider.paymentIntents.cancel).toHaveBeenCalledWith(validId, {}, { idempotencyKey: releases[25].key });
-    expect((await recoverDeposits()).releases).toEqual({ processed: 0, failed: 0, quarantined: 0 });
+    expect((await recoverDeposits()).releases).toEqual({ processed: 0, failed: 0, quarantined: 0, uncertain: 0 });
     await executeDepositReleaseOperation(releases[0]);
     expect(await prisma.financialCase.count({ where: { reservationId: r.id } })).toBe(25);
     expect(await prisma.auditLog.count({ where: { entityId: { in: caseIds }, action: "financial-case.release-ownership-quarantined" } })).toBe(25);
@@ -56,7 +56,7 @@ describe("ownership-blocked release recovery", () => {
     const { r, release, intentId } = await fixture();
     if (kind === "missing") await prisma.providerObjectOwnership.delete({ where: { providerId: intentId } });
     else await prisma.providerObjectOwnership.update({ where: { providerId: intentId }, data: { kind } });
-    expect(await executeDepositReleaseOperation(release)).toBe("quarantined");
+    expect(await executeDepositReleaseOperation(release)).toMatchObject({ status: "quarantined" });
     expect(provider.paymentIntents.retrieve).not.toHaveBeenCalled(); expect(provider.paymentIntents.cancel).not.toHaveBeenCalled();
     const c = await prisma.financialCase.findFirstOrThrow({ where: { reservationId: r.id } }); caseIds.push(c.id);
     expect(c.operationId).toBe(release.id);
@@ -67,14 +67,14 @@ describe("ownership-blocked release recovery", () => {
     const running = executeDepositReleaseOperation(release); await entered.wait;
     expect((await prisma.financialOperation.findUniqueOrThrow({ where: { id: release.id } })).leaseToken).not.toBeNull();
     await prisma.providerObjectOwnership.update({ where: { providerId: intentId }, data: { kind: "BLOCKED" } });
-    resume.release(); expect(await running).toBe("quarantined");
+    resume.release(); expect(await running).toMatchObject({ status: "quarantined" });
     expect(provider.paymentIntents.cancel).not.toHaveBeenCalled();
     expect(await prisma.financialOperation.findUniqueOrThrow({ where: { id: release.id } })).toMatchObject({ state: "REVIEW", leaseToken: null, leaseExpiresAt: null });
     caseIds.push((await prisma.financialCase.findFirstOrThrow({ where: { reservationId: r.id } })).id);
   });
   it("reports provider failure as failed/pending rather than processed or quarantined", async () => {
     const { release } = await fixture(); provider.paymentIntents.retrieve.mockRejectedValue(new Error("Provider unavailable"));
-    const result = await recoverDeposits(); expect(result.releases).toEqual({ processed: 0, failed: 1, quarantined: 0 });
+    const result = await recoverDeposits(); expect(result.releases).toEqual({ processed: 0, failed: 1, quarantined: 0, uncertain: 0 });
     expect(result.pending).toBe(result.deposits.pending + 1); expect(result.failed).toBe(result.deposits.pending + 1); expect(result.processed).toBe(result.deposits.processed);
     expect((await prisma.financialOperation.findUniqueOrThrow({ where: { id: release.id } })).state).toBe("RETRY");
   });

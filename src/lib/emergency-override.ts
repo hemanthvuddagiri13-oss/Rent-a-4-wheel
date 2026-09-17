@@ -51,7 +51,8 @@ export async function performEmergencyOverride(params: {
   confirm: boolean;
   ip: string | null;
 }): Promise<{ id: string; resultingStatus: ReservationStatus }> {
-  if (!canPerformEmergencyOverride(params.actorRole)) {
+  const actor = await prisma.user.findUnique({ where: { id: params.actorId } });
+  if (!actor?.isActive || actor.email !== params.actorEmail || !canPerformEmergencyOverride(actor.role) || !canPerformEmergencyOverride(params.actorRole)) {
     throw new EmergencyOverrideError("Only a super administrator may perform an emergency override.", 403);
   }
   if (!params.confirm) {
@@ -80,12 +81,18 @@ export async function performEmergencyOverride(params: {
   const originalStatus = reservation.status;
 
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${params.actorId} FOR UPDATE`;
+    const currentActor = await tx.user.findUniqueOrThrow({ where: { id: params.actorId } });
+    if (!currentActor.isActive || currentActor.role !== "SUPER_ADMIN" || currentActor.email !== params.actorEmail) throw new EmergencyOverrideError("Emergency override authority was revoked.", 403);
     await transitionReservation(tx, {
       id: reservation.id,
       from: originalStatus,
       to: resultingStatus,
       force: true,
     });
+
+    if (params.action === "FORCE_START_TRIP") await tx.trip.upsert({ where: { reservationId: reservation.id }, create: { reservationId: reservation.id, startedAt: new Date(), startedByUserId: params.actorId }, update: { startedAt: new Date(), startedByUserId: params.actorId } });
+    else await tx.trip.updateMany({ where: { reservationId: reservation.id, endedAt: null }, data: { endedAt: new Date() } });
 
     await tx.emergencyOverrideRecord.create({
       data: {

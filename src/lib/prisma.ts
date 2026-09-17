@@ -4,10 +4,10 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+export function createSafePrismaClient(url?: string): PrismaClient {
+  return new PrismaClient({
     log: [], // Prisma exception formatting includes invocation arguments and PII.
+    ...(url ? { datasources: { db: { url } } } : {}),
   }).$extends({ query: { $allOperations: async ({ args, query }) => {
     try { return await query(args); }
     catch (error) {
@@ -15,5 +15,7 @@ export const prisma =
       throw new Error("DATABASE_OPERATION_FAILED");
     }
   } } }) as unknown as PrismaClient;
+}
+export const prisma = globalForPrisma.prisma ?? createSafePrismaClient();
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

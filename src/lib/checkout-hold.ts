@@ -43,6 +43,7 @@ export async function createOrRefreshHold(params: {
   try {
     const result = await db.$transaction(
       async (tx) => {
+        await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + vehicleId})`;
         await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${vehicleId} FOR UPDATE`;
         if (params.draftId) {
           let draft = await tx.bookingDraft.upsert({ where: { id: params.draftId }, update: {}, create: { id: params.draftId, customerId, vehicleId } });

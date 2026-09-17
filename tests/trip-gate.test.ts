@@ -43,9 +43,9 @@ async function fullySetUpReservation(paid = true) {
 
   await prisma.driverDocument.createMany({
     data: [
-      { userId: customer.id, reservationId: reservation.id, type: "LICENSE_FRONT", storageKey: "local:a", mimeType: "image/jpeg", fileSizeBytes: 10, contentSha256: "a" },
-      { userId: customer.id, reservationId: reservation.id, type: "LICENSE_BACK", storageKey: "local:b", mimeType: "image/jpeg", fileSizeBytes: 10, contentSha256: "b" },
-      { userId: customer.id, reservationId: reservation.id, type: "SELFIE_WITH_LICENSE", storageKey: "local:c", mimeType: "image/jpeg", fileSizeBytes: 10, contentSha256: "c" },
+      { userId: customer.id, reservationId: reservation.id, type: "LICENSE_FRONT", storageKey: "local:a", mimeType: "image/jpeg", fileSizeBytes: 10, malwareScanStatus: "CLEAN", contentSha256: "a" },
+      { userId: customer.id, reservationId: reservation.id, type: "LICENSE_BACK", storageKey: "local:b", mimeType: "image/jpeg", fileSizeBytes: 10, malwareScanStatus: "CLEAN", contentSha256: "b" },
+      { userId: customer.id, reservationId: reservation.id, type: "SELFIE_WITH_LICENSE", storageKey: "local:c", mimeType: "image/jpeg", fileSizeBytes: 10, malwareScanStatus: "CLEAN", contentSha256: "c" },
     ],
   });
 
@@ -172,4 +172,20 @@ describe("evaluateTripStartGate — individually missing preconditions", () => {
     expect(gate.canStart).toBe(false);
     expect(gate.reasons.some((r) => r.includes("check-in window"))).toBe(true);
   });
+});
+
+it("blocks a fully prepared trip if a required identity document becomes quarantined", async () => {
+  const { reservation } = await fullySetUpReservation();
+  await prisma.driverDocument.updateMany({ where: { reservationId: reservation.id, type: "LICENSE_FRONT" }, data: { malwareScanStatus: "QUARANTINED" } });
+  const gate = await evaluateTripStartGate(reservation.id);
+  expect(gate.canStart).toBe(false); expect(gate.reasons).toContain("Missing clean required document: LICENSE_FRONT.");
+});
+
+it("preserves signed agreement contents while allowing the first PDF attachment", async () => {
+  const { reservation } = await fullySetUpReservation();
+  const acceptance = await prisma.agreementAcceptance.findFirstOrThrow({ where: { reservationId: reservation.id } });
+  await expect(prisma.agreementAcceptance.update({ where: { id: acceptance.id }, data: { contentSnapshot: "altered terms" } })).rejects.toThrow();
+  await prisma.agreementAcceptance.update({ where: { id: acceptance.id }, data: { signedPdfStorageKey: "local:first.pdf" } });
+  await expect(prisma.agreementAcceptance.update({ where: { id: acceptance.id }, data: { signedPdfStorageKey: "local:replacement.pdf" } })).rejects.toThrow();
+  expect((await prisma.agreementAcceptance.findUniqueOrThrow({ where: { id: acceptance.id } })).contentSnapshot).toBe(acceptance.contentSnapshot);
 });

@@ -101,10 +101,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (current.financialDisposition !== "OPEN" || current.status !== "CHECKOUT_HOLD" || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout hold no longer valid");
       if (current.bookingFingerprint !== reservation.bookingFingerprint) throw new Error("Booking changed concurrently");
       if (!await isVehicleAvailable(current.vehicleId, current.pickupAt, current.returnAt, { tx, excludeReservationId: id })) throw new Error("Vehicle no longer available");
-      await tx.driverDocument.updateMany({
-        where: { id: { in: requestedDocIds }, userId: session.user.id },
+      const attached = await tx.driverDocument.updateMany({
+        where: { id: { in: requestedDocIds }, userId: session.user.id, deletedAt: null, OR: [{ reservationId: null }, { reservationId: reservation.id }] },
         data: { reservationId: reservation.id },
       });
+
+      if (attached.count !== requestedDocIds.length) throw new Error("Document ownership changed concurrently");
 
       await recordAgreementAcceptance(tx, {
         type: "RENTAL_AGREEMENT",

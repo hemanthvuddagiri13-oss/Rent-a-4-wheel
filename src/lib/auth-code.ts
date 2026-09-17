@@ -64,49 +64,22 @@ export async function requestAuthCode(params: { email: string; ip: string | null
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
 
-  const lastCode = await prisma.authCode.findFirst({
-    where: { email, purpose: "SIGN_IN" },
-    orderBy: { createdAt: "desc" },
-  });
-
-  if (lastCode) {
-    const elapsedSeconds = (now.getTime() - lastCode.createdAt.getTime()) / 1000;
-    if (elapsedSeconds < RESEND_COOLDOWN_SECONDS) {
-      return { ok: false, reason: "cooldown", retryAfterSeconds: Math.ceil(RESEND_COOLDOWN_SECONDS - elapsedSeconds) };
-    }
-  }
-
-  const emailCount = await prisma.authCode.count({
-    where: { email, purpose: "SIGN_IN", createdAt: { gt: hourAgo } },
-  });
-  if (emailCount >= MAX_CODES_PER_EMAIL_PER_HOUR) {
-    await auditAuthEvent({ action: "auth.code_rate_limited", email, metadata: { scope: "email", ip: params.ip } });
-    return { ok: false, reason: "rate_limited" };
-  }
-
-  if (params.ip) {
-    const ipCount = await prisma.authCode.count({
-      where: { requestIp: params.ip, purpose: "SIGN_IN", createdAt: { gt: hourAgo } },
-    });
-    if (ipCount >= MAX_CODES_PER_IP_PER_HOUR) {
-      await auditAuthEvent({ action: "auth.code_rate_limited", email, metadata: { scope: "ip", ip: params.ip } });
-      return { ok: false, reason: "rate_limited" };
-    }
-  }
-
   const code = generateSixDigitCode();
   const codeHash = await bcrypt.hash(code, BCRYPT_COST);
-
-  await prisma.authCode.create({
-    data: {
-      email,
-      purpose: "SIGN_IN",
-      codeHash,
-      maxAttempts: MAX_VERIFY_ATTEMPTS,
-      requestIp: params.ip,
-      expiresAt: new Date(now.getTime() + CODE_TTL_MINUTES * 60 * 1000),
-    },
+  const issued = await prisma.$transaction(async tx => {
+    // Stable ordering serializes both per-email and per-IP issuance limits.
+    const scopes = ["auth-email:" + email, ...(params.ip ? ["auth-ip:" + params.ip] : [])].sort();
+    for (const scope of scopes) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope},0))::text`;
+    const last = await tx.authCode.findFirst({ where: { email, purpose: "SIGN_IN" }, orderBy: { createdAt: "desc" } });
+    if (last && now.getTime() - last.createdAt.getTime() < RESEND_COOLDOWN_SECONDS * 1000) return { ok: false as const, reason: "cooldown" as const, retryAfterSeconds: Math.ceil((RESEND_COOLDOWN_SECONDS * 1000 - (now.getTime() - last.createdAt.getTime())) / 1000) };
+    const emailCount = await tx.authCode.count({ where: { email, purpose: "SIGN_IN", createdAt: { gt: hourAgo } } });
+    const ipCount = params.ip ? await tx.authCode.count({ where: { requestIp: params.ip, purpose: "SIGN_IN", createdAt: { gt: hourAgo } } }) : 0;
+    if (emailCount >= MAX_CODES_PER_EMAIL_PER_HOUR || ipCount >= MAX_CODES_PER_IP_PER_HOUR) return { ok: false as const, reason: "rate_limited" as const };
+    await tx.authCode.updateMany({ where: { email, purpose: "SIGN_IN", consumedAt: null }, data: { consumedAt: now } });
+    await tx.authCode.create({ data: { email, purpose: "SIGN_IN", codeHash, maxAttempts: MAX_VERIFY_ATTEMPTS, requestIp: params.ip, expiresAt: new Date(now.getTime() + CODE_TTL_MINUTES * 60000) } });
+    return { ok: true as const };
   });
+  if (!issued.ok) return issued;
 
   const emailResult = await sendEmail({
     to: email,
@@ -130,54 +103,22 @@ export async function verifyAuthCode(params: { email: string; code: string; ip: 
   const email = normalizeEmail(params.email);
   const code = params.code.trim();
 
-  const authCode = await prisma.authCode.findFirst({
-    where: { email, purpose: "SIGN_IN", consumedAt: null },
-    orderBy: { createdAt: "desc" },
+  const result: VerifyCodeResult = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"auth-email:" + email},0))::text`;
+    const authCode = await tx.authCode.findFirst({ where: { email, purpose: "SIGN_IN" }, orderBy: { createdAt: "desc" } });
+    if (!authCode || authCode.consumedAt) return { ok: false, reason: "no_code" };
+    if (authCode.expiresAt <= new Date()) return { ok: false, reason: "expired" };
+    if (authCode.attempts >= authCode.maxAttempts) return { ok: false, reason: "locked" };
+    // Reserve the attempt while holding the email guard, before expensive hash
+    // verification. Parallel guesses cannot each borrow the same final attempt.
+    await tx.authCode.update({ where: { id: authCode.id }, data: { attempts: { increment: 1 } } });
+    if (!await bcrypt.compare(code, authCode.codeHash)) return { ok: false, reason: "mismatch" };
+    if (authCode.expiresAt <= new Date()) return { ok: false, reason: "expired" };
+    await tx.authCode.update({ where: { id: authCode.id }, data: { consumedAt: new Date() } });
+    return { ok: true };
   });
-
-  if (!authCode) {
-    await auditAuthEvent({ action: "auth.code_verify_failed", email, metadata: { reason: "no_code", ip: params.ip } });
-    return { ok: false, reason: "no_code" };
-  }
-
-  if (authCode.expiresAt < new Date()) {
-    await auditAuthEvent({ action: "auth.code_verify_failed", email, metadata: { reason: "expired", ip: params.ip } });
-    return { ok: false, reason: "expired" };
-  }
-
-  if (authCode.attempts >= authCode.maxAttempts) {
-    await auditAuthEvent({ action: "auth.code_verify_failed", email, metadata: { reason: "locked", ip: params.ip } });
-    return { ok: false, reason: "locked" };
-  }
-
-  const matches = await bcrypt.compare(code, authCode.codeHash);
-  if (!matches) {
-    await prisma.authCode.update({ where: { id: authCode.id }, data: { attempts: { increment: 1 } } });
-    await auditAuthEvent({ action: "auth.code_verify_failed", email, metadata: { reason: "mismatch", ip: params.ip } });
-    return { ok: false, reason: "mismatch" };
-  }
-
-  // Atomic, conditional claim: two concurrent requests can both read this
-  // row and both find the hash matches (bcrypt.compare has no shared
-  // state), so single-use MUST be enforced by the write, not the read.
-  // `updateMany` guarded by the exact conditions re-checked above
-  // (unconsumed, under the attempt limit, not expired) means only one
-  // concurrent caller's update can ever affect a row — Postgres serializes
-  // concurrent UPDATEs to the same row, so exactly one of two simultaneous
-  // claims sees count === 1 and the other sees count === 0.
-  const now = new Date();
-  const claim = await prisma.authCode.updateMany({
-    where: { id: authCode.id, consumedAt: null, attempts: { lt: authCode.maxAttempts }, expiresAt: { gt: now } },
-    data: { consumedAt: now },
-  });
-
-  if (claim.count !== 1) {
-    await auditAuthEvent({ action: "auth.code_verify_failed", email, metadata: { reason: "already_consumed", ip: params.ip } });
-    return { ok: false, reason: "no_code" };
-  }
-
-  await auditAuthEvent({ action: "auth.code_verify_succeeded", email, metadata: { ip: params.ip } });
-  return { ok: true };
+  await auditAuthEvent({ action: result.ok ? "auth.code_verify_succeeded" : "auth.code_verify_failed", email, metadata: { ...(result.ok ? {} : { reason: result.reason }), ip: params.ip } });
+  return result;
 }
 
 export function getRequestIp(headers: Headers): string | null {

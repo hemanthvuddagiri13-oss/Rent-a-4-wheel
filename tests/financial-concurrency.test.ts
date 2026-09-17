@@ -5,7 +5,7 @@ import { prisma, createTestVehicle, createTestCustomer, createTestReservation, c
 import { withReservationLock, eventFence } from "@/lib/financial-locks";
 import { prepareOperation, runOperation } from "@/lib/financial-operations";
 import { transitionReservation } from "@/lib/reservation-state-machine";
-import { handlePaymentIntentSucceeded, handlePaymentIntentFailed } from "@/lib/stripe-webhook-handlers";
+import { handlePaymentIntentSucceeded, handlePaymentIntentFailed, settleTerminatedReservation } from "@/lib/stripe-webhook-handlers";
 import { createOrRefreshHold } from "@/lib/checkout-hold";
 import { expireStaleReservations } from "@/lib/cleanup";
 import { assertFinancialTripStart } from "@/lib/financial-locks";
@@ -115,18 +115,21 @@ describe("durable financial operations with real concurrent connections", () => 
     expect((await prisma.reservation.findUniqueOrThrow({ where: { id: r.id } })).status).toBe("CONFIRMED");
   });
 
-  it("refund timeout wins while a deposit request is in flight and releases its eventual authorization", async () => {
+  it("refund timeout wins while deposit retrieval is in flight and releases its eventual authorization", async () => {
     const { r, p } = await fixture(false, 30000);
     const entered = barrier(), release = barrier();
     let remote = { id: `pi_timeout_${r.id}`, status: "requires_capture", amount: 30000, amount_capturable: 30000, currency: "usd", created: Math.floor(Date.now()/1000), latest_charge: { id: "ch_test", created: Math.floor(Date.now()/1000), payment_method_details: { card: { capture_before: Math.floor(Date.now()/1000)+3600 } } } };
-    provider.paymentIntents.create.mockImplementation(async () => { entered.release(); await release.wait; return remote; });
-    provider.paymentIntents.retrieve.mockImplementation(async () => remote);
+    const operation = await withReservationLock(r.id, tx => prepareOperation(tx, { key: "deposit-timeout:" + r.id, kind: "DEPOSIT", reservationId: r.id, payload: { amount: 30000, currency: "usd" } }));
+    await prisma.financialOperation.update({ where: { id: operation.id }, data: { providerId: remote.id, generation: 1 } });
+    await prisma.securityDeposit.update({ where: { reservationId: r.id }, data: { operationId: operation.id, generation: 1, stripePaymentIntentId: remote.id } });
+    provider.paymentIntents.retrieve.mockImplementation(async () => remote).mockImplementationOnce(async () => { entered.release(); await release.wait; return remote; });
     provider.paymentIntents.cancel.mockImplementation(async () => { remote = { ...remote, status: "canceled" }; return remote; });
     provider.refunds.create.mockResolvedValue({ id: `re_timeout_${r.id}`, status: "succeeded" });
     const success = handlePaymentIntentSucceeded({ id: p.stripePaymentIntentId, status: "succeeded", payment_method: "pm_test", customer: "cus_test" } as never);
     await entered.wait;
     await expireStaleReservations(new Date(Date.now() + 31 * 60000));
     release.release(); await success;
+    await settleTerminatedReservation(r.id);
     const saved = await prisma.reservation.findUniqueOrThrow({ where: { id: r.id }, include: { deposit: true, refunds: true } });
     expect(saved.status).toBe("EXPIRED"); expect(saved.financialDisposition).toBe("TERMINATED");
     expect(saved.deposit?.status).toBe("CANCELLED"); expect(saved.refunds).toHaveLength(1); expect(saved.refunds[0].status).toBe("SUCCEEDED");
@@ -154,8 +157,10 @@ describe("durable financial operations with real concurrent connections", () => 
     const success = handlePaymentIntentSucceeded({ id: p.stripePaymentIntentId, status: "succeeded", payment_method: "pm_test", customer: "cus_test" } as never);
     await entered.wait;
     // A distinct database connection commits cancellation while Stripe is in flight.
-    await withReservationLock(r.id, tx => transitionReservation(tx, { id: r.id, from: "PAYMENT_FAILED", to: cancellation, force: true }), b);
-    release.release(); await success;
+    const [{ pid }] = await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+    const cancel = withReservationLock(r.id, tx => transitionReservation(tx, { id: r.id, from: "PAYMENT_FAILED", to: cancellation, force: true }), b);
+    try { await waitForDatabaseLock(pid); } finally { release.release(); }
+    await Promise.all([cancel, success]); await settleTerminatedReservation(r.id);
     const saved = await prisma.reservation.findUniqueOrThrow({ where: { id: r.id }, include: { deposit: true, refunds: true } });
     expect(saved.status).toBe(cancellation); expect(saved.deposit?.status).toBe("CANCELLED");
     expect(saved.refunds[0]?.status).toBe("SUCCEEDED"); expect(provider.paymentIntents.cancel).toHaveBeenCalledOnce();
@@ -197,17 +202,18 @@ describe("durable financial operations with real concurrent connections", () => 
       await prisma.$executeRawUnsafe(`DROP TRIGGER "${trigger}" ON "Refund"`);
       await prisma.$executeRawUnsafe(`DROP FUNCTION "${trigger}"()`);
     }
+    provider.refunds.retrieve.mockResolvedValue(remote.get(refund.idempotencyKey));
     await executeRefundOperation(refund.id, p.stripePaymentIntentId);
-    expect(provider.refunds.create).toHaveBeenCalledTimes(2);
+    expect(provider.refunds.create).toHaveBeenCalledTimes(1);
     expect(remote.size).toBe(1);
     expect((await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } })).status).toBe("SUCCEEDED");
   });
 
   it("unit-checks the lease primitive independently of financial projections", async () => {
     const { r } = await fixture();
-    const op = await withReservationLock(r.id, tx => prepareOperation(tx, { key: `lease:${r.id}`, kind: "TEST", reservationId: r.id, payload: { amount: 100 } }));
+    const op = await withReservationLock(r.id, tx => prepareOperation(tx, { key: `lease:${r.id}`, kind: "CUSTOMER", payload: { amount: 100 } }));
     const entered = barrier(), release = barrier();
-    const old = runOperation(op, { create: async () => { entered.release(); await release.wait; return { id: "same-provider-operation" }; }, retrieve: async id => ({ id }), discover: async () => null });
+    const old = runOperation(op, { readBeforeDispatch: async () => { entered.release(); await release.wait; return { id: "same-provider-operation" }; }, requiresDispatch: () => true, create: async () => ({ id: "same-provider-operation" }), retrieve: async id => ({ id }), discover: async () => null });
     const oldRejected = expect(old).rejects.toThrow("lease lost");
     await entered.wait;
     await prisma.financialOperation.update({ where: { id: op.id }, data: { leaseExpiresAt: new Date(0) } });

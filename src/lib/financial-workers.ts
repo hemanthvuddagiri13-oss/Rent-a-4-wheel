@@ -1,3 +1,4 @@
+import { collectReleases } from "@/lib/release-outcomes";
 import { safeLog } from "@/lib/safe-log";
 import type { FinancialOperation } from "@prisma/client";
 import { executeRentalOperation } from "@/lib/rental-payment";
@@ -55,6 +56,10 @@ export async function recoverRefunds() {
   });
 }
 export async function recoverDeposits() {
+  const { result: deposits, releases, releaseOperations } = await collectReleases(recoverDepositQueue);
+  return { processed: deposits.processed + releases.processed, pending: deposits.pending + releases.failed + releases.uncertain, failed: deposits.pending + releases.failed, quarantined: releases.quarantined, uncertain: releases.uncertain, releases, releaseOperations, deposits };
+}
+async function recoverDepositQueue() {
   const legacyIds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT d."id" FROM "SecurityDeposit" d
     JOIN "ProviderObjectOwnership" p ON p."providerId"=d."stripePaymentIntentId" AND p."kind"='DEPOSIT' AND p."reservationId"=d."reservationId"
     WHERE NOT d."legacyUncertain" AND d."stripePaymentIntentId" IS NOT NULL
@@ -67,11 +72,7 @@ export async function recoverDeposits() {
     await tx.securityDeposit.update({ where: { id: deposit.id }, data: { operationId: op.id, generation: { increment: 1 } } });
   });
   const releases = await dueOperations("DEPOSIT_RELEASE");
-  const releaseCounts = { processed: 0, failed: 0, quarantined: 0 };
-  for (const op of releases) {
-    try { releaseCounts[await executeDepositReleaseOperation(op)]++; }
-    catch (error) { releaseCounts.failed++; safeLog("RELEASE_RECOVERY_PENDING", error); }
-  }
+  for (const op of releases) await executeDepositReleaseOperation(op);
   const operations = await dueOperations("DEPOSIT");
   const deposits = await each(operations, async operation => {
     if (!operation.reservationId) return;
@@ -89,8 +90,7 @@ export async function recoverDeposits() {
       if (deposit?.operationId && deposit.operationId !== observed.id && observed.providerId) await releaseDeposits(r.id, observed.providerId);
     }
   });
-  return { processed: deposits.processed + releaseCounts.processed, pending: deposits.pending + releaseCounts.failed,
-    failed: deposits.pending + releaseCounts.failed, quarantined: releaseCounts.quarantined, releases: releaseCounts, deposits };
+  return deposits;
 }
 export async function recoverReconciliation() {
   await expireStaleReservations();

@@ -47,5 +47,10 @@ jobs:
         run: npm test
       - name: Full suite, second run
         run: npm test
+      - name: Dispatch concurrency stability (five consecutive runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/phase1-dispatch-concurrency.test.ts tests/batch1f-release-worker.test.ts || exit 1
+          done
       - name: Production build
         run: npm run build

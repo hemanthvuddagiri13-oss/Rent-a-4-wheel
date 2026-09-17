@@ -819,6 +819,7 @@ model OutboxMessage {
 // Immutable provider request plus resumable execution state. Payload contains
 // provider IDs, never card details. Unknown outcomes retain their original key.
 model FinancialOperation {
+  dispatches FinancialDispatch[]
   consecutiveFailures Int @default(0)
   deposits SecurityDeposit[]
   generation Int?
@@ -1501,6 +1502,19 @@ model SiteSetting {
 }
 
 // Durable operator queue. IDs/evidence are retained after resolution.
+model FinancialDispatch {
+  id String @id @default(cuid())
+  operationId String
+  operation FinancialOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  leaseToken String
+  phase String
+  providerId String?
+  result Json?
+  errorCode String?
+  createdAt DateTime @default(now())
+  @@index([operationId, createdAt])
+}
+
 model ProviderObjectOwnership {
   providerId String @id
   kind String

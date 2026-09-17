@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 const boundary = vi.hoisted(() => ({ db: null as unknown as PrismaClient, intents: vi.fn(), refunds: vi.fn() }));
-vi.mock("@/lib/prisma", () => ({ get prisma() { return boundary.db; } }));
+vi.mock("@/lib/prisma", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/prisma")>(), get prisma() { return boundary.db; } }));
 vi.mock("@/lib/stripe", () => ({ stripe: { paymentIntents: { retrieve: boundary.intents }, refunds: { create: boundary.refunds } } }));
 import { resolveFinancialCase } from "@/lib/financial-case-resolution";
 import { executeRefundOperation } from "@/lib/refund-operations";
@@ -15,7 +15,7 @@ function sql(db: string, args: string[]) { execFileSync("psql", [db, "-v", "ON_E
 describe("migration-generated reservation-level reconciliation", () => {
   it("links the existing rental evidence, preserves audit history and settles through real services", async () => {
     const name = "batch1f_" + Date.now(), db = url(name); sql(url("postgres"), ["-c", `CREATE DATABASE "${name}"`]);
-    const client = new PrismaClient({ datasources: { db: { url: db } } }); boundary.db = client;
+    const client = new PrismaClient({ datasources: { db: { url: db } } }); boundary.db = client; vi.stubEnv("DIRECT_DATABASE_URL", db);
     try {
       for (const migration of migrations.filter(m => m <= beforeCases)) {
         sql(db, ["-f", path.join(root, "prisma/migrations", migration, "migration.sql")]);
@@ -64,6 +64,6 @@ describe("migration-generated reservation-level reconciliation", () => {
       expect(await client.financialOperation.count({ where: { kind: "RENTAL" } })).toBe(1);
       expect(await client.providerObjectOwnership.count({ where: { providerId: evidence.id } })).toBe(1);
       expect(await client.auditLog.count({ where: { entityId: c.id } })).toBe(3);
-    } finally { await client.$disconnect(); sql(url("postgres"), ["-c", `DROP DATABASE "${name}"`]); }
+    } finally { vi.unstubAllEnvs(); await client.$disconnect(); sql(url("postgres"), ["-c", `DROP DATABASE "${name}"`]); }
   }, 120000);
 });

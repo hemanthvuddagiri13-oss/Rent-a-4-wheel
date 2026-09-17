@@ -13,6 +13,8 @@ export interface HostContext {
  * "no access to any vehicle or booking," never fall back to "admin-like."
  */
 export async function getHostContext(userId: string): Promise<HostContext | null> {
+  const actor = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, isActive: true } });
+  if (!actor?.isActive || !["HOST", "HOST_EMPLOYEE"].includes(actor.role)) return null;
   const hostProfile = await prisma.hostProfile.findUnique({ where: { userId }, select: { id: true } });
   if (hostProfile) return { hostId: hostProfile.id, role: "OWNER" };
 

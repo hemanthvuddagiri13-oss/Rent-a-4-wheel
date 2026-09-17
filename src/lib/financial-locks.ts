@@ -8,6 +8,7 @@ export const eventFence = new AsyncLocalStorage<{ id: string; token: string }>()
 export async function assertEventFence(tx: Prisma.TransactionClient) {
   const fence = eventFence.getStore();
   if (!fence) return;
+  await tx.$queryRaw`SELECT financial_guard_xact(${'event:' + fence.id})`;
   const rows = await tx.$queryRaw<Array<{ id: string }>>`
     SELECT "id" FROM "StripeEvent" WHERE "id" = ${fence.id}
       AND "leaseToken" = ${fence.token} AND "status" = 'PROCESSING'
@@ -20,6 +21,7 @@ export async function assertEventFence(tx: Prisma.TransactionClient) {
 export async function lockReservation(tx: Prisma.TransactionClient, id: string) {
   await assertEventFence(tx);
   const row = await tx.reservation.findUniqueOrThrow({ where: { id }, select: { vehicleId: true } });
+  await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + row.vehicleId})`;
   await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${row.vehicleId} FOR UPDATE`;
   await tx.$queryRaw`SELECT "id" FROM "Reservation" WHERE "id" = ${id} FOR UPDATE`;
   return tx.reservation.findUniqueOrThrow({ where: { id } });

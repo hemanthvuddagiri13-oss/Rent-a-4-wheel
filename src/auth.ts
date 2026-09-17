@@ -9,6 +9,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   logger: { error: error => safeLog("AUTH_FAILED", error), warn: () => safeLog("AUTH_WARNING"), debug: () => {} },
   session: { strategy: "jwt" },
+  callbacks: {
+    ...authConfig.callbacks,
+    async session(params) {
+      const session = await authConfig.callbacks.session(params);
+      const current = session.user?.id ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { id: true, role: true, isActive: true, email: true, name: true } }) : null;
+      if (!current?.isActive) session.user = undefined as never;
+      else Object.assign(session.user, { id: current.id, role: current.role, email: current.email, name: current.name });
+      return session;
+    },
+  },
   providers: [
     Credentials({
       id: "email-code",

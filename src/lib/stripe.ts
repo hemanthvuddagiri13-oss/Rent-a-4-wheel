@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 const secretKey = process.env.STRIPE_SECRET_KEY;
 
-export const stripe = secretKey ? new Stripe(secretKey) : null;
+export const stripe = secretKey ? new Stripe(secretKey, { timeout: 8000, maxNetworkRetries: 0 }) : null;
 
 export function isStripeConfigured(): boolean {
   return Boolean(stripe && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
