@@ -16,6 +16,7 @@ import type { ReservationStatus } from "@prisma/client";
 // auditable, and a future phase can add per-step UI/endpoints without a
 // schema change.
 const PRE_TRIP_CHAIN: ReservationStatus[] = [
+  "CONFIRMED",
   "DOCUMENTS_REQUIRED",
   "READY_FOR_CHECK_IN",
   "CHECK_IN_PROGRESS",

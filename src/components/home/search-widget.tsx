@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
-const LOCATIONS = ["Dallas Downtown", "DFW Airport", "Dallas Love Field", "Plano", "Irving"];
+const LOCATIONS = ["Dallas", "Plano", "Irving", "Fort Worth", "Arlington"];
 
 function defaultDate(daysFromNow: number) {
   const d = new Date();

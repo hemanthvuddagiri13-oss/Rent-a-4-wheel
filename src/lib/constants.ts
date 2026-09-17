@@ -3,10 +3,10 @@ export const SITE_TAGLINE = "DRIVE MORE POSSIBILITIES";
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://renta4wheel.com";
 
 export const NAV_LINKS = [
-  { href: "/", label: "Home" },
+  { href: "/account", label: "My trips" },
   { href: "/vehicles", label: "Vehicles" },
   { href: "/how-it-works", label: "How It Works" },
-  { href: "/long-term-rentals", label: "Long-Term Rentals" },
+  { href: "/host", label: "Host workspace" },
   { href: "/faq", label: "FAQ" },
   { href: "/contact", label: "Contact" },
 ] as const;

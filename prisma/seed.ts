@@ -257,6 +257,7 @@ async function main() {
 
   // --- Legal document placeholders ---------------------------------------------
   const legalDocs: Array<{ type: LegalDocumentType; title: string }> = [
+    { type: LegalDocumentType.HOST_AGREEMENT, title: "Host Vehicle Listing and Management Agreement" },
     { type: LegalDocumentType.RENTAL_AGREEMENT, title: "Rental Agreement" },
     { type: LegalDocumentType.TERMS_AND_CONDITIONS, title: "Terms & Conditions" },
     { type: LegalDocumentType.PRIVACY_POLICY, title: "Privacy Policy" },
@@ -274,7 +275,7 @@ async function main() {
         title: doc.title,
         version: "v1-draft",
         needsAttorneyReview: true,
-        content: `PLACEHOLDER — ${doc.title}\n\nThis is placeholder content generated for development purposes only. It has NOT been reviewed or approved by a licensed Texas attorney and must not be used in production. Replace this text in the admin dashboard (Settings, Legal Documents) with attorney-approved language before accepting real bookings or payments.`,
+        content: `NOT APPROVED FOR PRODUCTION — TEXAS ATTORNEY REVIEW REQUIRED\n\nDraft placeholder: ${doc.title}. Replace this placeholder with attorney-approved language before enabling signatures.`,
       },
     });
   }

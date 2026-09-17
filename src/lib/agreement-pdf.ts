@@ -15,14 +15,18 @@ export async function generateRentalAgreementPdf(params: {
   vehicle: Vehicle;
   acceptance: AgreementAcceptance;
 }): Promise<Uint8Array> {
-  const { reservation, vehicle, acceptance } = params;
+  const { acceptance } = params;
+  const frozen = acceptance.subjectSnapshot as { reservation?: Record<string, unknown>; vehicle?: Vehicle } | null;
+  const vehicle = frozen?.vehicle ?? params.vehicle;
+  const reservation = frozen?.reservation ? { ...params.reservation, ...frozen.reservation,
+    pickupAt: new Date(String(frozen.reservation.pickupAt)), returnAt: new Date(String(frozen.reservation.returnAt)) } as Reservation : params.reservation;
 
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   let page = pdfDoc.addPage([612, 792]);
   const gold = rgb(0.831, 0.686, 0.216);
-  const white = rgb(1, 1, 1);
+  const white = rgb(0.08, 0.08, 0.08);
   const gray = rgb(0.55, 0.55, 0.55);
 
   let y = 740;

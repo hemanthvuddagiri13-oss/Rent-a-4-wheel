@@ -51,6 +51,9 @@ export async function recordAgreementAcceptance(
   }
 
   const contentHash = sha256Hex(legalDocument.content);
+  const vehicle = params.vehicleId ? await tx.vehicle.findUnique({ where: { id: params.vehicleId } }) : null;
+  const reservation = params.reservationId ? await tx.reservation.findUnique({ where: { id: params.reservationId }, include: { vehicle: true } }) : null;
+  const subjectSnapshot = JSON.parse(JSON.stringify(reservation ? { reservation, vehicle: reservation.vehicle } : { vehicle })) as Prisma.InputJsonValue;
 
   const acceptance = await tx.agreementAcceptance.create({
     data: {
@@ -58,6 +61,7 @@ export async function recordAgreementAcceptance(
       documentVersion: legalDocument.version,
       contentHash,
       contentSnapshot: legalDocument.content,
+      subjectSnapshot,
       reservationId: params.reservationId,
       vehicleId: params.vehicleId,
       signedByUserId: params.signedByUserId,
@@ -93,8 +97,8 @@ export async function generateAndStoreSignedAgreementPdf(reservationId: string) 
   const pdfBytes = await generateRentalAgreementPdf({ reservation, vehicle: reservation.vehicle, acceptance });
   const { storageKey } = await storePrivateDocument(Buffer.from(pdfBytes), "application/pdf");
 
-  await withReservationLock(reservationId, tx => tx.agreementAcceptance.update({
-    where: { id: acceptance.id },
+  await withReservationLock(reservationId, tx => tx.agreementAcceptance.updateMany({
+    where: { id: acceptance.id, signedPdfStorageKey: null },
     data: { signedPdfStorageKey: storageKey },
   }));
 }

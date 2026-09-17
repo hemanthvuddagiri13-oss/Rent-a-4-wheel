@@ -4,7 +4,7 @@ import type { ReviewData } from "@/components/home/reviews-carousel";
 export async function getPublishedReviews(limit = 10): Promise<ReviewData[]> {
   try {
     const reviews = await prisma.review.findMany({
-      where: { isPublished: true },
+      where: { isPublished: true, isDemo: false },
       select: { id: true, authorName: true, rating: true, comment: true },
       orderBy: { createdAt: "desc" },
       take: limit,

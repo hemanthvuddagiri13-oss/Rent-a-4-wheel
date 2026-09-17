@@ -13,8 +13,12 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { Logo } from "@/components/layout/logo";
+import { auth } from "@/auth";
+import { canAccessAdmin } from "@/lib/rbac";
+import { redirect } from "next/navigation";
 
 const links = [
+  { href: "/admin/marketplace", label: "Marketplace operations", icon: Users },
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/vehicles", label: "Vehicles", icon: Car },
   { href: "/admin/financial-cases", label: "Financial reconciliation", icon: ClipboardList },
@@ -29,7 +33,9 @@ const links = [
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
-export default function AdminLayout({ children }: LayoutProps<"/admin">) {
+export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
+  const session = await auth();
+  if (!session?.user || !canAccessAdmin(session.user.role)) redirect("/sign-in?callbackUrl=/admin");
   return (
     <div className="mx-auto flex max-w-[1600px] flex-col lg:flex-row">
       <aside className="shrink-0 border-b border-white/10 bg-surface/60 lg:w-64 lg:border-b-0 lg:border-r">

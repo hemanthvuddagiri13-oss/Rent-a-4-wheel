@@ -2,6 +2,7 @@ import { withReservationLock } from "@/lib/financial-locks";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { tripParticipant } from "@/lib/trip-experience";
 
 /**
  * A condition report can only be accepted by its own author — this is the
@@ -27,7 +28,14 @@ export async function POST(
     return NextResponse.json({ success: true, alreadyAccepted: true });
   }
 
-  await withReservationLock(reservationId, tx => tx.conditionReport.update({ where: { id: reportId }, data: { acceptedAt: new Date() } }));
+  try {
+    await withReservationLock(reservationId, async tx => {
+      const { reservation } = await tripParticipant(tx, session.user.id, reservationId);
+      const allowed = report.phase === "PRE_TRIP" ? ["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START"] : ["RETURN_IN_PROGRESS"];
+      if (!allowed.includes(reservation.status)) throw new Error("Inspection phase closed");
+      await tx.conditionReport.updateMany({ where: { id: reportId, submittedById: session.user.id, acceptedAt: null }, data: { acceptedAt: new Date() } });
+    });
+  } catch { return NextResponse.json({ error: "Inspection is unavailable or its phase has closed." }, { status: 409 }); }
   await prisma.tripEvent.create({
     data: {
       reservationId,

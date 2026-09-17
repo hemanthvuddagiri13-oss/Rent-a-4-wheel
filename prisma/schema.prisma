@@ -275,6 +275,9 @@ enum OwnershipType {
 }
 
 model Vehicle {
+  listingApproval String @default("APPROVED")
+  location String @default("Dallas, TX")
+  rules String? @db.Text
   id   String @id @default(cuid())
   slug String @unique
 
@@ -396,6 +399,7 @@ model VehicleFeatureOnVehicle {
 // ---------------------------------------------------------------------------
 
 model VehicleOwner {
+  hostId String?
   id    String  @id @default(cuid())
   name  String
   email String?
@@ -1034,6 +1038,7 @@ enum LegalDocumentType {
 // Creating one is refused server-side while the source LegalDocument is
 // still flagged `needsAttorneyReview` (see src/lib/agreements.ts).
 model AgreementAcceptance {
+  subjectSnapshot Json?
   id   String            @id @default(cuid())
   type LegalDocumentType
 
@@ -1523,6 +1528,26 @@ model ProviderObjectOwnership {
   paymentId String?
   depositId String?
   refundId String?
+}
+
+model MarketplaceFile {
+  id String @id @default(cuid())
+  hostId String
+  vehicleId String?
+  uploadedById String
+  purpose String
+  storageKey String
+  mimeType String
+  sha256 String
+  scanStatus String
+  createdAt DateTime @default(now())
+  @@index([hostId, vehicleId])
+}
+
+model MarketplaceRateLimit {
+  key String @id
+  windowStart DateTime @default(now())
+  count Int @default(1)
 }
 
 model FinancialCase {

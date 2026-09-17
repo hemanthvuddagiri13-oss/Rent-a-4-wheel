@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import { bookingInstant } from "@/lib/booking-time";
+import { getSiteSettings } from "@/lib/settings";
+import { SearchWidget } from "@/components/home/search-widget";
 import { VehicleFilters, SortSelect } from "@/components/vehicles/vehicle-filters";
 import { VehicleCard } from "@/components/vehicles/vehicle-card";
 import { searchVehicles, getDistinctMakes, type VehicleSearchFilters } from "@/lib/data/vehicles";
@@ -12,11 +15,9 @@ export const metadata: Metadata = {
 
 export const revalidate = 0;
 
-function parseDate(dateStr?: string, timeStr?: string): Date | undefined {
+function parseDate(dateStr: string | undefined, timeStr: string | undefined, zone: string): Date | undefined {
   if (!dateStr) return undefined;
-  const iso = `${dateStr}T${timeStr || "10:00"}:00`;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? undefined : d;
+  return bookingInstant(`${dateStr}T${timeStr || "10:00"}`, zone);
 }
 
 export default async function VehiclesPage({
@@ -26,9 +27,12 @@ export default async function VehiclesPage({
 }) {
   const sp = await searchParams;
 
+  const zone = (await getSiteSettings()).bookingTimezone;
+  let pickupAt: Date | undefined, returnAt: Date | undefined;
+  let dateError = "";
+  try { pickupAt = parseDate(sp.pickupDate, sp.pickupTime, zone); returnAt = parseDate(sp.returnDate, sp.returnTime, zone); if ((pickupAt && !returnAt) || (!pickupAt && returnAt) || (pickupAt && returnAt && returnAt <= pickupAt)) throw new Error("Choose a return after pickup."); } catch (error) { dateError = error instanceof Error ? error.message : "Invalid dates."; }
   const filters: VehicleSearchFilters = {
-    pickupAt: parseDate(sp.pickupDate, sp.pickupTime),
-    returnAt: parseDate(sp.returnDate, sp.returnTime),
+    pickupAt, returnAt, location: sp.location,
     category: sp.category,
     priceMin: sp.priceMin ? Number(sp.priceMin) : undefined,
     priceMax: sp.priceMax ? Number(sp.priceMax) : undefined,
@@ -38,7 +42,7 @@ export default async function VehiclesPage({
     sort: (sp.sort as VehicleSearchFilters["sort"]) ?? "recommended",
   };
 
-  const [vehicles, makes] = await Promise.all([searchVehicles(filters), getDistinctMakes()]);
+  const [vehicles, makes] = await Promise.all([dateError ? Promise.resolve([]) : searchVehicles(filters), getDistinctMakes()]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
@@ -53,6 +57,7 @@ export default async function VehiclesPage({
         </p>
       </div>
 
+      <div className="mb-8"><SearchWidget /><p className="mt-2 text-xs text-silver">Times are in {zone}.</p>{dateError && <p role="alert" className="mt-3 text-red-300">{dateError}</p>}</div>
       <div className="flex flex-col gap-8 lg:flex-row">
         <VehicleFilters makes={makes} />
 
