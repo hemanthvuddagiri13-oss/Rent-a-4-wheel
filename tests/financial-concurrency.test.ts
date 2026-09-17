@@ -49,7 +49,7 @@ describe("durable financial operations with real concurrent connections", () => 
     const refund = await getOrCreateRefundOperation({ reservationId: r.id, paymentId: p.id, amountCents: 15000, idempotencyKey: `rotation:${p.id}` });
     await prisma.refund.update({ where: { id: refund.id }, data: { updatedAt: new Date(0) } });
     // Scope the worker batch to this fixture; execution and projections use PostgreSQL.
-    vi.spyOn(workerDb.refund, "findMany").mockResolvedValueOnce([{ ...refund, payment: p }] as never);
+    vi.spyOn(workerDb.refund, "findMany").mockResolvedValueOnce([]).mockResolvedValueOnce([{ ...refund, payment: p }] as never);
     provider.refunds.create.mockRejectedValueOnce(new Error("Provider outcome unknown"));
     expect(await recoverRefunds()).toEqual({ processed: 0, pending: 1 });
     const current = await prisma.refund.findUniqueOrThrow({ where: { id: refund.id } });
@@ -128,7 +128,7 @@ describe("durable financial operations with real concurrent connections", () => 
     await expireStaleReservations(new Date(Date.now() + 31 * 60000));
     release.release(); await success;
     const saved = await prisma.reservation.findUniqueOrThrow({ where: { id: r.id }, include: { deposit: true, refunds: true } });
-    expect(saved.status).toBe("EXPIRED"); expect(saved.financialDisposition).toBe("REFUND_REQUIRED");
+    expect(saved.status).toBe("EXPIRED"); expect(saved.financialDisposition).toBe("TERMINATED");
     expect(saved.deposit?.status).toBe("CANCELLED"); expect(saved.refunds).toHaveLength(1); expect(saved.refunds[0].status).toBe("SUCCEEDED");
   });
   it("does not downgrade capture when a failure handler resumes after success commits", async () => {

@@ -56,6 +56,7 @@ export const emptyDriverForm: DriverFormState = {
 };
 
 export interface BookingState {
+  bookingTimezone?: string;
   draftId: string;
   revision: number;
   checkoutComplete?: boolean;

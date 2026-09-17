@@ -39,6 +39,8 @@ export default async function AdminSettingsPage() {
               <Input id="address" name="address" defaultValue={settings.address} className="mt-1.5" />
             </div>
             <div className="sm:col-span-2">
+              <Label htmlFor="bookingTimezone">Booking time zone (IANA)</Label>
+              <Input id="bookingTimezone" name="bookingTimezone" defaultValue={settings.bookingTimezone} />
               <Label htmlFor="operatingHours">Operating Hours</Label>
               <Input id="operatingHours" name="operatingHours" defaultValue={settings.operatingHours} className="mt-1.5" />
             </div>

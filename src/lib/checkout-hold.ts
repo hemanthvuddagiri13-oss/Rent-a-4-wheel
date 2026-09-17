@@ -1,3 +1,4 @@
+import { bookingDays } from "@/lib/booking-time";
 import { fingerprint } from "@/lib/financial-operations";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { Reservation } from "@prisma/client";
@@ -22,6 +23,7 @@ export class HoldError extends Error {
 export async function createOrRefreshHold(params: {
   customerId: string;
   vehicleId: string;
+  bookingTimezone?: string;
   pickupAt: Date;
   returnAt: Date;
   extraIds: string[];
@@ -34,8 +36,9 @@ export async function createOrRefreshHold(params: {
     throw new HoldError("Return date must be after pickup date.", 400);
   }
 
-  const bookingFingerprint = fingerprint({ customerId, vehicleId, pickupAt, returnAt, extraIds: [...new Set(extraIds)].sort(), couponCode: couponCode?.trim().toUpperCase() ?? "" });
   const settings = await getSiteSettings();
+  const bookingTimezone = params.bookingTimezone ?? settings.bookingTimezone;
+  const bookingFingerprint = fingerprint({ customerId, vehicleId, bookingTimezone, pickupAt, returnAt, extraIds: [...new Set(extraIds)].sort(), couponCode: couponCode?.trim().toUpperCase() ?? "" });
   try {
     const result = await db.$transaction(
       async (tx) => {
@@ -86,10 +89,11 @@ export async function createOrRefreshHold(params: {
           ? await tx.extra.findMany({ where: { id: { in: extraIds }, isActive: true } })
           : [];
 
+        if (extras.length !== new Set(extraIds).size) throw new HoldError("A selected extra is unavailable. Return to Extras and update your selection.", 400);
         let coupon = null;
         if (couponCode) {
-          const found = await tx.coupon.findUnique({ where: { code: couponCode.toUpperCase() } });
-          const days = Math.max(1, Math.ceil((returnAt.getTime() - pickupAt.getTime()) / 86_400_000));
+          const found = await tx.coupon.findUnique({ where: { code: couponCode.trim().toUpperCase() } });
+          const days = bookingDays(pickupAt, returnAt, bookingTimezone);
           if (found) {
             const validity = isCouponValid(found, { rentalDays: days, vehicleId });
             if (validity.valid) coupon = found;
@@ -97,13 +101,14 @@ export async function createOrRefreshHold(params: {
         }
 
 
+        if (couponCode?.trim() && !coupon) throw new HoldError("Coupon is invalid or unavailable. Remove it or enter a valid code.", 400);
         const breakdown = calculatePricing({
           vehicle,
           pickupAt,
           returnAt,
           extras: extras.map((extra) => ({ extra, quantity: 1 })),
           coupon,
-          taxRatePercent: settings.taxRatePercent,
+          taxRatePercent: settings.taxRatePercent, bookingTimezone,
         });
 
         const expiresAt = new Date(now.getTime() + HOLD_DURATION_MINUTES * 60 * 1000);
@@ -111,6 +116,7 @@ export async function createOrRefreshHold(params: {
         const reservation = await tx.reservation.create({
           data: {
             bookingFingerprint,
+            bookingTimezone,
             confirmationNumber: generateConfirmationNumber(),
             customerId,
             vehicleId,

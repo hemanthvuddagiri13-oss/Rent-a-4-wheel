@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 
 export interface SiteSettings {
+  bookingTimezone: string;
   businessName: string;
   phone: string;
   email: string;
@@ -19,6 +20,7 @@ export interface SiteSettings {
 }
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
+  bookingTimezone: "America/Chicago",
   businessName: "Rent A 4Wheel",
   phone: "(214) 555-0123",
   email: "hello@renta4wheel.com",

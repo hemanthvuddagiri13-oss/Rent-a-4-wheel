@@ -1,3 +1,6 @@
+import { quarantineRefund } from "@/lib/financial-cases";
+import { planAllDepositReleases } from "@/lib/deposit-release-plan";
+import { PRE_TRIP_STATES } from "@/lib/financial-projection";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import type Stripe from "stripe";
@@ -17,12 +20,14 @@ export async function reserveRefund(tx: Prisma.TransactionClient, params: Reques
     if (existing.reservationId !== params.reservationId || existing.paymentId !== params.paymentId || existing.amountCents !== params.amountCents || (existing.reason ?? null) !== (params.reason ?? null) || (existing.initiatedById ?? null) !== (params.initiatedById ?? null)) throw new Error("Refund key reused with different parameters");
     return existing;
   }
-  const held = await tx.refund.aggregate({ where: { paymentId: payment.id, status: { in: ["PENDING", "SUCCEEDED"] } }, _sum: { amountCents: true } });
+  const held = await tx.refund.aggregate({ where: { paymentId: payment.id, OR: [{ status: { in: ["PENDING", "SUCCEEDED"] } }, { legacyUncertain: true }] }, _sum: { amountCents: true } });
   const remaining = payment.amountCents - (held._sum.amountCents ?? 0);
   if (params.amountCents > remaining) throw new Error("Refund exceeds remaining refundable balance");
   const reservation = await tx.reservation.findUniqueOrThrow({ where: { id: params.reservationId } });
   const unfinishedTrip = await tx.trip.findFirst({ where: { reservationId: params.reservationId, startedAt: { not: null }, endedAt: null } });
   if (unfinishedTrip) throw new Error("Cannot refund an unfinished trip through this operation");
+  if (["ACTIVE", "RETURN_IN_PROGRESS", "COMPLETED", "DISPUTED", "UNDER_CLAIM_REVIEW"].includes(reservation.status)) throw new Error("Operational or completed trips require a separate audited adjustment workflow");
+  if (reservation.financialDisposition === "REVIEW") throw new Error("Resolve financial review before requesting a refund");
   if (params.amountCents === remaining) {
     if (["ACTIVE", "RETURN_IN_PROGRESS"].includes(reservation.status)) throw new Error("Cannot fully refund an active trip through this operation");
     await tx.reservation.update({ where: { id: reservation.id }, data: { financialDisposition: "REFUND_REQUIRED" } });
@@ -52,11 +57,11 @@ export async function applyRefundObservation(refundId: string, observed: Stripe.
 async function applyRefundObservationTx(tx: Prisma.TransactionClient, refundId: string, observed: Stripe.Refund) {
     const current = await tx.refund.findUniqueOrThrow({ where: { id: refundId } });
     const status = observed.status === "succeeded" ? "SUCCEEDED" : observed.status === "failed" ? "FAILED" : observed.status === "canceled" ? "CANCELLED" : "PENDING";
-    if (current.status !== "PENDING" && status === "PENDING") return current;
+    if (current.status !== "PENDING" && !current.legacyUncertain && status === "PENDING") return current;
     if (current.status === "SUCCEEDED" && (status === "FAILED" || status === "CANCELLED")) {
-      await tx.reservation.update({ where: { id: current.reservationId }, data: { financialDisposition: "REVIEW" } });
+      await quarantineRefund(tx, current.id, "REFUND_SUCCESS_REVERSED_BY_PROVIDER");
     }
-    const updated = await tx.refund.update({ where: { id: refundId }, data: { status, stripeRefundId: observed.id, lastError: observed.failure_reason ?? null } });
+    const updated = await tx.refund.update({ where: { id: refundId }, data: { status, legacyUncertain: false, stripeRefundId: observed.id, lastError: observed.failure_reason ?? null } });
     const payment = await tx.payment.findUniqueOrThrow({ where: { id: current.paymentId } });
     const refunded = await tx.refund.aggregate({ where: { paymentId: payment.id, status: "SUCCEEDED" }, _sum: { amountCents: true } });
     const pending = await tx.refund.count({ where: { paymentId: payment.id, status: "PENDING" } });
@@ -65,6 +70,13 @@ async function applyRefundObservationTx(tx: Prisma.TransactionClient, refundId: 
     } });
     if (status === "SUCCEEDED") {
       const reservation = await tx.reservation.findUniqueOrThrow({ where: { id: current.reservationId } });
+      const captured = await tx.payment.aggregate({ where: { reservationId: reservation.id, type: "RENTAL", status: "SUCCEEDED" }, _sum: { amountCents: true } });
+      const totalRefunded = await tx.refund.aggregate({ where: { reservationId: reservation.id, status: "SUCCEEDED" }, _sum: { amountCents: true } });
+      const started = await tx.trip.count({ where: { reservationId: reservation.id, startedAt: { not: null } } });
+      if (!started && reservation.financialDisposition === "REFUND_REQUIRED" && (totalRefunded._sum.amountCents ?? 0) >= (captured._sum.amountCents ?? 0) && [...PRE_TRIP_STATES, "PAYMENT_FAILED", "AWAITING_PAYMENT", "CHECKOUT_HOLD", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(reservation.status)) {
+        await tx.reservation.update({ where: { id: reservation.id }, data: { status: reservation.status.startsWith("CANCELLED") ? reservation.status : "EXPIRED", financialDisposition: "TERMINATED", expiresAt: null } });
+        await planAllDepositReleases(tx, reservation.id);
+      }
       await enqueueOutboxNotification(tx, { userId: reservation.customerId, reservationId: reservation.id, type: "REFUND", extra: { amountCents: updated.amountCents } }, `refund:${current.id}`);
     }
     return updated;
@@ -73,7 +85,7 @@ async function applyRefundObservationTx(tx: Prisma.TransactionClient, refundId: 
 export async function executeRefundOperation(refundId: string, suppliedPaymentIntentId: string | null): Promise<RefundExecutionResult> {
   const refund = await prisma.refund.findUniqueOrThrow({ where: { id: refundId }, include: { payment: true } });
   if (refund.payment.stripePaymentIntentId !== suppliedPaymentIntentId) throw new Error("Refund payment mismatch");
-  if (refund.status !== "PENDING") return { status: "already_terminal", refund };
+  if (refund.status !== "PENDING" && !refund.legacyUncertain) return { status: "already_terminal", refund };
   if (!stripe || !refund.payment.stripePaymentIntentId) throw new Error("Stripe refund provider unavailable");
   const client = stripe, intentId = refund.payment.stripePaymentIntentId;
   if (refund.legacyUncertain && !refund.stripeRefundId) {
@@ -120,7 +132,9 @@ export async function reconcileRefundStatus(stripeRefundId: string, _stripeStatu
     if (!payment) throw new Error("Refund payment not yet known; retry event");
     refund = await withReservationLock(payment.reservationId, async tx => {
       await tx.reservation.update({ where: { id: payment.reservationId }, data: { financialDisposition: "REVIEW" } });
-      return tx.refund.upsert({ where: { stripeRefundId }, update: {}, create: { reservationId: payment.reservationId, paymentId: payment.id, amountCents: observed.amount, idempotencyKey: `external:${stripeRefundId}`, stripeRefundId, status: "PENDING" } });
+      const imported = await tx.refund.upsert({ where: { stripeRefundId }, update: {}, create: { reservationId: payment.reservationId, paymentId: payment.id, amountCents: observed.amount, idempotencyKey: `external:${stripeRefundId}`, stripeRefundId, status: "PENDING" } });
+      await quarantineRefund(tx, imported.id, "EXTERNAL_REFUND_REQUIRES_REVIEW");
+      return imported;
     });
   }
   await applyRefundObservation(refund.id, observed);

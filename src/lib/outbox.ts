@@ -30,14 +30,21 @@ export async function processOutboxOnce(limit = 50, ids?: string[]) {
       // Resend deduplicates by this immutable ID within its retention window.
       // Beyond that window an ambiguous send is left for manual reconciliation.
       if (message.attempts > 0 && Date.now() - firstAttemptAt.getTime() > 23 * 3600000) throw new Error("Delivery replay window elapsed; manual reconciliation required");
-      await queueNotification({ ...p, type: p.type, deliveryKey: message.id, throwOnFailure: true });
-      const saved = await prisma.outboxMessage.updateMany({ where: { id: message.id, leaseToken: token }, data: { status: "SENT", processedAt: new Date(), leaseToken: null, leaseExpiresAt: null } });
+      await queueNotification({ ...p, type: p.type, deliveryKey: message.id, throwOnFailure: true, deferProjection: true });
+      const saved = await prisma.$transaction(async tx => {
+        const saved = await tx.outboxMessage.updateMany({ where: { id: message.id, leaseToken: token, leaseExpiresAt: { gt: new Date() } }, data: { status: "SENT", processedAt: new Date(), leaseToken: null, leaseExpiresAt: null } });
+        if (saved.count) await tx.notification.updateMany({ where: { deliveryKey: message.id }, data: { status: "SENT", error: null, sentAt: new Date() } });
+        return saved;
+      });
       processed += saved.count;
     } catch (error) {
-      await prisma.outboxMessage.updateMany({ where: { id: message.id, leaseToken: token }, data: {
+      await prisma.$transaction(async tx => {
+      const saved = await tx.outboxMessage.updateMany({ where: { id: message.id, leaseToken: token, leaseExpiresAt: { gt: new Date() } }, data: {
         status: message.attempts >= 4 ? "FAILED" : "PENDING", lastError: safeErrorCode(error), nextRetryAt: new Date(Date.now() + 60000),
         leaseToken: null, leaseExpiresAt: null,
       } });
+      if (saved.count) await tx.notification.updateMany({ where: { deliveryKey: message.id, status: { not: "SENT" } }, data: { status: "FAILED", error: safeErrorCode(error) } });
+      });
       failed++;
     }
   }

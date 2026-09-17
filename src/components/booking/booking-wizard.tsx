@@ -1,5 +1,6 @@
 "use client";
 
+import { bookingLocal, bookingInstant, DEFAULT_BOOKING_TIMEZONE } from "@/lib/booking-time";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ProgressSteps } from "@/components/booking/progress-steps";
@@ -18,13 +19,13 @@ function defaultDate(daysFromNow: number) {
   return d.toISOString().slice(0, 10);
 }
 
-export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; extras: BookingExtra[] }) {
+export function BookingWizard({ vehicle, extras, bookingTimezone = DEFAULT_BOOKING_TIMEZONE }: { vehicle: BookingVehicle; extras: BookingExtra[]; bookingTimezone?: string }) {
   const searchParams = useSearchParams();
   const [step, setStep] = useState(1);
   const [dateError, setDateError] = useState<string | null>(null);
 
   const [state, setState] = useState<BookingState>({
-    draftId: crypto.randomUUID(), revision: 1,
+    draftId: crypto.randomUUID(), revision: 1, bookingTimezone,
     pickupDate: searchParams.get("pickupDate") || defaultDate(1),
     pickupTime: searchParams.get("pickupTime") || "10:00",
     returnDate: searchParams.get("returnDate") || defaultDate(4),
@@ -51,9 +52,9 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
       const r = await response.json();
       if (r.vehicleId !== vehicle.id) throw new Error("Reservation vehicle mismatch");
       if (stopped) return;
-      const dateParts = (value: string) => { const d = new Date(value); return [new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10), d.toTimeString().slice(0, 5)]; };
+      const dateParts = (value: string) => bookingLocal(value, r.bookingTimezone ?? DEFAULT_BOOKING_TIMEZONE).split("T");
       const [pickupDate, pickupTime] = dateParts(r.pickupAt), [returnDate, returnTime] = dateParts(r.returnAt);
-      setState(prev => ({ ...prev, reservationId: r.reservationId, confirmationNumber: r.confirmationNumber, pickupDate, pickupTime, returnDate, returnTime,
+      setState(prev => ({ ...prev, bookingTimezone: r.bookingTimezone ?? DEFAULT_BOOKING_TIMEZONE, reservationId: r.reservationId, confirmationNumber: r.confirmationNumber, pickupDate, pickupTime, returnDate, returnTime,
         selectedExtraIds: r.selectedExtraIds, couponCode: r.couponCode, breakdown: r.breakdown, bookingFingerprint: r.bookingFingerprint,
         checkoutComplete: r.checkoutComplete, agreementAccepted: r.checkoutComplete, holdExpiresAt: r.holdExpiresAt,
         draftId: r.draftId ?? prev.draftId, revision: r.revision ?? prev.revision }));
@@ -92,8 +93,9 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
 
   function goNext() {
     if (step === 2) {
-      const pickup = new Date(`${state.pickupDate}T${state.pickupTime}:00`);
-      const ret = new Date(`${state.returnDate}T${state.returnTime}:00`);
+      let pickup: Date, ret: Date;
+      try { pickup = bookingInstant(`${state.pickupDate}T${state.pickupTime}:00`, state.bookingTimezone ?? bookingTimezone); ret = bookingInstant(`${state.returnDate}T${state.returnTime}:00`, state.bookingTimezone ?? bookingTimezone); }
+      catch (error) { setDateError((error as Error).message); return; }
       if (ret <= pickup) {
         setDateError("Return date/time must be after pickup date/time.");
         return;
@@ -113,6 +115,7 @@ export function BookingWizard({ vehicle, extras }: { vehicle: BookingVehicle; ex
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
       <ProgressSteps current={step} />
+      <p className="text-sm text-muted">All booking times: {state.bookingTimezone}</p>
 
       <div className="rounded-2xl border border-white/10 bg-background p-6 sm:p-8">
         {step === 1 && <StepVehicle vehicle={vehicle} onNext={goNext} />}

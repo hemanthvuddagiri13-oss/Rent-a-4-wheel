@@ -1,3 +1,4 @@
+import { quarantineOperation } from "@/lib/financial-cases";
 import { safeErrorCode } from "@/lib/safe-log";
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type FinancialOperation } from "@prisma/client";
@@ -47,7 +48,7 @@ export async function runOperation<T extends { id: string }>(operation: Financia
     await assertEventFence(tx);
     const now = new Date();
     const result = await tx.financialOperation.updateMany({
-      where: { id: operation.id, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
+      where: { id: operation.id, state: { notIn: ["REVIEW", "DEAD_LETTER"] }, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
       data: { leaseToken: token, leaseExpiresAt: new Date(now.getTime() + 120000), state: "RUNNING", attempts: { increment: 1 } },
     });
     if (!result.count) throw new OperationPendingError("Financial operation is already processing");
@@ -56,6 +57,7 @@ export async function runOperation<T extends { id: string }>(operation: Financia
     return current;
   });
   try {
+    if (["REVIEW", "DEAD_LETTER"].includes(claimed.state)) throw new UncertainOutcomeError("Operation requires operator resolution");
     let result: T;
     if (claimed.providerId) result = await provider.retrieve(claimed.providerId);
     else if (claimed.firstAttemptAt && Date.now() - claimed.firstAttemptAt.getTime() > 23 * 3600000) {
@@ -63,12 +65,15 @@ export async function runOperation<T extends { id: string }>(operation: Financia
       if (!found) throw new UncertainOutcomeError("Provider outcome unknown beyond safe replay window; reconciliation required");
       result = found;
     } else result = await provider.create(claimed.key);
+    const providerStatus = (result as T & { status?: string }).status;
+    const polling = claimed.kind === "REFUND" ? !["succeeded", "failed", "canceled"].includes(providerStatus ?? "") : claimed.kind === "RENTAL" || claimed.kind === "DEPOSIT" && !["succeeded", "canceled"].includes(providerStatus ?? "");
+    const nextPoll = providerStatus === "requires_capture" ? new Date(Date.now() + 3600000) : new Date(Date.now() + 60000);
     await prisma.$transaction(async tx => {
       if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
       else await assertEventFence(tx);
       const saved = await tx.financialOperation.updateMany({
         where: { id: claimed.id, leaseToken: token, leaseExpiresAt: { gt: new Date() } },
-        data: { providerId: result.id, result: json(result), state: "OBSERVED", leaseToken: null, leaseExpiresAt: null, lastError: null, nextAttemptAt: null },
+        data: { providerId: result.id, result: json(result), state: polling ? "POLL" : "OBSERVED", leaseToken: null, leaseExpiresAt: null, lastError: null, consecutiveFailures: 0, nextAttemptAt: polling ? nextPoll : null },
       });
       if (!saved.count) throw new OperationPendingError("Financial operation lease lost; result will be reconciled");
       await provider.apply?.(tx, result);
@@ -77,9 +82,13 @@ export async function runOperation<T extends { id: string }>(operation: Financia
   } catch (error) {
     // Includes DB errors after provider success. Never turn uncertainty into a
     // terminal failure or free the reserved refund balance.
-    await prisma.financialOperation.updateMany({
+    await prisma.$transaction(async tx => {
+      if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
+      const saved = await tx.financialOperation.updateMany({
       where: { id: claimed.id, leaseToken: token },
-      data: { state: error instanceof UncertainOutcomeError ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: safeErrorCode(error) },
+      data: { consecutiveFailures: { increment: 1 }, state: error instanceof UncertainOutcomeError || claimed.consecutiveFailures >= 19 ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: safeErrorCode(error) },
+    });
+      if (saved.count && (error instanceof UncertainOutcomeError || claimed.consecutiveFailures >= 19)) await quarantineOperation(tx, claimed.id, safeErrorCode(error));
     });
     throw error;
   }

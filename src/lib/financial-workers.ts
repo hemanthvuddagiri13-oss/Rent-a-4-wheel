@@ -25,8 +25,20 @@ export async function recoverStripeEvents() {
     if (!result.ok) throw new Error("Event remains pending");
   });
 }
+export function dueOperations(kind: string) {
+  const now = new Date();
+  return prisma.financialOperation.findMany({ where: { kind, state: { in: ["READY", "RETRY", "POLL", "RUNNING"] }, consecutiveFailures: { lt: 20 }, AND: [{ OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }] }, { OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] }] }, orderBy: [{ priority: "asc" }, { nextAttemptAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }], take: 25 });
+}
 export async function recoverRefunds() {
-  const refunds = await prisma.refund.findMany({ where: { status: "PENDING" }, include: { payment: true }, orderBy: { updatedAt: "asc" }, take: 25 });
+  const legacyRefunds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT f."id" FROM "Refund" f WHERE f."status"='PENDING' AND NOT f."legacyUncertain" AND f."stripeRefundId" IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "FinancialOperation" o WHERE o."key"=f."idempotencyKey") ORDER BY f."createdAt" LIMIT 25`;
+  const known = await prisma.refund.findMany({ where: { id: { in: legacyRefunds.map(f => f.id) } }, include: { payment: true } });
+  for (const f of known) await withReservationLock(f.reservationId, async tx => {
+    if (await tx.financialOperation.findUnique({ where: { key: f.idempotencyKey } })) return;
+    const op = await prepareOperation(tx, { key: f.idempotencyKey, kind: "REFUND", reservationId: f.reservationId, payload: { refundId: f.id, paymentIntentId: f.payment.stripePaymentIntentId, amount: f.amountCents } });
+    await tx.financialOperation.update({ where: { id: op.id }, data: { providerId: f.stripeRefundId, firstAttemptAt: f.createdAt } });
+  });
+  const operations = await dueOperations("REFUND");
+  const refunds = await prisma.refund.findMany({ where: { status: "PENDING", legacyUncertain: false, idempotencyKey: { in: operations.map(o => o.key) } }, include: { payment: true } });
   return each(refunds, async r => {
     // Rotate even uncertain/provider-failed items so one poisoned batch cannot
     // permanently starve later refunds. The operation lease owns execution.
@@ -35,16 +47,18 @@ export async function recoverRefunds() {
   });
 }
 export async function recoverDeposits() {
-  const legacyIds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT d."id" FROM "SecurityDeposit" d WHERE d."stripePaymentIntentId" IS NOT NULL
+  const legacyIds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT d."id" FROM "SecurityDeposit" d WHERE NOT d."legacyUncertain" AND d."stripePaymentIntentId" IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId" = d."reservationId" AND o."kind" = 'DEPOSIT') LIMIT 25`;
   const legacy = await prisma.securityDeposit.findMany({ where: { id: { in: legacyIds.map(d => d.id) } } });
   for (const deposit of legacy) await withReservationLock(deposit.reservationId, async tx => {
     if (await tx.financialOperation.count({ where: { reservationId: deposit.reservationId, kind: "DEPOSIT" } })) return;
     const op = await prepareOperation(tx, { key: `legacy-deposit:${deposit.reservationId}`, kind: "DEPOSIT", reservationId: deposit.reservationId, payload: { legacy: true } });
-    await tx.financialOperation.update({ where: { id: op.id }, data: { providerId: deposit.stripePaymentIntentId, firstAttemptAt: deposit.createdAt } });
+    await tx.financialOperation.update({ where: { id: op.id }, data: { providerId: deposit.stripePaymentIntentId, generation: deposit.generation + 1, firstAttemptAt: deposit.createdAt } });
     await tx.securityDeposit.update({ where: { id: deposit.id }, data: { operationId: op.id, generation: { increment: 1 } } });
   });
-  const operations = await prisma.financialOperation.findMany({ where: { kind: "DEPOSIT", OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] }, orderBy: { updatedAt: "asc" }, take: 25 });
+  const releases = await dueOperations("DEPOSIT_RELEASE");
+  await each(releases, op => releaseDeposits(op.reservationId!, (op.payload as { intentId: string }).intentId));
+  const operations = await dueOperations("DEPOSIT");
   return each(operations, async operation => {
     if (!operation.reservationId) return;
     const r = await prisma.reservation.findUnique({ where: { id: operation.reservationId } });
@@ -54,7 +68,7 @@ export async function recoverDeposits() {
       return;
     }
     await executeDepositOperation(operation);
-    if (["REFUND_REQUIRED", "TERMINATED"].includes(r.financialDisposition)) await releaseDeposits(r.id);
+    if (["REFUND_REQUIRED", "TERMINATED"].includes((await prisma.reservation.findUniqueOrThrow({ where: { id: r.id } })).financialDisposition)) await releaseDeposits(r.id);
     else {
       const deposit = await prisma.securityDeposit.findUnique({ where: { reservationId: r.id } });
       const observed = await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } });
@@ -65,9 +79,22 @@ export async function recoverDeposits() {
 export async function recoverReconciliation() {
   await expireStaleReservations();
   if (!stripe) throw new Error("Stripe unavailable");
+  const rentals = await dueOperations("RENTAL");
+  const recovered = await each(rentals, async operation => {
+    const intent = await executeRentalOperation(operation);
+    if (intent.status === "succeeded") await handlePaymentIntentSucceeded(intent);
+    if (operation.reservationId) await withReservationLock(operation.reservationId, async tx => {
+      const current = await tx.reservation.findUniqueOrThrow({ where: { id: operation.reservationId! } });
+      if (intent.status === "canceled" || (intent.status === "succeeded" && !["CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "EXPIRED"].includes(current.status)) || ["TERMINATED", "REVIEW"].includes(current.financialDisposition)) {
+        await tx.financialOperation.updateMany({ where: { id: operation.id, state: "POLL", leaseToken: null, providerId: intent.id }, data: { state: "OBSERVED", nextAttemptAt: null } });
+      }
+    });
+  });
+  return recovered;
+}
+export async function auditHistoricalFinancials() {
+  if (!stripe) throw new Error("Stripe unavailable");
   const client = stripe;
-  const rentals = await prisma.financialOperation.findMany({ where: { kind: "RENTAL", providerId: null }, orderBy: { updatedAt: "asc" }, take: 25 });
-  await each(rentals, executeRentalOperation);
   const reservations = await prisma.reservation.findMany({ where: { payments: { some: { type: "RENTAL" } } }, orderBy: { financialCheckedAt: { sort: "asc", nulls: "first" } }, take: 25, include: { payments: true } });
   return each(reservations, async r => {
     await prisma.reservation.update({ where: { id: r.id }, data: { financialCheckedAt: new Date() } });
@@ -84,5 +111,6 @@ export const financialWorkers = {
   refunds: recoverRefunds,
   deposits: recoverDeposits,
   reconciliation: recoverReconciliation,
+  "historical-audit": auditHistoricalFinancials,
   outbox: processOutboxOnce,
 };

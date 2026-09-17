@@ -476,6 +476,7 @@ enum RateType {
 }
 
 model Reservation {
+  bookingTimezone String @default("America/Chicago")
   financialCheckedAt DateTime?
   // Terminal financial disposition is independent of captured payment status.
   financialDisposition String @default("OPEN")
@@ -698,6 +699,8 @@ model BookingDraft {
 }
 
 model SecurityDeposit {
+  capturableAmountCents Int @default(0)
+  operation FinancialOperation? @relation(fields: [operationId], references: [id])
   legacyUncertain Boolean @default(false)
   generation Int @default(0)
   operationId String?
@@ -811,6 +814,10 @@ model OutboxMessage {
 // Immutable provider request plus resumable execution state. Payload contains
 // provider IDs, never card details. Unknown outcomes retain their original key.
 model FinancialOperation {
+  consecutiveFailures Int @default(0)
+  deposits SecurityDeposit[]
+  generation Int?
+  priority Int @default(50)
   id String @id @default(cuid())
   key String @unique
   kind String
@@ -830,6 +837,7 @@ model FinancialOperation {
   updatedAt DateTime @updatedAt
 
   @@index([state, nextAttemptAt])
+  @@index([kind, state, priority, nextAttemptAt, createdAt], map: "financial_recovery_due_idx")
   @@index([reservationId, kind])
 }
 
@@ -1485,4 +1493,31 @@ model SiteSetting {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+// Durable operator queue. IDs/evidence are retained after resolution.
+model FinancialCase {
+  id String @id @default(cuid())
+  sourceKey String @unique
+  reservationId String
+  customerId String
+  operationId String?
+  refundId String?
+  kind String
+  amountCents Int
+  currency String @default("usd")
+  originalKey String?
+  providerId String?
+  reason String
+  evidence Json?
+  status String @default("OPEN")
+  assignedToId String?
+  attempts Int @default(0)
+  lastError String?
+  resolution String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  resolvedAt DateTime?
+  @@index([status, createdAt])
+  @@index([reservationId])
 }

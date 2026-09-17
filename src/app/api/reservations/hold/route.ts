@@ -1,10 +1,12 @@
+import { bookingInstant } from "@/lib/booking-time";
+import { getSiteSettings } from "@/lib/settings";
 import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { createOrRefreshHold, HoldError } from "@/lib/checkout-hold";
 import { createHoldSchema } from "@/lib/validations/reservation";
 import { prisma } from "@/lib/prisma";
-import { differenceInCalendarDays } from "date-fns";
+import { bookingDays } from "@/lib/booking-time";
 
 /**
  * Places a 15-minute checkout hold on a vehicle for a specific date/time
@@ -34,23 +36,29 @@ export async function POST(req: NextRequest) {
   const { vehicleId, extraIds, couponCode } = parsed.data;
 
   try {
+    const draft = await prisma.bookingDraft.findUnique({ where: { id: parsed.data.draftId } });
+    const prior = draft?.customerId === session.user.id && draft.reservationId ? await prisma.reservation.findUnique({ where: { id: draft.reservationId } }) : null;
+    const bookingTimezone = prior?.bookingTimezone ?? (await getSiteSettings()).bookingTimezone;
+    let pickupAt: Date, returnAt: Date;
+    try { pickupAt = bookingInstant(parsed.data.pickupAt, bookingTimezone); returnAt = bookingInstant(parsed.data.returnAt, bookingTimezone); }
+    catch (error) { throw new HoldError((error as Error).message, 400); }
     const result = await createOrRefreshHold({
       customerId: session.user.id,
       draftId: parsed.data.draftId,
       revision: parsed.data.revision,
       vehicleId,
-      pickupAt: new Date(parsed.data.pickupAt),
-      returnAt: new Date(parsed.data.returnAt),
+      pickupAt, bookingTimezone,
+      returnAt,
       extraIds,
       couponCode,
     });
     const extras = await prisma.reservationExtra.findMany({ where: { reservationId: result.id }, include: { extra: { select: { name: true } } } });
     const breakdown = { rateType: result.rateType, rateAmountCents: result.rateAmountCents, units: result.units,
-      days: Math.max(1, differenceInCalendarDays(result.returnAt, result.pickupAt)), subtotalCents: result.subtotalCents,
+      days: bookingDays(result.pickupAt, result.returnAt, result.bookingTimezone), subtotalCents: result.subtotalCents,
       extrasCents: result.extrasCents, discountCents: result.discountCents, taxCents: result.taxCents, feesCents: result.feesCents,
       totalCents: result.totalCents, depositCents: result.depositCents,
       extraLineItems: extras.map(e => ({ extraId: e.extraId, name: e.extra.name, amountCents: e.amountCents, quantity: e.quantity })) };
-    return NextResponse.json({ id: result.id, confirmationNumber: result.confirmationNumber, expiresAt: result.expiresAt, bookingFingerprint: result.bookingFingerprint, totalCents: result.totalCents, breakdown });
+    return NextResponse.json({ id: result.id, bookingTimezone: result.bookingTimezone, pickupAt: result.pickupAt, returnAt: result.returnAt, confirmationNumber: result.confirmationNumber, expiresAt: result.expiresAt, bookingFingerprint: result.bookingFingerprint, totalCents: result.totalCents, breakdown });
   } catch (err) {
     if (err instanceof HoldError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

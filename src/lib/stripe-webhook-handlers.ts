@@ -15,7 +15,7 @@ export async function requireRefund(tx: Prisma.TransactionClient, reservationId:
   await tx.reservation.update({ where: { id: reservationId }, data: { financialDisposition: "REFUND_REQUIRED" } });
   const existing = await tx.refund.findUnique({ where: { idempotencyKey: `terminal-refund:${payment.id}` } });
   if (existing) return existing;
-  const refunds = await tx.refund.aggregate({ where: { paymentId: payment.id, status: { in: ["PENDING", "SUCCEEDED"] } }, _sum: { amountCents: true } });
+  const refunds = await tx.refund.aggregate({ where: { paymentId: payment.id, OR: [{ status: { in: ["PENDING", "SUCCEEDED"] } }, { legacyUncertain: true }] }, _sum: { amountCents: true } });
   const remaining = payment.amountCents - (refunds._sum.amountCents ?? 0);
   if (remaining <= 0) return null;
   const refund = await reserveRefund(tx, { reservationId, paymentId: payment.id, idempotencyKey: `terminal-refund:${payment.id}`, amountCents: remaining, reason });
@@ -72,13 +72,13 @@ export async function confirmAfterRentalPaymentSuccess(
     return true;
   });
   if (!eligible) {
-    const current = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { payments: true, refunds: true, deposit: true } });
+    const current = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { payments: true, refunds: true, deposit: { include: { operation: true } } } });
     if (current.financialDisposition !== "OPEN") await settleTerminatedReservation(current.id);
     return { confirmed: financialProjection(current).outcome === "confirmed" };
   }
   await attemptDepositAuthorization(reservation, intent, retry);
   const confirmed = await withReservationLock(reservation.id, async tx => {
-    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: true, payments: true, refunds: true } });
+    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: { include: { operation: true } }, payments: true, refunds: true } });
     if (current.financialDisposition !== "OPEN" || current.status !== "PAYMENT_FAILED") return false;
     if (!current.expiresAt || current.expiresAt <= new Date()) {
       await requireRefund(tx, current.id, payment, "Deposit recovery deadline elapsed");
@@ -108,7 +108,7 @@ export async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent)
   const payment = await prisma.payment.findUnique({ where: { stripePaymentIntentId: intent.id } });
   if (!payment) throw new Error("Payment mapping not yet persisted; retry webhook");
   if (payment.type !== "RENTAL") return;
-  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: payment.reservationId }, include: { deposit: true } });
+  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: payment.reservationId }, include: { deposit: { include: { operation: true } } } });
   await confirmAfterRentalPaymentSuccess(reservation, payment, intent);
 }
 

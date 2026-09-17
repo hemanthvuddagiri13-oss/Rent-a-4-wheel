@@ -35,7 +35,7 @@ export function withReservationLock<T>(id: string, run: (tx: Prisma.TransactionC
 // Mandatory even for emergency state transitions. Caller holds the reservation
 // lock, shared with refund reservation and deposit/cancellation projections.
 export async function assertFinancialTripStart(tx: Prisma.TransactionClient, id: string) {
-  const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: true } });
+  const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: { include: { operation: true } } } });
   const projection = financialProjection(r);
   if (r.financialDisposition !== "OPEN" || !projection.moneyAvailable) throw new Error("Financial state does not permit trip start");
   if (!projection.depositValid) throw new Error("Valid required deposit authorization missing");

@@ -40,7 +40,7 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
         const hold = await held.json();
         if (!held.ok) throw new Error(hold.error || "Unable to update reservation");
         if (cancelled) return;
-        update({ reservationId: hold.id, confirmationNumber: hold.confirmationNumber, holdExpiresAt: hold.expiresAt, bookingFingerprint: hold.bookingFingerprint });
+        update({ reservationId: hold.id, confirmationNumber: hold.confirmationNumber, holdExpiresAt: hold.expiresAt, bookingTimezone: hold.bookingTimezone ?? state.bookingTimezone, bookingFingerprint: hold.bookingFingerprint });
         update({ breakdown: hold.breakdown });
         setCouponMessage(null);
       } catch (err) {
@@ -55,7 +55,7 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicle.id, state.pickupDate, state.pickupTime, state.returnDate, state.returnTime, state.selectedExtraIds, state.couponCode]);
 
-  const selectedExtras = extras.filter((e) => state.selectedExtraIds.includes(e.id));
+  const selectedExtras = state.breakdown?.extraLineItems.length ? state.breakdown.extraLineItems.map(e => ({ id: e.extraId, name: `${e.name} × ${e.quantity}` })) : extras.filter((e) => state.selectedExtraIds.includes(e.id));
 
   return (
     <div>

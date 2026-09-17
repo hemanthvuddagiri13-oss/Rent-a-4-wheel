@@ -9,7 +9,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
-  const r = await prisma.reservation.findUnique({ where: { id }, include: { deposit: true, payments: { where: { type: "RENTAL", status: "SUCCEEDED" } } } });
+  const r = await prisma.reservation.findUnique({ where: { id }, include: { deposit: { include: { operation: true } }, payments: { where: { type: "RENTAL", status: "SUCCEEDED" } } } });
   if (!r) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (r.customerId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   if (r.financialDisposition !== "OPEN" || !["PAYMENT_FAILED","CONFIRMED","DOCUMENTS_REQUIRED","READY_FOR_CHECK_IN","CHECK_IN_PROGRESS","READY_TO_START"].includes(r.status) ||
@@ -22,7 +22,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     else await attemptDepositAuthorization(r, intent, true);
     const d = await prisma.securityDeposit.findUnique({ where: { reservationId: id } });
     const depositIntent = d?.stripePaymentIntentId ? await stripe.paymentIntents.retrieve(d.stripePaymentIntentId) : null;
-    const current = await prisma.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: true } });
+    const current = await prisma.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: { include: { operation: true } } } });
     const projection = financialProjection(current);
     const requiresAction = current.financialDisposition === "OPEN" && current.deposit?.stripePaymentIntentId === depositIntent?.id && depositIntent?.status === "requires_action";
     return NextResponse.json({ success: projection.depositValid && current.financialDisposition === "OPEN", requiresAction,

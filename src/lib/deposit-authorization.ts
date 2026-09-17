@@ -1,3 +1,4 @@
+import { planDepositRelease } from "@/lib/deposit-release-plan";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
@@ -22,18 +23,21 @@ export async function syncDepositIntent(reservationId: string, intent: Stripe.Pa
   let valid = false;
   const authorizationExpiresAt = expires ? new Date(expires * 1000) : null;
   const apply = async (tx: Prisma.TransactionClient) => {
+    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservationId } });
+    const observedOp = await tx.financialOperation.findFirst({ where: { reservationId, kind: "DEPOSIT", providerId: intent.id } });
     const deposit = await tx.securityDeposit.findUnique({ where: { reservationId } });
     if (!deposit) throw new Error("Required deposit record missing");
+    if (intent.status !== "canceled" && observedOp && (["REFUND_REQUIRED", "TERMINATED"].includes(current.financialDisposition) || (deposit.operationId && deposit.operationId !== observedOp.id))) await planDepositRelease(tx, reservationId, intent.id);
     // Ignore observations from older attempts once a newer attempt owns the row.
-    const latest = deposit.operationId ? await tx.financialOperation.findUnique({ where: { id: deposit.operationId } }) : await tx.financialOperation.findFirst({ where: { reservationId, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
-    if (latest && latest.providerId !== intent.id) return;
+    const latest = deposit.operationId ? await tx.financialOperation.findUnique({ where: { id: deposit.operationId } }) : null;
+    if (!latest || latest.providerId !== intent.id || latest.generation !== deposit.generation || deposit.legacyUncertain) return;
     if (deposit.stripePaymentIntentId === intent.id && (deposit.status === "CANCELLED" || ["canceled", "succeeded"].includes(deposit.stripeStatus ?? "") || deposit.releasedAt) && !["canceled", "succeeded"].includes(intent.status)) return;
     if (deposit.stripePaymentIntentId === intent.id && deposit.authorizationExpiresAt && deposit.authorizationExpiresAt <= new Date() && intent.status === "requires_capture") return;
     valid = intent.status === "requires_capture" && intent.currency === "usd" &&
       intent.amount === deposit.amountCents && intent.amount_capturable >= deposit.amountCents &&
       typeof expires === "number" && expires * 1000 > Date.now();
     await tx.securityDeposit.update({ where: { reservationId }, data: {
-      stripePaymentIntentId: intent.id, stripeStatus: intent.status,
+      stripePaymentIntentId: intent.id, stripeStatus: intent.status, capturableAmountCents: intent.amount_capturable,
       releasedAt: intent.status === "canceled" ? (deposit.releasedAt ?? new Date()) : deposit.stripePaymentIntentId === intent.id ? deposit.releasedAt : null,
       status: valid ? "SUCCEEDED" : intent.status === "canceled" ? "CANCELLED" : "FAILED",
       authorizedAt: charge ? new Date(charge.created * 1000) : null, authorizationExpiresAt,
@@ -58,12 +62,13 @@ export async function attemptDepositAuthorization(
     if (!current.deposit || current.deposit.amountCents !== current.depositCents) throw new Error("Required deposit record missing or inconsistent");
     if (current.deposit.legacyUncertain) throw new Error("Legacy deposit outcome requires manual reconciliation");
     if (!stripe) throw new Error("Deposit provider unavailable");
-    const latest = current.deposit.operationId ? await tx.financialOperation.findUnique({ where: { id: current.deposit.operationId } }) : await tx.financialOperation.findFirst({ where: { reservationId: current.id, kind: "DEPOSIT" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+    const latest = current.deposit.operationId ? await tx.financialOperation.findUnique({ where: { id: current.deposit.operationId } }) : null;
     if (!latest && current.deposit.stripePaymentIntentId) {
       const legacy = await prepareOperation(tx, { key: `legacy-deposit:${current.id}`, kind: "DEPOSIT", reservationId: current.id, payload: { legacy: true } });
       await tx.securityDeposit.update({ where: { reservationId: current.id }, data: { operationId: legacy.id, generation: { increment: 1 } } });
-      return tx.financialOperation.update({ where: { id: legacy.id }, data: { providerId: current.deposit.stripePaymentIntentId, firstAttemptAt: current.deposit.createdAt } });
+      return tx.financialOperation.update({ where: { id: legacy.id }, data: { providerId: current.deposit.stripePaymentIntentId, generation: current.deposit.generation + 1, firstAttemptAt: current.deposit.createdAt } });
     }
+    if (latest && (latest.generation !== current.deposit.generation || latest.reservationId !== current.id || latest.kind !== "DEPOSIT")) throw new Error("Deposit generation ownership mismatch");
     if (latest && (observedGeneration !== current.deposit.generation || !(retry && ["requires_payment_method", "canceled"].includes(current.deposit.stripeStatus ?? "") && latest.providerId))) return latest;
     const pm = typeof intent.payment_method === "string" ? intent.payment_method : intent.payment_method?.id;
     const customer = typeof intent.customer === "string" ? intent.customer : intent.customer?.id;
@@ -72,7 +77,7 @@ export async function attemptDepositAuthorization(
     const operation = await prepareOperation(tx, { key: `deposit:${current.id}:${sequence + 1}`, kind: "DEPOSIT", reservationId: current.id,
       payload: json({ amount: current.depositCents, currency: "usd", customer, payment_method: pm, capture_method: "manual", confirm: true, off_session: true, metadata: { reservationId: current.id, purpose: "security_deposit" } }) });
     await tx.securityDeposit.update({ where: { reservationId: current.id }, data: { operationId: operation.id, generation: { increment: 1 } } });
-    return operation;
+    return tx.financialOperation.update({ where: { id: operation.id }, data: { generation: current.deposit.generation + 1 } });
   });
   if (!prepared) return { outcome: "not_required" };
   return executeDepositOperation(prepared);

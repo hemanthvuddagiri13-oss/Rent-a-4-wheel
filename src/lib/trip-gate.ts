@@ -24,7 +24,7 @@ export async function evaluateTripStartGate(reservationId: string, db: Prisma.Tr
     where: { id: reservationId },
     include: {
       payments: true,
-      deposit: true,
+      deposit: { include: { operation: true } },
       refunds: true,
       documents: { where: { deletedAt: null } },
       agreementAcceptances: { where: { type: "RENTAL_AGREEMENT" } },

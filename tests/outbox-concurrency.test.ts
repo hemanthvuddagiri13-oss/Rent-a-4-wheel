@@ -61,3 +61,14 @@ describe("outbox execution", () => {
     expect(await prisma.notification.count({ where: { deliveryKey: message.id } })).toBe(1);
   });
 });
+
+it("replacement outbox success fences the old worker's later failure on both projections",async()=>{
+ const message=await fixture(),entered=barrier(),release=barrier();
+ email.mockReset().mockImplementationOnce(async()=>{entered.release();await release.wait;throw new Error("late transport failure")}).mockResolvedValueOnce({sent:true});
+ const stale=processOutboxOnce(1,[message.id]);await entered.wait;
+ await prisma.outboxMessage.update({where:{id:message.id},data:{leaseExpiresAt:new Date(0)}});
+ try {expect((await processOutboxOnce(1,[message.id])).processed).toBe(1)} finally {release.release()}
+ await stale;
+ expect((await prisma.outboxMessage.findUniqueOrThrow({where:{id:message.id}})).status).toBe("SENT");
+ expect((await prisma.notification.findUniqueOrThrow({where:{deliveryKey:message.id}})).status).toBe("SENT");
+});

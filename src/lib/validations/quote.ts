@@ -6,10 +6,6 @@ export const quoteRequestSchema = z
     returnAt: z.string().datetime({ offset: true }).or(z.string().min(1)),
     extraIds: z.array(z.string()).default([]),
     couponCode: z.string().trim().optional(),
-  })
-  .refine((data) => new Date(data.returnAt) > new Date(data.pickupAt), {
-    message: "Return date must be after pickup date.",
-    path: ["returnAt"],
   });
 
 export type QuoteRequest = z.infer<typeof quoteRequestSchema>;

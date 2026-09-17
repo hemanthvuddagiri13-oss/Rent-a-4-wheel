@@ -94,6 +94,9 @@ describe("item 5 — trip start requires a currently valid deposit authorization
       },
     });
 
+    const intentId = `pi_bound_${reservation.id}`;
+    const operation = await prisma.financialOperation.create({ data: { key: intentId, kind: "DEPOSIT", reservationId: reservation.id, fingerprint: "fixture", payload: {}, providerId: intentId, generation: 1, state: "POLL" } });
+    await prisma.securityDeposit.update({ where: { reservationId: reservation.id }, data: { operationId: operation.id, stripePaymentIntentId: intentId, generation: 1, capturableAmountCents: 30000 } });
     const gate = await evaluateTripStartGate(reservation.id);
     expect(gate.reasons.some((r) => r.includes("authorization"))).toBe(false);
   });

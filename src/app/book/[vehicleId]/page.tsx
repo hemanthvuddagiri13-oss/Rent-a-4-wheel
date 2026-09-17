@@ -1,3 +1,4 @@
+import { getSiteSettings } from "@/lib/settings";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
@@ -43,7 +44,7 @@ export default async function BookPage({ params }: { params: Promise<{ vehicleId
 
   return (
     <Suspense fallback={null}>
-      <BookingWizard vehicle={vehicle} extras={extras} />
+      <BookingWizard vehicle={vehicle} extras={extras} bookingTimezone={(await getSiteSettings()).bookingTimezone} />
     </Suspense>
   );
 }

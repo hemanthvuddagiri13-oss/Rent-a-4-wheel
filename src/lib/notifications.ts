@@ -17,6 +17,7 @@ import type { NotificationType } from "@prisma/client";
 
 interface QueueNotificationParams {
   deliveryKey?: string;
+  deferProjection?: boolean;
   throwOnFailure?: boolean;
   userId?: string;
   reservationId?: string;
@@ -38,7 +39,7 @@ const SUBJECTS: Record<NotificationType, string> = {
   LATE_RETURN: "Late return notice",
 };
 
-export async function queueNotification({ userId, reservationId, type, extra, deliveryKey, throwOnFailure }: QueueNotificationParams) {
+export async function queueNotification({ userId, reservationId, type, extra, deliveryKey, throwOnFailure, deferProjection }: QueueNotificationParams) {
   const create = { userId, reservationId, type, channel: "EMAIL" as const, status: "PENDING" as const, subject: SUBJECTS[type] };
   const notification = deliveryKey
     ? await prisma.notification.upsert({ where: { deliveryKey }, update: {}, create: { ...create, deliveryKey } })
@@ -52,7 +53,7 @@ export async function queueNotification({ userId, reservationId, type, extra, de
       : null;
 
     if (!user?.email) {
-      await prisma.notification.update({
+      if (!deferProjection) await prisma.notification.update({
         where: { id: notification.id },
         data: { status: "FAILED", error: "No recipient email on file." },
       });
@@ -129,7 +130,7 @@ export async function queueNotification({ userId, reservationId, type, extra, de
     }
     const result = await sendEmail({ ...delivery, idempotencyKey: deliveryKey });
 
-    await prisma.notification.update({
+    if (!deferProjection) await prisma.notification.update({
       where: { id: notification.id },
       data: {
         status: result.sent ? "SENT" : "FAILED",
@@ -139,7 +140,7 @@ export async function queueNotification({ userId, reservationId, type, extra, de
     });
     if (!result.sent && throwOnFailure) throw new Error(result.error ?? "Email delivery failed");
   } catch (err) {
-    await prisma.notification.update({
+    if (!deferProjection) await prisma.notification.update({
       where: { id: notification.id },
       data: { status: "FAILED", error: err instanceof Error ? err.message : "Unknown error" },
     });
