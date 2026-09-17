@@ -13,6 +13,8 @@ export async function upgradeBookingFingerprint(tx: Prisma.TransactionClient, id
   const draft = drafts[0];
   if (drafts.length !== 1 || draft.customerId !== r.customerId || draft.vehicleId !== r.vehicleId || draft.revision < 1 || draft.fingerprint !== r.bookingFingerprint) throw new Error("Ambiguous legacy booking draft");
   if (!r.bookingTimezone || r.returnAt <= r.pickupAt || r.extras.some(e => e.quantity !== 1) || (r.couponId && !r.coupon)) throw new Error("Incomplete legacy booking tuple");
+  const amounts = [r.rateAmountCents, r.subtotalCents, r.extrasCents, r.discountCents, r.taxCents, r.feesCents, r.totalCents, r.depositCents, ...r.extras.map(e => e.amountCents)];
+  if (amounts.some(n => !Number.isSafeInteger(n) || n < 0) || !Number.isSafeInteger(r.units) || r.units < 1 || r.subtotalCents !== r.rateAmountCents * r.units || r.extrasCents !== r.extras.reduce((n, e) => n + e.amountCents, 0) || r.totalCents !== Math.max(0, r.subtotalCents + r.extrasCents - r.discountCents) + r.taxCents + r.feesCents) throw new Error("Inconsistent legacy frozen pricing");
   const bookingTimezone = new Intl.DateTimeFormat("en", { timeZone: r.bookingTimezone }).resolvedOptions().timeZone;
   const tuple = { customerId: r.customerId, vehicleId: r.vehicleId, pickupAt: r.pickupAt, returnAt: r.returnAt, extraIds: r.extras.map(e => e.extraId).sort(), couponCode: r.coupon?.code.trim().toUpperCase() ?? "" };
   const upgraded = fingerprint({ ...tuple, bookingTimezone });

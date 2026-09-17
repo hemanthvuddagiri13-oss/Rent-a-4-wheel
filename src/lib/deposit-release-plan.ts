@@ -4,9 +4,12 @@ import { prepareOperation } from "@/lib/financial-operations";
 // the provider observation/terminal transition, including superseded generations.
 export async function planDepositRelease(tx: Prisma.TransactionClient, reservationId: string, intentId: string) {
   const release = await prepareOperation(tx, { key: `deposit-release:${intentId}`, kind: "DEPOSIT_RELEASE", reservationId, payload: { intentId } });
+  // A cancellation should not wait out an earlier transient retry's backoff.
+  // Leave active leases and operator-review decisions intact.
+  await tx.financialOperation.updateMany({ where: { id: release.id, state: { in: ["READY", "RETRY", "POLL"] }, nextAttemptAt: { gt: new Date() }, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }] }, data: { nextAttemptAt: new Date() } });
   const original = await tx.financialOperation.findFirst({ where: { reservationId, kind: "DEPOSIT", providerId: intentId } });
   if (release.generation === null && original?.generation !== null && original?.generation !== undefined) return tx.financialOperation.update({ where: { id: release.id }, data: { generation: original.generation } });
-  return release;
+  return tx.financialOperation.findUniqueOrThrow({ where: { id: release.id } });
 }
 export async function planAllDepositReleases(tx: Prisma.TransactionClient, reservationId: string) {
   const ops = await tx.financialOperation.findMany({ where: { reservationId, kind: "DEPOSIT", providerId: { not: null } } });
