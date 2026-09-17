@@ -80,6 +80,22 @@ describe("Batch 1D durable boundaries",()=>{
   expect(await prisma.refund.count({where:{reservationId:r.id,status:"PENDING",amountCents:1000}})).toBe(1);
   expect(await prisma.auditLog.count({where:{entityId:c.id}})).toBe(2);
  });
+ it("adopts a verified existing deposit generation without creating a duplicate operation",async()=>{
+  const {r,u}=await fixture("CONFIRMED",30000);await prisma.user.update({where:{id:u.id},data:{stripeCustomerId:"cus_adopt_"+r.id}});
+  const admin=await createTestCustomer({role:"ADMIN"});users.push(admin.id);
+  const old=await prisma.financialOperation.create({data:{key:"old:"+r.id,kind:"DEPOSIT",reservationId:r.id,providerId:"pi_old_"+r.id,fingerprint:"old",payload:{legacy:true},state:"REVIEW"}});
+  const chosen=await prisma.financialOperation.create({data:{key:"chosen:"+r.id,kind:"DEPOSIT",reservationId:r.id,providerId:"pi_chosen_"+r.id,fingerprint:"chosen",payload:{legacy:true},state:"REVIEW"}});
+  await prisma.securityDeposit.update({where:{reservationId:r.id},data:{legacyUncertain:true,generation:2,stripePaymentIntentId:old.providerId}});await prisma.reservation.update({where:{id:r.id},data:{financialDisposition:"REVIEW"}});
+  const c=await prisma.financialCase.create({data:{sourceKey:randomUUID(),reservationId:r.id,customerId:u.id,kind:"DEPOSIT",amountCents:30000,reason:"Legacy ownership ambiguity"}});
+  provider.paymentIntents.retrieve.mockResolvedValue({...capture(chosen.providerId!),capture_method:"manual",customer:"cus_adopt_"+r.id,metadata:{reservationId:r.id,purpose:"security_deposit",operationKey:chosen.key}});
+  await resolveFinancialCase(admin,{caseId:c.id,action:"ADOPT",providerId:chosen.providerId!,reason:"Verified provider generation and customer authorization"});
+  const deposit=await prisma.securityDeposit.findUniqueOrThrow({where:{reservationId:r.id}});expect(deposit.operationId).toBe(chosen.id);expect(deposit.generation).toBe(3);expect(deposit.legacyUncertain).toBe(false);expect(deposit.capturableAmountCents).toBe(30000);
+  const olderCase=await prisma.financialCase.create({data:{sourceKey:randomUUID(),operationId:old.id,reservationId:r.id,customerId:u.id,kind:"DEPOSIT",amountCents:30000,providerId:old.providerId,reason:"Superseded historical attempt"}});
+  provider.paymentIntents.retrieve.mockResolvedValue({...capture(old.providerId!),status:"canceled",capture_method:"manual",customer:"cus_adopt_"+r.id,metadata:{reservationId:r.id,purpose:"security_deposit"}});
+  await resolveFinancialCase(admin,{caseId:olderCase.id,action:"CONFIRM_FAILURE",reason:"Provider confirms cancellation of the superseded attempt"});
+  expect((await prisma.securityDeposit.findUniqueOrThrow({where:{reservationId:r.id}})).operationId).toBe(chosen.id);
+  expect(await prisma.financialOperation.count({where:{reservationId:r.id,kind:"DEPOSIT"}})).toBe(2);expect(provider.paymentIntents.create).not.toHaveBeenCalled();expect(provider.refunds.create).not.toHaveBeenCalled();
+ });
  it("requires active administrator authority, a reason and provider failure evidence",async()=>{
   const {r,u}=await fixture();const c=await prisma.financialCase.create({data:{sourceKey:randomUUID(),reservationId:r.id,customerId:u.id,kind:"RENTAL",amountCents:15000,reason:"Uncertain provider result"}});
   await expect(resolveFinancialCase(u,{caseId:c.id,action:"ESCALATE",reason:"Customer cannot resolve their own financial review"})).rejects.toThrow("Forbidden");

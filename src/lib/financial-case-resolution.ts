@@ -53,15 +53,24 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
       if (input.action === "CONFIRM_FAILURE" && intent.status !== "canceled") throw new Error("Only provider-confirmed cancellation proves no future charge");
       let op = c.operationId ? await tx.financialOperation.findUniqueOrThrow({ where: { id: c.operationId } }) : null;
       if (op?.providerId && op.providerId !== intent.id) throw new Error("Operation provider identity mismatch");
+      if (!op && c.kind === "DEPOSIT") {
+        const matches = await tx.financialOperation.findMany({ where: { reservationId: r.id, kind: "DEPOSIT", providerId: intent.id } });
+        if (matches.length > 1) throw new Error("Conflicting provider mappings require escalation");
+        if (matches.length === 1) op = matches[0];
+      }
       if (!op) op = await prepareOperation(tx, { key: "adopt:" + c.id, kind: c.kind, reservationId: r.id, payload: { legacy: true } });
-      const generation = c.kind === "DEPOSIT" ? (r.deposit?.generation ?? 0) + 1 : null;
-      await tx.financialOperation.update({ where: { id: op.id }, data: { providerId: intent.id, generation, state: "RETRY", nextAttemptAt: new Date(), consecutiveFailures: 0, leaseToken: null, leaseExpiresAt: null } });
+      const superseded = c.kind === "DEPOSIT" && r.deposit?.operationId && r.deposit.operationId !== op.id && !r.deposit.legacyUncertain;
+      if (superseded && input.action !== "CONFIRM_FAILURE") throw new Error("A verified current generation already owns this deposit; escalate superseded observations");
+      const generation = superseded ? op.generation : c.kind === "DEPOSIT" ? (r.deposit?.generation ?? 0) + 1 : null;
+      await tx.financialOperation.update({ where: { id: op.id }, data: { providerId: intent.id, generation, result: json(intent), state: input.action === "CONFIRM_FAILURE" ? "OBSERVED" : "RETRY", nextAttemptAt: input.action === "CONFIRM_FAILURE" ? null : new Date(), consecutiveFailures: 0, leaseToken: null, leaseExpiresAt: null } });
       if (c.kind === "DEPOSIT") {
         if (!r.deposit || intent.capture_method !== "manual" || intent.metadata.purpose !== "security_deposit") throw new Error("Deposit evidence mismatch");
         const duplicate = await tx.financialOperation.count({ where: { kind: "DEPOSIT", providerId: intent.id, id: { not: op.id } } });
         if (duplicate) throw new Error("Ambiguous deposit ownership requires escalation");
-        await tx.securityDeposit.update({ where: { id: r.deposit.id }, data: { operationId: op.id, generation: generation!, legacyUncertain: false } });
-        await syncDepositIntent(r.id, intent, tx);
+        if (!superseded) {
+          await tx.securityDeposit.update({ where: { id: r.deposit.id }, data: { operationId: op.id, generation: generation!, legacyUncertain: false } });
+          await syncDepositIntent(r.id, intent, tx);
+        }
       } else if (c.kind === "DEPOSIT_RELEASE") {
         if (intent.capture_method !== "manual" || intent.metadata.purpose !== "security_deposit" || (op.payload as { intentId?: string }).intentId !== intent.id) throw new Error("Deposit release target mismatch");
         if (intent.status === "succeeded") throw new Error("Captured deposit requires claim review; do not cancel or automatically refund");
