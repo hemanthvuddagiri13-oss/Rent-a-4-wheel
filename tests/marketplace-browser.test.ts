@@ -4,9 +4,12 @@ import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { encode } from "next-auth/jwt";
 import sharp from "sharp";
+import { createServer as createScannerServer, type Server as ScannerServer } from "node:net";
 import { prisma, createTestCustomer, createTestHost, createTestVehicle, createTestReservation, cleanupReservationsForVehicles } from "./helpers/factories";
 
 let child: ChildProcess, browser: Browser;
+let scanner: ScannerServer, scannerReply = "stream: scanner unavailable ERROR\0";
+let priorHostLegal: Awaited<ReturnType<typeof prisma.legalDocument.findUnique>>;
 const base = "http://127.0.0.1:3201", secret = "marketplace-browser-only-secret";
 const users: string[] = [], hosts: string[] = [], vehicles: string[] = [];
 const captures = "test-artifacts/marketplace";
@@ -30,7 +33,23 @@ async function screenshot(page: Page, name: string, widths = [390, 1440]) {
 }
 beforeAll(async () => {
   await mkdir(captures, { recursive: true });
-  child = spawn(process.execPath, ["tests/helpers/app-server.mjs"], { stdio: "inherit", env: { ...process.env, BROWSER_TEST_PORT: "3201", NODE_ENV: "development", AUTH_SECRET: secret, AUTH_TRUST_HOST: "true", NEXTAUTH_URL: base, AUTH_URL: base, STRIPE_SECRET_KEY: "", NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "", STRIPE_WEBHOOK_SECRET: "", ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV: "true" } });
+  priorHostLegal = await prisma.legalDocument.findUnique({ where: { type: "HOST_AGREEMENT" } });
+  // Explicit provider-boundary fixture. The app's scanner client and all HTTP,
+  // storage, authorization and database paths remain real. This is not a claim
+  // that a deployed ClamAV engine or its signature database has been verified.
+  scanner = createScannerServer(socket => {
+    let bytes = Buffer.alloc(0), framed = false;
+    socket.on("data", chunk => {
+      bytes = Buffer.concat([bytes, chunk]);
+      if (!framed) { const end = bytes.indexOf(0); if (end < 0) return; bytes = bytes.subarray(end + 1); framed = true; }
+      while (bytes.length >= 4) {
+        const length = bytes.readUInt32BE(0); if (bytes.length < 4 + length) return;
+        bytes = bytes.subarray(4 + length); if (!length) { socket.end(scannerReply); return; }
+      }
+    });
+  });
+  await new Promise<void>(resolve => scanner.listen(0, "127.0.0.1", resolve));
+  child = spawn(process.execPath, ["tests/helpers/app-server.mjs"], { stdio: "inherit", env: { ...process.env, CLAMAV_HOST: "127.0.0.1", CLAMAV_PORT: String((scanner.address() as { port: number }).port), BROWSER_TEST_PORT: "3201", NODE_ENV: "development", AUTH_SECRET: secret, AUTH_TRUST_HOST: "true", NEXTAUTH_URL: base, AUTH_URL: base, STRIPE_SECRET_KEY: "", NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "", STRIPE_WEBHOOK_SECRET: "", ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV: "true" } });
   let ready = false;
   for (let i = 0; i < 240; i++) { try { await fetch(`${base}/api/auth/session`); ready = true; break; } catch { await new Promise(r => setTimeout(r, 500)); } }
   if (!ready) throw new Error("Real Next.js server unavailable");
@@ -39,6 +58,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   if (child && child.exitCode === null) { const stopped = new Promise(resolve => child.once("exit", resolve)); child.kill(); await Promise.race([stopped, new Promise(resolve => setTimeout(resolve, 3000))]); }
+  if (scanner) await new Promise<void>(resolve => scanner.close(() => resolve()));
   await cleanupReservationsForVehicles(vehicles);
   await prisma.auditLog.deleteMany({ where: { actorId: { in: users } } });
   await prisma.marketplaceFile.deleteMany({ where: { hostId: { in: hosts } } });
@@ -47,6 +67,8 @@ afterAll(async () => {
   await prisma.vehicleOwner.deleteMany({ where: { hostId: { in: hosts } } });
   await prisma.hostProfile.deleteMany({ where: { id: { in: hosts } } });
   await prisma.user.deleteMany({ where: { id: { in: users } } });
+  if (priorHostLegal) await prisma.legalDocument.update({ where: { type: "HOST_AGREEMENT" }, data: { content: priorHostLegal.content, version: priorHostLegal.version, needsAttorneyReview: priorHostLegal.needsAttorneyReview } });
+  else await prisma.legalDocument.deleteMany({ where: { type: "HOST_AGREEMENT" } });
   await prisma.$disconnect();
 });
 
@@ -73,6 +95,35 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   await page.getByText("2035-02-01 → 2035-02-03", { exact: false }).waitFor();
   expect(await prisma.vehicleBlock.count({ where: { vehicleId: vehicle.id } })).toBe(1);
   await screenshot(page, "host-vehicle");
+  const admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id); const ac = await login(admin);
+  const image = await sharp({ create: { width: 32, height: 32, channels: 3, background: "silver" } }).png().toBuffer();
+  async function upload(purpose: string) {
+    await page.getByLabel("File purpose").selectOption(purpose);
+    await page.getByLabel("Image (JPG, PNG or WebP, max 8 MB)").setInputFiles({ name: "synthetic.png", mimeType: "image/png", buffer: image });
+    const response = page.waitForResponse(r => r.url().endsWith("/api/host/files") && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Upload file", exact: true }).click();
+    const result = await response; expect(result.status(), await result.text()).toBe(200); return result.json();
+  }
+  const quarantined = await upload("OWNERSHIP"); expect(quarantined.scanStatus).toBe("QUARANTINED");
+  expect((await ac.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(403);
+  expect((await context.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(200);
+  expect((await context.request.post(`${base}/api/host/vehicles/${vehicle.id}/agreement`, { data: { signerName: "Synthetic Host", version: priorHostLegal?.version || "v1-draft", accept: "yes" } })).status()).toBe(409);
+  scannerReply = "stream: OK\0";
+  for (const purpose of ["OWNERSHIP", "REGISTRATION", "INSURANCE", "LISTING_PHOTO"]) expect((await upload(purpose)).scanStatus).toBe("CLEAN");
+  await prisma.legalDocument.upsert({ where: { type: "HOST_AGREEMENT" }, create: { type: "HOST_AGREEMENT", title: "Synthetic host agreement", content: "Synthetic browser terms, not production legal language", version: "browser-host", needsAttorneyReview: false }, update: { content: "Synthetic browser terms, not production legal language", version: "browser-host", needsAttorneyReview: false } });
+  await page.reload(); await page.getByLabel("Full legal name", { exact: true }).fill("Synthetic Host");
+  await page.getByRole("checkbox").check();
+  const signed = page.waitForResponse(r => r.url().endsWith(`/api/host/vehicles/${vehicle.id}/agreement`) && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Sign listing agreement" }).click(); expect((await signed).status()).toBe(200);
+  const acceptance = await prisma.agreementAcceptance.findFirstOrThrow({ where: { vehicleId: vehicle.id } });
+  expect(acceptance.signedPdfStorageKey).toBeTruthy();
+  expect((await context.request.get(`${base}/api/host/vehicles/${vehicle.id}/agreement?acceptanceId=${acceptance.id}`)).headers()["content-type"]).toBe("application/pdf");
+  expect((await ac.request.post(`${base}/api/admin/marketplace`, { data: { action: "host", id: host.id, status: "APPROVED", reason: "Synthetic browser evidence reviewed" } })).status()).toBe(200);
+  const approval = await ac.request.post(`${base}/api/admin/marketplace`, { data: { action: "vehicle", id: vehicle.id, status: "APPROVED", reason: "Synthetic compliance files and signed snapshot reviewed" } });
+  expect(approval.status(), await approval.text()).toBe(200);
+  expect(await prisma.vehicle.findUnique({ where: { id: vehicle.id } })).toMatchObject({ listingApproval: "APPROVED", status: "ACTIVE" });
+  const ap = await ac.newPage(); await ap.goto(`${base}/admin/marketplace/vehicles/${vehicle.id}`); await screenshot(ap, "admin-listing-review");
+  await ap.goto(`${base}/admin/marketplace`); await screenshot(ap, "admin-operations"); await ac.close();
   await page.goto(`${base}/host/team`);
   await page.getByLabel("Owner name").fill("Synthetic Owner"); await page.getByLabel("Owner email").fill("owner@synthetic.test"); await page.getByLabel("Owner phone").fill("5551234567");
   await page.getByRole("button", { name: "Add vehicle owner" }).click(); await page.getByText("Synthetic Owner · owner@synthetic.test").waitFor();

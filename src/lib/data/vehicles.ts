@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { getAvailableVehicleIds } from "@/lib/availability";
 import type { VehicleCardData } from "@/components/vehicles/vehicle-card";
 
-const publicInventory: Prisma.VehicleWhereInput = { status: "ACTIVE", listingApproval: "APPROVED", OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] };
+const publicInventory: Prisma.VehicleWhereInput = { status: "ACTIVE", isDemo: false, listingApproval: "APPROVED", OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] };
 
 type VehicleWithImages = {
   id: string;

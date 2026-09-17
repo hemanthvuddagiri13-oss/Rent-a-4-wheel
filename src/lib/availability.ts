@@ -53,9 +53,10 @@ export async function isVehicleAvailable(
 
   const vehicle = await client.vehicle.findUnique({
     where: { id: vehicleId },
-    select: { status: true, listingApproval: true, host: { select: { onboardingStatus: true } }, availability: { select: { isBookable: true } } },
+    select: { status: true, isDemo: true, listingApproval: true, host: { select: { onboardingStatus: true } }, availability: { select: { isBookable: true } } },
   });
   if (!vehicle || vehicle.status !== "ACTIVE") return false;
+  if (vehicle.isDemo) return false;
   if (vehicle.listingApproval !== "APPROVED" || (vehicle.host && vehicle.host.onboardingStatus !== "APPROVED")) return false;
   if (vehicle.availability && !vehicle.availability.isBookable) return false;
 
@@ -91,6 +92,7 @@ export async function getAvailableVehicleIds(
     where: {
       status: "ACTIVE",
       listingApproval: "APPROVED",
+      isDemo: false,
       AND: [{ OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] }],
       id: { notIn: Array.from(unavailable) },
       OR: [{ availability: null }, { availability: { isBookable: true } }],

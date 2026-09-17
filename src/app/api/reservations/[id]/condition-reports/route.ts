@@ -3,7 +3,7 @@ import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { validateAndSanitizeDocument, InvalidDocumentError, MAX_DOCUMENT_SIZE_BYTES } from "@/lib/documents";
+import { validateAndSanitizeDocument, scanForMalware, InvalidDocumentError, MAX_DOCUMENT_SIZE_BYTES } from "@/lib/documents";
 import { storePrivateDocument } from "@/lib/storage";
 import { getHostContext, hostOwnsReservation } from "@/lib/host-access";
 import type { ConditionPhotoCategory, ConditionReportPhase } from "@prisma/client";
@@ -78,6 +78,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (file.size > MAX_DOCUMENT_SIZE_BYTES) return NextResponse.json({ error: "A photo is too large (max 8MB)." }, { status: 400 });
       const buffer = Buffer.from(await file.arrayBuffer());
       const sanitized = await validateAndSanitizeDocument(buffer, file.type);
+      if ((await scanForMalware(sanitized.buffer)).status !== "CLEAN") throw new MarketplaceError("Inspection photo did not clear security scanning. Please try again when the scanner is available.", 503);
       const { storageKey } = await storePrivateDocument(sanitized.buffer, sanitized.mimeType);
       storedPhotos.push({ category: photoCategories[i] as ConditionPhotoCategory, storageKey });
     }

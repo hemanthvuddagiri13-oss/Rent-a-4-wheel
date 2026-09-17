@@ -4,6 +4,7 @@ import sharp from "sharp";
 import { prisma } from "@/lib/prisma";
 import { storePrivateDocument } from "@/lib/storage";
 import type { DocumentType, Prisma } from "@prisma/client";
+import { scanWithClamAv } from "@/lib/clamav";
 
 export const MAX_DOCUMENT_SIZE_BYTES = 8 * 1024 * 1024; // 8MB
 
@@ -45,7 +46,7 @@ export async function validateAndSanitizeDocument(
   let reencoded: Buffer;
   let outputMimeType: string;
   try {
-    const image = sharp(buffer, { failOn: "error" });
+    const image = sharp(buffer, { failOn: "error", limitInputPixels: 40_000_000 });
     const metadata = await image.metadata();
     if (!metadata.format) throw new Error("Unrecognized image format.");
 
@@ -62,6 +63,7 @@ export async function validateAndSanitizeDocument(
   } catch {
     throw new InvalidDocumentError("File does not appear to be a valid image.");
   }
+  if (reencoded.length > MAX_DOCUMENT_SIZE_BYTES) throw new InvalidDocumentError("Decoded image is too large. Choose a smaller image.");
   return { buffer: reencoded, mimeType: outputMimeType, sha256: sha256Hex(reencoded) };
 }
 
@@ -72,15 +74,12 @@ function sha256Hex(buffer: Buffer): string {
 export type MalwareScanResult = { status: "CLEAN" | "INFECTED" | "SCAN_UNAVAILABLE" };
 
 /**
- * Integration point for a malware scanner (e.g. ClamAV, VirusTotal, an S3
- * Object Lambda scanner). No scanning provider is configured in this
- * environment, so this always returns SCAN_UNAVAILABLE — callers must
- * never treat that as a pass. Wire a real provider here before accepting
- * uploads in production; see README "Identity Verification" for notes.
+ * Configured private ClamAV INSTREAM integration. Missing configuration,
+ * connection errors and malformed or incomplete replies are unavailable,
+ * never a pass. See docs/phase-2-delivery.md for deployment requirements.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature documents the intended integration point
 export async function scanForMalware(buffer: Buffer): Promise<MalwareScanResult> {
-  return { status: "SCAN_UNAVAILABLE" };
+  return scanWithClamAv(buffer);
 }
 
 export function computeRetentionExpiresAt(from: Date = new Date()): Date {
@@ -90,8 +89,7 @@ export function computeRetentionExpiresAt(from: Date = new Date()): Date {
 /**
  * Stores an identity document with fail-closed malware-scan semantics:
  *  - INFECTED is always rejected outright.
- *  - SCAN_UNAVAILABLE (the only possible outcome until a real scanner is
- *    wired up) is rejected in production — an unscanned file is not an
+ *  - SCAN_UNAVAILABLE is rejected in production — an unscanned file is not an
  *    accepted file, full stop. It is only accepted in non-production
  *    environments, and only via an explicit opt-in
  *    (`ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV=true`), so a developer
@@ -160,9 +158,8 @@ export async function storeIdentityDocument(params: {
  * document's own uploader may always view it (it's already fully theirs
  * to see), but any other viewer — a host verifying identity at pickup, a
  * staff reviewer — is refused until the scan status is actually CLEAN.
- * In this environment that means non-owner access to any document is
- * refused entirely (scanning is never configured here), which is the
- * correct fail-closed behavior, not a bug.
+ * When scanning is unavailable, development uploads remain quarantined
+ * and non-owner access is refused until a successful scan is recorded.
  */
 export function assertDocumentViewable(document: { userId: string; malwareScanStatus: string }, viewerId: string): void {
   if (document.userId === viewerId) return;
