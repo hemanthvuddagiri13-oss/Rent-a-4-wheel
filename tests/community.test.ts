@@ -1,3 +1,5 @@
+import { projectTransactionalNotices } from "@/lib/notice-center";
+import { enqueueOutboxNotification } from "@/lib/outbox";
 import { GET as openNotice } from "@/app/api/community/notices/[id]/route";
 import { runCollaborationRetention } from "@/lib/collaboration-retention";
 import { communityAdmin } from "@/lib/community-admin";
@@ -188,4 +190,12 @@ it("notification HTTP redirects preserve the browser origin and recheck current 
  const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id});await messageCommand(f.h.user.id,c.id,{action:"send",body:"A private update for your trip."});const n=await prisma.inboxNotice.findFirstOrThrow({where:{userId:f.customer.id,resourceId:c.id}});
  session.id=f.customer.id;const response=await openNotice(new Request("http://internal-server/api/community/notices/"+n.id),{params:Promise.resolve({id:n.id})});expect(response.status).toBe(303);expect(response.headers.get("location")).toBe("/connect/conversations/"+c.id);expect(response.headers.get("cache-control")).toContain("no-store");
  session.id=f.other.id;expect((await openNotice(new Request("http://internal-server/api/community/notices/"+n.id),{params:Promise.resolve({id:n.id})})).status).toBe(404);session.id="";
+});
+
+it("notification preferences match legacy trip events and plan only the selected channel",async()=>{
+ const f=await fixture();session.id=f.customer.id;process.env.AUTH_URL="http://localhost";
+ const response=await POST(new Request("http://localhost/api/community",{method:"POST",headers:{origin:"http://localhost","content-type":"application/json"},body:JSON.stringify({action:"preference",category:"TRIP",email:"off",sms:"on"})}));expect(response.status).toBe(200);
+ await prisma.$transaction(tx=>enqueueOutboxNotification(tx,{userId:f.customer.id,reservationId:f.r.id,type:"PICKUP_REMINDER"},"preference-test:"+f.r.id));
+ const n=await prisma.inboxNotice.findFirstOrThrow({where:{userId:f.customer.id,resourceId:f.r.id,category:"TRIP"}});expect(n.required).toBe(true);await projectTransactionalNotices();expect(await prisma.outboxMessage.count({where:{deliveryKey:"community:"+f.customer.id+":"+n.eventKey}})).toBe(0);
+ await deliverNoticeChannels();expect(await prisma.channelDelivery.findUnique({where:{noticeId_channel:{noticeId:n.id,channel:"SMS"}}})).toMatchObject({state:"READY",attempts:0});expect(await prisma.channelDelivery.count({where:{noticeId:n.id,channel:"PUSH"}})).toBe(0);session.id="";
 });

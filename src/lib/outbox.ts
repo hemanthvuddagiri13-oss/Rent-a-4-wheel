@@ -3,11 +3,17 @@ import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient, NotificationType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { queueNotification } from "@/lib/notifications";
+export function noticeCategory(type?: NotificationType) {
+  if (["PAYMENT_RECEIPT","DEPOSIT_AUTH_FAILED","REFUND"].includes(type ?? "")) return "PAYMENT";
+  if (type === "DRIVER_VERIFICATION_REQUEST") return "DOCUMENT";
+  if (["UPCOMING_RENTAL_REMINDER","PICKUP_REMINDER","RETURN_REMINDER","LATE_RETURN","TRIP_EMERGENCY_OVERRIDE"].includes(type ?? "")) return "TRIP";
+  return "BOOKING";
+}
 export type OutboxNotificationPayload = { userId?: string; reservationId?: string; type?: NotificationType; extra?: Record<string, unknown> };
 export async function enqueueOutboxNotification(tx: Prisma.TransactionClient, payload: OutboxNotificationPayload, deliveryKey?: string) {
   const message = deliveryKey ? await tx.outboxMessage.upsert({ where: { deliveryKey }, update: {}, create: { type: "notification", deliveryKey, payload: payload as Prisma.InputJsonValue } })
   : await tx.outboxMessage.create({ data: { type: "notification", payload: payload as Prisma.InputJsonValue } });
-  if (payload.userId && payload.reservationId && payload.type !== "COMMUNITY_UPDATE") await tx.inboxNotice.upsert({ where: { eventKey_userId: { eventKey: "outbox:" + message.id, userId: payload.userId } }, update: {}, create: { eventKey: "outbox:" + message.id, userId: payload.userId, category: payload.type ?? "BOOKING", resourceType: "RESERVATION", resourceId: payload.reservationId, title: (payload.type ?? "Reservation update").replaceAll("_", " "), required: true } });
+  if (payload.userId && payload.reservationId && payload.type !== "COMMUNITY_UPDATE") await tx.inboxNotice.upsert({ where: { eventKey_userId: { eventKey: "outbox:" + message.id, userId: payload.userId } }, update: {}, create: { eventKey: "outbox:" + message.id, userId: payload.userId, category: noticeCategory(payload.type), resourceType: "RESERVATION", resourceId: payload.reservationId, title: (payload.type ?? "Reservation update").replaceAll("_", " "), required: true } });
 }
 export async function processOutboxOnce(limit = 50, ids?: string[], db: PrismaClient = prisma) {
   const now = new Date();

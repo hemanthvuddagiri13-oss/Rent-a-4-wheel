@@ -39,7 +39,7 @@ export async function POST(req: Request) {
       case "moderate": result = await moderateTripReview(userId, z.string().parse(data.id), z.enum(["hide", "restore", "report"]).parse(data.command), z.string().parse(data.reason)); break;
       case "smsConsent": result = await requestSmsConsent(userId, z.string().parse(data.phone), data.consent === "yes"); break;
       case "preference": {
-        const p = z.object({ category: z.enum(["MESSAGE", "CLAIM", "DISPUTE", "INCIDENT", "TICKET", "REVIEW", "BOOKING", "PAYMENT"]), email: z.enum(["on", "off"]), sms: z.enum(["on", "off"]).default("off"), push: z.enum(["on", "off"]).default("off") }).parse(data);
+        const p = z.object({ category: z.enum(["MESSAGE", "CLAIM", "DISPUTE", "INCIDENT", "TICKET", "REVIEW", "BOOKING", "PAYMENT", "TRIP", "DOCUMENT", "AGREEMENT", "MAINTENANCE"]), email: z.enum(["on", "off"]), sms: z.enum(["on", "off"]).default("off"), push: z.enum(["on", "off"]).default("off") }).parse(data);
         result = await prisma.noticePreference.upsert({ where: { userId_category: { userId, category: p.category } }, create: { userId, category: p.category, email: p.email === "on", sms: p.sms === "on", push: p.push === "on" }, update: { email: p.email === "on", sms: p.sms === "on", push: p.push === "on" } }); break;
       }
       case "privacy": result = await prisma.privacyDeletion.create({ data: { userId } }); break;
