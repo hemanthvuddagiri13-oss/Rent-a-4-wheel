@@ -56,8 +56,9 @@ export default async function ReservationDetailPage({ params }: { params: Promis
       </div>
 
       <div className="mt-6 rounded-xl border border-white/10 bg-card p-6">
-        <Row label="Pickup" value={reservation.pickupAt.toLocaleString("en-US")} />
-        <Row label="Return" value={reservation.returnAt.toLocaleString("en-US")} />
+        <Row label="Pickup" value={reservation.pickupAt.toLocaleString("en-US", { timeZone: reservation.bookingTimezone })} />
+        <Row label="Return" value={reservation.returnAt.toLocaleString("en-US", { timeZone: reservation.bookingTimezone })} />
+        <p className="mt-2 text-xs text-muted">Times: {reservation.bookingTimezone}</p>
         <Row label="Location" value={reservation.pickupLocation} />
         <Separator className="my-3" />
         <Row label="Rental Subtotal" value={formatCurrency(reservation.subtotalCents)} />

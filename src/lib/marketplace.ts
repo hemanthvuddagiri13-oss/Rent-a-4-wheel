@@ -70,7 +70,7 @@ export async function saveListing(userId: string, input: unknown) {
     if (data.ownerId && !await tx.vehicleOwner.findFirst({ where: { id: data.ownerId, hostId: context.host.id } })) throw new MarketplaceError("Choose an owner in your business.");
     const { id, features, ownerId, registrationExpiresAt, insuranceExpiresAt, ...fields } = data;
     const saved = { ...fields, ownerId: ownerId || null, registrationExpiresAt: new Date(registrationExpiresAt), insuranceExpiresAt: new Date(insuranceExpiresAt) };
-    const vehicle = id ? await tx.vehicle.update({ where: { id }, data: { ...saved, listingApproval: "PENDING", status: "INACTIVE" } })
+    const vehicle = id ? await tx.vehicle.update({ where: { id }, data: { ...saved, listingRevision: { increment: 1 }, listingApproval: "PENDING", status: "INACTIVE" } })
       : await tx.vehicle.create({ data: { ...saved, hostId: context.host.id, listingApproval: "PENDING", status: "INACTIVE", slug: `${data.make}-${data.model}-${randomUUID()}`.toLowerCase(), availability: { create: { isBookable: false } } } });
     await tx.vehicleFeatureOnVehicle.deleteMany({ where: { vehicleId: vehicle.id } });
     for (const name of [...new Set(features)]) {
@@ -114,6 +114,7 @@ export async function hostCommand(userId: string, input: unknown) {
       if (context.role !== "OWNER") throw new MarketplaceError("Only the business owner can manage access.", 403);
       if (data.action === "removeEmployee") await tx.hostEmployee.deleteMany({ where: { id: data.id, hostId: context.host.id } });
       else {
+        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "email"=${data.email.toLowerCase()} FOR UPDATE`;
         const user = await tx.user.findUnique({ where: { email: data.email.toLowerCase() }, include: { hostEmployments: true } });
         if (!user?.isActive || !["CUSTOMER", "HOST_EMPLOYEE"].includes(user.role) || user.hostEmployments.some(e => e.hostId !== context.host.id)) throw new MarketplaceError("Employee must have an active customer account and no other host affiliation.");
         await tx.hostEmployee.upsert({ where: { hostId_userId: { hostId: context.host.id, userId: user.id } }, create: { hostId: context.host.id, userId: user.id, role: data.role }, update: { role: data.role } });

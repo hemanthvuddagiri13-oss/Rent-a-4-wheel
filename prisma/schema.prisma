@@ -275,6 +275,7 @@ enum OwnershipType {
 }
 
 model Vehicle {
+  listingRevision Int @default(1)
   listingApproval String @default("APPROVED")
   location String @default("Dallas, TX")
   rules String? @db.Text

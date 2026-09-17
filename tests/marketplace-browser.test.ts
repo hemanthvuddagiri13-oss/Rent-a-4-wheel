@@ -17,9 +17,13 @@ async function login(user: { id: string; email: string; role: string }) {
   return context;
 }
 async function screenshot(page: Page, name: string, widths = [390, 1440]) {
+  await page.locator("h1").waitFor();
+  for (const loading of ["Loading your trip…", "Loading payment status…"]) await page.getByText(loading, { exact: true }).waitFor({ state: "hidden" });
+  await page.evaluate(() => document.fonts.ready);
   for (const width of widths) {
     await page.setViewportSize({ width, height: 1000 });
-    await page.screenshot({ path: `${captures}/${name}-${width}.png`, fullPage: true });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: `${captures}/${name}-${width}.png`, fullPage: true, animations: "disabled" });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${name} overflows at ${width}px`).toBe(true);
     expect(await page.locator("h1").count()).toBe(1);
   }

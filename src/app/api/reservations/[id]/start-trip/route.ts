@@ -6,6 +6,7 @@ import { evaluateTripStartGate } from "@/lib/trip-gate";
 import { withReservationLock } from "@/lib/financial-locks";
 import { transitionReservation } from "@/lib/reservation-state-machine";
 import type { ReservationStatus } from "@prisma/client";
+import { tripParticipant } from "@/lib/trip-experience";
 
 // The chain a reservation walks through, one legal transition at a time,
 // once every trip-start precondition is independently satisfied and
@@ -50,16 +51,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: `Reservation is not in a pre-trip status (currently ${reservation.status}).` }, { status: 409 });
   }
 
-  const preTripReport = await prisma.conditionReport.findFirst({
-    where: { reservationId: id, phase: "PRE_TRIP", submittedByRole: "HOST" },
-  });
-
   try {
     await withReservationLock(id, async (tx) => {
+      const participant = await tripParticipant(tx, session.user.id, id);
+      if (participant.role !== "CUSTOMER") throw new Error("Customer access required");
       const freshGate = await evaluateTripStartGate(id, tx);
       if (!freshGate.canStart) throw new Error(freshGate.reasons.join("; "));
-      let current = reservation.status;
-      for (let i = startIndex; i < PRE_TRIP_CHAIN.length - 1; i++) {
+      const preTripReport = await tx.conditionReport.findFirst({ where: { reservationId: id, phase: "PRE_TRIP", submittedByRole: "HOST" } });
+      let current = participant.reservation.status;
+      for (let i = PRE_TRIP_CHAIN.indexOf(current); i < PRE_TRIP_CHAIN.length - 1; i++) {
         const next = PRE_TRIP_CHAIN[i + 1]!;
         await transitionReservation(tx, { id, from: current, to: next });
         current = next;

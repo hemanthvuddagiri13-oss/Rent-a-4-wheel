@@ -6,6 +6,8 @@ import { Separator } from "@/components/ui/separator";
 import { formatCurrency } from "@/lib/utils";
 import { RESERVATION_STATUS_LABELS } from "@/lib/constants";
 import { DocumentReviewRow, CancelReservationAdminButton, RefundForm } from "@/components/admin/reservation-actions";
+import { Panel } from "@/components/marketplace/workspace";
+import { ActionForm } from "@/components/marketplace/action-form";
 
 export const metadata: Metadata = { title: "Reservation Detail", robots: { index: false } };
 export const revalidate = 0;
@@ -22,6 +24,10 @@ export default async function AdminReservationDetailPage({ params }: { params: P
       refunds: true,
       deposit: true,
       documents: true,
+      conditionReports: { include: { photos: true }, orderBy: { createdAt: "asc" } },
+      damageReports: true,
+      tripEvents: { orderBy: { createdAt: "desc" }, take: 30 },
+      trip: true,
       extras: { include: { extra: true } },
       agreementAcceptances: { where: { type: "RENTAL_AGREEMENT" }, orderBy: { signedAt: "desc" }, take: 1 },
     },
@@ -109,6 +115,7 @@ export default async function AdminReservationDetailPage({ params }: { params: P
         </div>
       )}
 
+      <div className="mt-6 space-y-6"><Panel title="Pickup and return evidence">{reservation.conditionReports.map(report => <div key={report.id} className="mb-5 border-b border-white/10 pb-4 text-sm text-silver"><p>{report.submittedByRole} · {report.phase} · {report.mileage} miles · {report.fuelLevel}% fuel / charge · {report.acceptedAt ? "Accepted" : "Awaiting acceptance"}</p><p className="my-2">{report.damageNotes}</p><div className="flex flex-wrap gap-4">{report.photos.map(photo => <a key={photo.id} href={`/api/reservations/${id}/photos/${photo.id}`} className="text-gold-bright underline">{photo.category} photo</a>)}</div></div>)}{reservation.damageReports.map(damage => <p key={damage.id} className="mb-4 whitespace-pre-wrap text-silver">{damage.description}</p>)}{["DISPUTED", "UNDER_CLAIM_REVIEW"].includes(reservation.status) && <ActionForm endpoint={`/api/admin/reservations/${id}/return-review`} label="Record return decision" fields={[{ name: "action", label: "Decision", options: ["REVIEW", "COMPLETE_NO_CHARGE"] }, { name: "reason", label: "Evidence and resolution reason", type: "textarea" }]} />}</Panel><Panel title="Trip audit history"><ol className="space-y-3 text-xs text-silver">{reservation.tripEvents.map(event => <li key={event.id}>{event.createdAt.toISOString()} · {event.type}{event.type === "RETURN_REVIEWED" && <pre className="mt-2 whitespace-pre-wrap">{JSON.stringify(event.metadata, null, 2)}</pre>}</li>)}</ol></Panel></div>
       {(["AWAITING_PAYMENT", "CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN"] as string[]).includes(
         reservation.status
       ) && (

@@ -23,7 +23,7 @@ export async function POST(req: Request) {
           const files = await tx.marketplaceFile.findMany({ where: { vehicleId: vehicle.id, hostId: vehicle.hostId, scanStatus: "CLEAN" } });
           if (vehicle.host?.onboardingStatus !== "APPROVED" || !vehicle.registrationExpiresAt || vehicle.registrationExpiresAt <= new Date() || !vehicle.insuranceExpiresAt || vehicle.insuranceExpiresAt <= new Date()) throw new MarketplaceError("Approved host and current registration/insurance dates required.", 409);
           if (["OWNERSHIP", "REGISTRATION", "INSURANCE", "LISTING_PHOTO"].some(purpose => !files.some(f => f.purpose === purpose))) throw new MarketplaceError("Clean ownership, registration, insurance and listing-photo uploads are required.", 409);
-          if (!vehicle.agreementAcceptances.some(a => a.signedPdfStorageKey)) throw new MarketplaceError("A signed host agreement PDF is required.", 409);
+          if (!vehicle.agreementAcceptances.some(a => a.signedPdfStorageKey && (a.subjectSnapshot as { vehicle?: { listingRevision?: number } } | null)?.vehicle?.listingRevision === vehicle.listingRevision)) throw new MarketplaceError("A signed host agreement PDF for the current listing revision is required.", 409);
         }
         await tx.vehicle.update({ where: { id: data.id }, data: { listingApproval: data.status, status: data.status === "APPROVED" ? "ACTIVE" : "INACTIVE" } });
         await tx.vehicleAvailabilityConfig.upsert({ where: { vehicleId: data.id }, create: { vehicleId: data.id, isBookable: data.status === "APPROVED" }, update: { isBookable: data.status === "APPROVED" } });

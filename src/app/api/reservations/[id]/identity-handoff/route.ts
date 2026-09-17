@@ -4,6 +4,8 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getHostContext, hostOwnsReservation } from "@/lib/host-access";
+import { tripParticipant } from "@/lib/trip-experience";
+import { marketplaceLimit } from "@/lib/marketplace";
 
 const schema = z.object({
   licenseMatchesUpload: z.boolean(),
@@ -39,7 +41,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const allTrue =
     parsed.data.licenseMatchesUpload && parsed.data.physicalLicenseUnexpired && parsed.data.selfieMatchesCustomer;
 
-  const handoff = await withReservationLock(reservationId, tx => tx.identityHandoffVerification.upsert({
+  try {
+  await marketplaceLimit(session.user.id);
+  const handoff = await withReservationLock(reservationId, async tx => {
+    const current = await tripParticipant(tx, session.user.id, reservationId);
+    if (current.role !== "HOST" || !["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START"].includes(current.reservation.status)) throw new Error("Handoff unavailable");
+    return tx.identityHandoffVerification.upsert({
     where: { reservationId },
     create: {
       reservationId,
@@ -58,7 +65,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       notes: parsed.data.notes,
       verifiedAt: allTrue ? new Date() : null,
     },
-  }));
+  }); });
 
   await prisma.tripEvent.create({
     data: {
@@ -70,4 +77,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
 
   return NextResponse.json({ id: handoff.id, verified: allTrue });
+  } catch { return NextResponse.json({ error: "Identity handoff is unavailable or the pickup phase has closed." }, { status: 409 }); }
 }

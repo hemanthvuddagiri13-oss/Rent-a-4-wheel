@@ -14,12 +14,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await marketplaceLimit(session.user.id);
     const data = z.object({ signerName: z.string().trim().min(2).max(150), version: z.string(), accept: z.literal("yes") }).parse(await req.json());
     const acceptance = await prisma.$transaction(async tx => {
-      const { role } = await marketplaceVehicle(tx, session.user.id, id, true);
+      const { role, vehicle } = await marketplaceVehicle(tx, session.user.id, id, true);
       if (role !== "OWNER") throw new MarketplaceError("Only the host owner can sign.", 403);
       await tx.$queryRaw`SELECT "id" FROM "LegalDocument" WHERE "type"='HOST_AGREEMENT' FOR UPDATE`;
       const legal = await tx.legalDocument.findUnique({ where: { type: "HOST_AGREEMENT" } });
       if (legal?.version !== data.version) throw new MarketplaceError("Agreement changed. Reload and review the current version.", 409);
-      const prior = await tx.agreementAcceptance.findFirst({ where: { vehicleId: id, signedByUserId: session.user.id, type: "HOST_AGREEMENT", documentVersion: data.version }, orderBy: { signedAt: "desc" } });
+      const prior = await tx.agreementAcceptance.findFirst({ where: { vehicleId: id, signedByUserId: session.user.id, type: "HOST_AGREEMENT", documentVersion: data.version, subjectSnapshot: { path: ["vehicle", "listingRevision"], equals: vehicle.listingRevision } }, orderBy: { signedAt: "desc" } });
       return prior ?? recordAgreementAcceptance(tx, { type: "HOST_AGREEMENT", vehicleId: id, signedByUserId: session.user.id, signerName: data.signerName, ipAddress: null, userAgent: req.headers.get("user-agent") });
     });
     if (!acceptance.signedPdfStorageKey) {
