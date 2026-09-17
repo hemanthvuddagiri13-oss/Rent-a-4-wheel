@@ -1,7 +1,7 @@
 name: Financial verification
 on:
   push:
-    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace]
+    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -59,6 +59,18 @@ jobs:
           for run in 1 2 3 4 5; do
             npm test -- tests/return-financial-review.test.ts tests/business-file-revocation.test.ts || exit 1
           done
+      - name: Community concurrency and authorization (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/community.test.ts || exit 1
+          done
+      - name: Community screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-screenshots
+          path: test-artifacts/community
+          if-no-files-found: warn
       - name: Marketplace screenshots
         if: always()
         uses: actions/upload-artifact@v4

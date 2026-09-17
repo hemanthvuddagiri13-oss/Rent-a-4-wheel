@@ -25,6 +25,7 @@ export async function isVehicleAvailable(
 ): Promise<boolean> {
   const client = opts.tx ?? prisma;
   const now = new Date();
+  if (await client.serviceCase.count({ where: { vehicleId, safetyBlock: true } })) return false;
 
   const overlappingReservation = await client.reservation.findFirst({
     where: {
@@ -86,7 +87,8 @@ export async function getAvailableVehicleIds(
     }),
   ]);
 
-  const unavailable = new Set([...reserved.map((r) => r.vehicleId), ...blocked.map((b) => b.vehicleId)]);
+  const safety = await prisma.serviceCase.findMany({ where: { safetyBlock: true, vehicleId: { not: null } }, select: { vehicleId: true } });
+  const unavailable = new Set([...reserved.map((r) => r.vehicleId), ...blocked.map((b) => b.vehicleId), ...safety.map(b => b.vehicleId!)]);
 
   const vehicles = await prisma.vehicle.findMany({
     where: {

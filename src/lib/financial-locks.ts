@@ -37,7 +37,9 @@ export function withReservationLock<T>(id: string, run: (tx: Prisma.TransactionC
 // Mandatory even for emergency state transitions. Caller holds the reservation
 // lock, shared with refund reservation and deposit/cancellation projections.
 export async function assertFinancialTripStart(tx: Prisma.TransactionClient, id: string) {
+  if (await tx.serviceCase.count({ where: { reservationId: id, kind: { in: ["CLAIM", "DISPUTE"] }, state: { not: "CLOSED" } } })) throw new Error("Resolve the outstanding claim or dispute before this action");
   const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: { include: { operation: true } } } });
+  if (await tx.serviceCase.count({ where: { vehicleId: r.vehicleId, safetyBlock: true } })) throw new Error("Vehicle safety review blocks trip start");
   const projection = financialProjection(r);
   if (r.financialDisposition !== "OPEN" || !projection.moneyAvailable) throw new Error("Financial state does not permit trip start");
   if (!projection.depositValid) throw new Error("Valid required deposit authorization missing");

@@ -1,9 +1,23 @@
 import { randomUUID } from "crypto";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile, unlink } from "fs/promises";
 import path from "path";
 import { v2 as cloudinary } from "cloudinary";
 
 const LOCAL_STORAGE_ROOT = path.join(process.cwd(), "private-storage", "documents");
+
+export async function deletePrivateDocument(storageKey: string) {
+  if (storageKey.startsWith("cloudinary:")) {
+    const result = await cloudinary.uploader.destroy(storageKey.slice(11), { resource_type: "image", type: "authenticated", invalidate: true });
+    if (!["ok", "not found"].includes(result.result)) throw new Error("PRIVATE_DELETE_NOT_ACCEPTED");
+    return;
+  }
+  if (!storageKey.startsWith("local:")) throw new Error("INVALID_PRIVATE_STORAGE_KEY");
+  const filename = storageKey.slice(6);
+  if (path.basename(filename) !== filename || !/^[a-zA-Z0-9-]+\.[a-zA-Z0-9]+$/.test(filename)) throw new Error("INVALID_PRIVATE_STORAGE_KEY");
+  const target = path.resolve(LOCAL_STORAGE_ROOT, filename);
+  if (path.dirname(target) !== path.resolve(LOCAL_STORAGE_ROOT)) throw new Error("INVALID_PRIVATE_STORAGE_KEY");
+  await unlink(target).catch(error => { if (error.code !== "ENOENT") throw error; });
+}
 
 const cloudinaryConfigured = Boolean(
   process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET

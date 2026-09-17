@@ -1,0 +1,2 @@
+"use client";
+export default function ErrorPage({reset}:{reset:()=>void}){return <div className="p-8"><h1 className="text-2xl">Unable to load this workspace</h1><p className="my-4" role="alert">Please try again. Your saved records have not been changed.</p><button className="rounded bg-gold px-5 py-3 text-black" onClick={reset}>Try again</button></div>;}

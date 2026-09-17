@@ -8,7 +8,7 @@ export const NAV_LINKS = [
   { href: "/how-it-works", label: "How It Works" },
   { href: "/host", label: "Host workspace" },
   { href: "/faq", label: "FAQ" },
-  { href: "/contact", label: "Contact" },
+  { href: "/connect", label: "Inbox & help" },
 ] as const;
 
 export const VEHICLE_CATEGORY_LABELS: Record<string, string> = {

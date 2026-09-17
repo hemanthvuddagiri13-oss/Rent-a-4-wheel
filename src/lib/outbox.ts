@@ -5,8 +5,9 @@ import { prisma } from "@/lib/prisma";
 import { queueNotification } from "@/lib/notifications";
 export type OutboxNotificationPayload = { userId?: string; reservationId?: string; type?: NotificationType; extra?: Record<string, unknown> };
 export async function enqueueOutboxNotification(tx: Prisma.TransactionClient, payload: OutboxNotificationPayload, deliveryKey?: string) {
-  if (deliveryKey) await tx.outboxMessage.upsert({ where: { deliveryKey }, update: {}, create: { type: "notification", deliveryKey, payload: payload as Prisma.InputJsonValue } });
-  else await tx.outboxMessage.create({ data: { type: "notification", payload: payload as Prisma.InputJsonValue } });
+  const message = deliveryKey ? await tx.outboxMessage.upsert({ where: { deliveryKey }, update: {}, create: { type: "notification", deliveryKey, payload: payload as Prisma.InputJsonValue } })
+  : await tx.outboxMessage.create({ data: { type: "notification", payload: payload as Prisma.InputJsonValue } });
+  if (payload.userId && payload.reservationId && payload.type !== "COMMUNITY_UPDATE") await tx.inboxNotice.upsert({ where: { eventKey_userId: { eventKey: "outbox:" + message.id, userId: payload.userId } }, update: {}, create: { eventKey: "outbox:" + message.id, userId: payload.userId, category: payload.type ?? "BOOKING", resourceType: "RESERVATION", resourceId: payload.reservationId, title: (payload.type ?? "Reservation update").replaceAll("_", " "), required: true } });
 }
 export async function processOutboxOnce(limit = 50, ids?: string[], db: PrismaClient = prisma) {
   const now = new Date();

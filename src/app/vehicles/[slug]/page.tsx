@@ -1,3 +1,5 @@
+import { PublicReviews } from "@/components/marketplace/public-reviews";
+import { ActionForm } from "@/components/marketplace/action-form";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Fuel, Gauge, Settings2, Users, DoorOpen, CheckCircle2 } from "lucide-react";
@@ -127,6 +129,8 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
+      <PublicReviews vehicleId={vehicle.id} hostId={vehicle.hostId} />
+      <section className="my-8 rounded-xl border border-white/10 p-5"><h2 className="mb-4 text-xl">Questions before booking?</h2><ActionForm endpoint="/api/community" action="conversation" values={{vehicleId:vehicle.id}} label="Ask the host" redirectTo="/connect/conversations/:id" /></section>
       <MobileStickyCta dailyRateCents={vehicle.dailyRateCents} />
     </div>
   );

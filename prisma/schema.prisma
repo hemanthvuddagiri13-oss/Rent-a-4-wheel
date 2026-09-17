@@ -22,18 +22,20 @@ enum Role {
   STAFF
   ADMIN
   SUPER_ADMIN
+  SUPPORT_AGENT
+  CLAIMS_AGENT
 }
 
 model User {
   marketplaceFiles MarketplaceFile[]
-  id            String    @id @default(cuid())
-  name          String?
-  email         String    @unique
-  emailVerified DateTime?
-  image         String?
-  phone         String?
-  role          Role      @default(CUSTOMER)
-  isActive      Boolean   @default(true)
+  id               String            @id @default(cuid())
+  name             String?
+  email            String            @unique
+  emailVerified    DateTime?
+  image            String?
+  phone            String?
+  role             Role              @default(CUSTOMER)
+  isActive         Boolean           @default(true)
 
   stripeCustomerId String? @unique
 
@@ -186,11 +188,11 @@ enum StripeConnectStatus {
 // and receives payouts. Distinct from `VehicleOwner`, which tracks a purely
 // financial/legal ownership arrangement for company-managed vehicles.
 model HostProfile {
-  files MarketplaceFile[]
+  files         MarketplaceFile[]
   vehicleOwners VehicleOwner[]
-  id     String @id @default(cuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String            @id @default(cuid())
+  userId        String            @unique
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   businessName String?
   legalName    String
@@ -226,13 +228,13 @@ enum HostEmployeeRole {
 // Grants a user (who is not the host account owner) scoped access to a
 // single host's vehicles and bookings — never to any other host's data.
 model HostEmployee {
-  isActive Boolean @default(true)
+  isActive  Boolean     @default(true)
   expiresAt DateTime?
-  id     String      @id @default(cuid())
-  hostId String
-  host   HostProfile @relation(fields: [hostId], references: [id], onDelete: Cascade)
-  userId String
-  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String      @id @default(cuid())
+  hostId    String
+  host      HostProfile @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   role HostEmployeeRole @default(STAFF)
 
@@ -281,12 +283,12 @@ enum OwnershipType {
 
 model Vehicle {
   marketplaceFiles MarketplaceFile[]
-  listingRevision Int @default(1)
-  listingApproval String @default("APPROVED")
-  location String @default("Dallas, TX")
-  rules String? @db.Text
-  id   String @id @default(cuid())
-  slug String @unique
+  listingRevision  Int               @default(1)
+  listingApproval  String            @default("APPROVED")
+  location         String            @default("Dallas, TX")
+  rules            String?           @db.Text
+  id               String            @id @default(cuid())
+  slug             String            @unique
 
   vin          String  @unique
   licensePlate String
@@ -407,19 +409,20 @@ model VehicleFeatureOnVehicle {
 
 model VehicleOwner {
   hostId String?
-  host HostProfile? @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  @@index([hostId])
-  id    String  @id @default(cuid())
-  name  String
-  email String?
-  phone String?
-  notes String? @db.Text
+  host   HostProfile? @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id     String       @id @default(cuid())
+  name   String
+  email  String?
+  phone  String?
+  notes  String?      @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   vehicles   Vehicle[]
   agreements OwnerAgreement[]
+
+  @@index([hostId])
 }
 
 enum PaymentArrangement {
@@ -489,16 +492,15 @@ enum RateType {
 }
 
 model Reservation {
-  bookingTimezone String @default("America/Chicago")
-  financialCheckedAt DateTime?
-  @@index([financialCheckedAt, id])
+  bookingTimezone           String    @default("America/Chicago")
+  financialCheckedAt        DateTime?
   // Terminal financial disposition is independent of captured payment status.
-  financialDisposition String @default("OPEN")
-  bookingFingerprint String?
-  bookingFingerprintVersion Int @default(2)
-  checkoutFingerprint String?
-  id                 String @id @default(cuid())
-  confirmationNumber String @unique // e.g. RA4W-XXXXXX
+  financialDisposition      String    @default("OPEN")
+  bookingFingerprint        String?
+  bookingFingerprintVersion Int       @default(2)
+  checkoutFingerprint       String?
+  id                        String    @id @default(cuid())
+  confirmationNumber        String    @unique // e.g. RA4W-XXXXXX
 
   customerId String
   customer   User   @relation("ReservationCustomer", fields: [customerId], references: [id])
@@ -580,6 +582,7 @@ model Reservation {
   // never edit it via schema changes — edit the migration SQL directly.
   duringRange Unsupported("tsrange")?
 
+  @@index([financialCheckedAt, id])
   @@index([vehicleId, pickupAt, returnAt])
   @@index([customerId])
   @@index([status])
@@ -679,11 +682,10 @@ enum RefundStatus {
 // Stripe. Creating a Refund row is NOT refund completion — only
 // `status: SUCCEEDED` is; see src/lib/refund-operations.ts.
 model Refund {
-  @@index([status, legacyUncertain, createdAt])
-  legacyUncertain Boolean @default(false)
-  id            String      @id @default(cuid())
-  reservationId String
-  reservation   Reservation @relation(fields: [reservationId], references: [id])
+  legacyUncertain Boolean     @default(false)
+  id              String      @id @default(cuid())
+  reservationId   String
+  reservation     Reservation @relation(fields: [reservationId], references: [id])
 
   paymentId String
   payment   Payment @relation(fields: [paymentId], references: [id])
@@ -700,31 +702,33 @@ model Refund {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([status, legacyUncertain, createdAt])
   @@index([reservationId])
 }
 
 model BookingDraft {
-  fingerprintVersion Int @default(2)
-  id String @id
-  customerId String
-  vehicleId String
-  revision Int @default(0)
-  fingerprint String?
-  reservationId String?
-  updatedAt DateTime @updatedAt
+  fingerprintVersion Int      @default(2)
+  id                 String   @id
+  customerId         String
+  vehicleId          String
+  revision           Int      @default(0)
+  fingerprint        String?
+  reservationId      String?
+  updatedAt          DateTime @updatedAt
+
   @@index([customerId, vehicleId])
 }
 
 model SecurityDeposit {
-  currency String @default("usd")
-  capturableAmountCents Int @default(0)
-  operation FinancialOperation? @relation(fields: [operationId], references: [id])
-  legacyUncertain Boolean @default(false)
-  generation Int @default(0)
-  operationId String?
-  id            String      @id @default(cuid())
-  reservationId String      @unique
-  reservation   Reservation @relation(fields: [reservationId], references: [id])
+  currency              String              @default("usd")
+  capturableAmountCents Int                 @default(0)
+  operation             FinancialOperation? @relation(fields: [operationId], references: [id])
+  legacyUncertain       Boolean             @default(false)
+  generation            Int                 @default(0)
+  operationId           String?
+  id                    String              @id @default(cuid())
+  reservationId         String              @unique
+  reservation           Reservation         @relation(fields: [reservationId], references: [id])
 
   amountCents           Int
   status                PaymentStatus @default(REQUIRES_PAYMENT)
@@ -811,13 +815,13 @@ enum OutboxMessageStatus {
 // a state change that itself rolled back.
 model OutboxMessage {
   firstAttemptAt DateTime?
-  deliveryKey String? @unique
-  leaseToken String?
+  deliveryKey    String?             @unique
+  leaseToken     String?
   leaseExpiresAt DateTime?
-  id      String              @id @default(cuid())
-  type    String
-  payload Json
-  status  OutboxMessageStatus @default(PENDING)
+  id             String              @id @default(cuid())
+  type           String
+  payload        Json
+  status         OutboxMessageStatus @default(PENDING)
 
   attempts  Int     @default(0)
   lastError String? @db.Text
@@ -832,28 +836,28 @@ model OutboxMessage {
 // Immutable provider request plus resumable execution state. Payload contains
 // provider IDs, never card details. Unknown outcomes retain their original key.
 model FinancialOperation {
-  dispatches FinancialDispatch[]
-  consecutiveFailures Int @default(0)
-  deposits SecurityDeposit[]
-  generation Int?
-  priority Int @default(50)
-  id String @id @default(cuid())
-  key String @unique
-  kind String
-  reservationId String?
-  fingerprint String
-  payload Json
-  providerId String?
-  result Json?
-  state String @default("READY")
-  leaseToken String?
-  leaseExpiresAt DateTime?
-  firstAttemptAt DateTime?
-  nextAttemptAt DateTime?
-  attempts Int @default(0)
-  lastError String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  dispatches          FinancialDispatch[]
+  consecutiveFailures Int                 @default(0)
+  deposits            SecurityDeposit[]
+  generation          Int?
+  priority            Int                 @default(50)
+  id                  String              @id @default(cuid())
+  key                 String              @unique
+  kind                String
+  reservationId       String?
+  fingerprint         String
+  payload             Json
+  providerId          String?
+  result              Json?
+  state               String              @default("READY")
+  leaseToken          String?
+  leaseExpiresAt      DateTime?
+  firstAttemptAt      DateTime?
+  nextAttemptAt       DateTime?
+  attempts            Int                 @default(0)
+  lastError           String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@index([state, nextAttemptAt])
   @@index([kind, state, priority, nextAttemptAt, createdAt], map: "financial_recovery_due_idx")
@@ -1048,8 +1052,8 @@ enum LegalDocumentType {
 // still flagged `needsAttorneyReview` (see src/lib/agreements.ts).
 model AgreementAcceptance {
   subjectSnapshot Json?
-  id   String            @id @default(cuid())
-  type LegalDocumentType
+  id              String            @id @default(cuid())
+  type            LegalDocumentType
 
   documentVersion String
   contentHash     String // sha256 hex of contentSnapshot
@@ -1442,6 +1446,7 @@ model Faq {
 }
 
 enum NotificationType {
+  COMMUNITY_UPDATE
   BOOKING_CONFIRMATION
   PAYMENT_RECEIPT
   DEPOSIT_AUTH_FAILED
@@ -1468,7 +1473,7 @@ enum NotificationStatus {
 
 model Notification {
   deliveryKey String? @unique
-  id String @id @default(cuid())
+  id          String  @id @default(cuid())
 
   userId        String?
   user          User?        @relation(fields: [userId], references: [id])
@@ -1517,74 +1522,310 @@ model SiteSetting {
 
 // Durable operator queue. IDs/evidence are retained after resolution.
 model FinancialDispatch {
-  id String @id @default(cuid())
+  id          String             @id @default(cuid())
   operationId String
-  operation FinancialOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
-  leaseToken String
-  phase String
-  providerId String?
-  result Json?
-  errorCode String?
-  createdAt DateTime @default(now())
+  operation   FinancialOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  leaseToken  String
+  phase       String
+  providerId  String?
+  result      Json?
+  errorCode   String?
+  createdAt   DateTime           @default(now())
+
   @@index([operationId, createdAt])
 }
 
 model ProviderObjectOwnership {
-  providerId String @id
-  kind String
+  providerId    String  @id
+  kind          String
   reservationId String
-  operationId String?
-  paymentId String?
-  depositId String?
-  refundId String?
+  operationId   String?
+  paymentId     String?
+  depositId     String?
+  refundId      String?
 }
 
 model MarketplaceFile {
-  id String @id @default(cuid())
-  hostId String
-  host HostProfile @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vehicleId String?
-  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id           String      @id @default(cuid())
+  hostId       String
+  host         HostProfile @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vehicleId    String?
+  vehicle      Vehicle?    @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   uploadedById String
-  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  purpose String
-  storageKey String
-  mimeType String
-  sha256 String
-  scanStatus String
-  createdAt DateTime @default(now())
+  uploadedBy   User        @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purpose      String
+  storageKey   String
+  mimeType     String
+  sha256       String
+  scanStatus   String
+  createdAt    DateTime    @default(now())
+
   @@index([hostId, vehicleId])
 }
 
 model MarketplaceRateLimit {
-  key String @id
+  key         String   @id
   windowStart DateTime @default(now())
-  count Int @default(1)
+  count       Int      @default(1)
 }
 
 model FinancialCase {
-  paymentId String?
-  id String @id @default(cuid())
-  sourceKey String @unique
+  paymentId     String?
+  id            String    @id @default(cuid())
+  sourceKey     String    @unique
   reservationId String
-  customerId String
-  operationId String?
-  refundId String?
-  kind String
-  amountCents Int?
-  currency String? @default("usd")
-  originalKey String?
-  providerId String?
-  reason String
-  evidence Json?
-  status String @default("OPEN")
-  assignedToId String?
-  attempts Int @default(0)
-  lastError String?
-  resolution String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  resolvedAt DateTime?
+  customerId    String
+  operationId   String?
+  refundId      String?
+  kind          String
+  amountCents   Int?
+  currency      String?   @default("usd")
+  originalKey   String?
+  providerId    String?
+  reason        String
+  evidence      Json?
+  status        String    @default("OPEN")
+  assignedToId  String?
+  attempts      Int       @default(0)
+  lastError     String?
+  resolution    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  resolvedAt    DateTime?
+
   @@index([status, createdAt])
   @@index([reservationId])
+}
+
+// Phase 3: private collaboration. Scalar references have database foreign keys
+// in the migration; access is always resolved against current account/membership.
+model Conversation {
+  id            String                @id @default(cuid())
+  reservationId String?               @unique
+  vehicleId     String
+  customerId    String
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  closedAt      DateTime?
+  retainUntil   DateTime
+  legalHold     Boolean               @default(false)
+  messages      ConversationMessage[]
+  reads         ConversationRead[]
+
+  @@index([customerId, updatedAt])
+  @@index([vehicleId])
+}
+
+model ConversationMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   Conversation      @relation(fields: [conversationId], references: [id])
+  senderId       String
+  body           String            @db.Text
+  version        Int               @default(0)
+  createdAt      DateTime          @default(now())
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  revisions      MessageRevision[]
+
+  @@index([conversationId, createdAt, id])
+}
+
+model MessageRevision {
+  id        String              @id @default(cuid())
+  messageId String
+  message   ConversationMessage @relation(fields: [messageId], references: [id])
+  actorId   String
+  version   Int
+  body      String              @db.Text
+  action    String
+  createdAt DateTime            @default(now())
+
+  @@unique([messageId, version])
+}
+
+model ConversationRead {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  userId         String
+  readAt         DateTime     @default(now())
+
+  @@id([conversationId, userId])
+}
+
+model CommunityReport {
+  id         String   @id @default(cuid())
+  actorId    String
+  entityType String
+  entityId   String
+  reason     String   @db.Text
+  status     String   @default("OPEN")
+  createdAt  DateTime @default(now())
+
+  @@unique([actorId, entityType, entityId])
+}
+
+model InboxNotice {
+  id           String    @id @default(cuid())
+  eventKey     String
+  userId       String
+  category     String
+  resourceType String
+  resourceId   String
+  title        String
+  required     Boolean   @default(false)
+  readAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@unique([eventKey, userId])
+  @@index([userId, createdAt])
+}
+
+model NoticePreference {
+  userId   String
+  category String
+  email    Boolean @default(true)
+  sms      Boolean @default(false)
+  push     Boolean @default(false)
+
+  @@id([userId, category])
+}
+
+model SmsConsent {
+  userId    String    @id
+  phone     String
+  consentAt DateTime
+  stoppedAt DateTime?
+  source    String
+}
+
+model TripReview {
+  id            String   @id @default(cuid())
+  reservationId String
+  reviewerId    String
+  subject       String
+  subjectId     String
+  rating        Int
+  categories    Json
+  body          String   @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  publishAfter  DateTime
+  hidden        Boolean  @default(false)
+  version       Int      @default(0)
+  retainUntil   DateTime
+  legalHold     Boolean  @default(false)
+
+  @@unique([reservationId, reviewerId, subject])
+  @@index([subjectId, subject, hidden])
+}
+
+model ReviewHistory {
+  id        String   @id @default(cuid())
+  reviewId  String
+  actorId   String
+  action    String
+  reason    String
+  snapshot  Json
+  createdAt DateTime @default(now())
+}
+
+model ServiceCase {
+  id            String             @id @default(cuid())
+  kind          String
+  reservationId String?
+  vehicleId     String?
+  openedById    String
+  assignedToId  String?
+  linkedCaseId  String?
+  damageKey     String?            @unique
+  category      String
+  title         String
+  details       Json
+  state         String             @default("REPORTED")
+  version       Int                @default(0)
+  priority      String             @default("NORMAL")
+  dueAt         DateTime
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  closedAt      DateTime?
+  retainUntil   DateTime
+  legalHold     Boolean            @default(false)
+  securityHold  Boolean            @default(false)
+  safetyBlock   Boolean            @default(false)
+  satisfaction  Int?
+  events        ServiceCaseEvent[]
+
+  @@index([reservationId, state])
+  @@index([kind, state, dueAt])
+}
+
+model ServiceCaseEvent {
+  id        String      @id @default(cuid())
+  caseId    String
+  case      ServiceCase @relation(fields: [caseId], references: [id])
+  actorId   String
+  action    String
+  fromState String
+  toState   String
+  internal  Boolean     @default(false)
+  body      String      @db.Text
+  version   Int
+  createdAt DateTime    @default(now())
+
+  @@unique([caseId, version])
+}
+
+model CollaborationFile {
+  id              String    @id @default(cuid())
+  conversationId  String?
+  caseId          String?
+  uploadedById    String
+  purpose         String
+  storageKey      String    @unique
+  mimeType        String
+  sha256          String
+  size            Int
+  scanStatus      String
+  originalPhotoId String?
+  createdAt       DateTime  @default(now())
+  retainUntil     DateTime
+  legalHold       Boolean   @default(false)
+  deletedAt       DateTime?
+}
+
+model PrivacyDeletion {
+  id         String    @id @default(cuid())
+  userId     String
+  state      String    @default("REQUESTED")
+  createdAt  DateTime  @default(now())
+  reviewedAt DateTime?
+}
+
+model StorageDeletionJob {
+  id            String    @id @default(cuid())
+  fileId        String    @unique
+  state         String    @default("PENDING")
+  attempts      Int       @default(0)
+  leaseToken    String?
+  leaseUntil    DateTime?
+  nextAttemptAt DateTime  @default(now())
+  errorCode     String?
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+}
+model ChannelDelivery {
+  id String @id @default(cuid())
+  noticeId String
+  userId String
+  channel String
+  state String @default("READY")
+  attempts Int @default(0)
+  leaseToken String?
+  leaseUntil DateTime?
+  providerId String?
+  errorCode String?
+  createdAt DateTime @default(now())
+  acceptedAt DateTime?
+  @@unique([noticeId, channel])
 }

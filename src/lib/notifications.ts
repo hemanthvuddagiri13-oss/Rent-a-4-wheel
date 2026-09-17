@@ -26,6 +26,7 @@ interface QueueNotificationParams {
 }
 
 const SUBJECTS: Record<NotificationType, string> = {
+  COMMUNITY_UPDATE: "An update is waiting in your Rent A 4Wheel account",
   BOOKING_CONFIRMATION: "Your Rent A 4Wheel reservation is confirmed",
   PAYMENT_RECEIPT: "Your Rent A 4Wheel payment receipt",
   DEPOSIT_AUTH_FAILED: "Action needed: security deposit could not be authorized",
@@ -74,6 +75,9 @@ export async function queueNotification({ userId, reservationId, type, extra, de
 
     let html = "";
     switch (type) {
+      case "COMMUNITY_UPDATE":
+        html = "<p>You have a private update. Sign in to your Rent A 4Wheel account to view it.</p>";
+        break;
       case "BOOKING_CONFIRMATION":
         html = summary ? bookingConfirmationEmail(summary) : "";
         break;

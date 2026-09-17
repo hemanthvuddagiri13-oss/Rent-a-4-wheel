@@ -1,0 +1,5 @@
+import { publicTripReviews } from "@/lib/trip-reviews";
+export async function PublicReviews({vehicleId,hostId}:{vehicleId:string;hostId:string|null}) {
+ const vehicle=await publicTripReviews("VEHICLE",vehicleId),host=hostId ? await publicTripReviews("HOST",hostId) : null;
+ return <section className="my-8 space-y-4 rounded-xl border border-white/10 p-5"><h2 className="text-xl font-semibold">Verified trip reviews</h2><p className="text-silver">{vehicle.count ? `Vehicle: ${vehicle.average?.toFixed(1)} / 5 from ${vehicle.count} reviews` : "No published vehicle reviews yet."}</p>{host && <p className="text-silver">{host.count ? `Host: ${host.average?.toFixed(1)} / 5 from ${host.count} reviews` : "No published host reviews yet."}</p>}{[...vehicle.reviews,...(host?.reviews??[])].map(r=><blockquote key={r.id} className="border-l-2 border-gold pl-4"><p className="text-gold">{r.rating} / 5</p><p className="whitespace-pre-wrap break-words">{r.body}</p></blockquote>)}</section>;
+}
