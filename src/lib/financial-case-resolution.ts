@@ -61,14 +61,16 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
         if (matches.length > 1) throw new Error("Conflicting provider mappings require escalation");
         if (matches.length === 1) op = matches[0];
       }
-      const terms = op?.payload as { amount?: number; currency?: string; customer?: string; metadata?: Record<string, string> } | undefined;
-      if ((terms?.amount !== undefined && c.kind !== "DEPOSIT_RELEASE" && terms.amount !== intent.amount) || (terms?.currency && terms.currency !== intent.currency) || (terms?.customer && terms.customer !== customer)) throw new Error("Original operation terms mismatch");
+      const originalAuthorization = c.kind === "DEPOSIT_RELEASE" && (op?.payload as { intentId?: string } | undefined)?.intentId === intent.id
+        ? await tx.financialOperation.findFirst({ where: { reservationId: r.id, kind: "DEPOSIT", providerId: intent.id } }) : op;
+      const terms = originalAuthorization?.payload as { amount?: number; currency?: string; customer?: string; metadata?: Record<string, string> } | undefined;
+      if ((terms?.amount !== undefined && terms.amount !== intent.amount) || (terms?.currency && terms.currency !== intent.currency) || (terms?.customer && terms.customer !== customer)) throw new Error("Original operation terms mismatch");
       if (terms?.metadata && Object.entries(terms.metadata).some(([key, value]) => intent!.metadata[key] !== value)) throw new Error("Original provider metadata mismatch");
       if (current.amountCents === null || current.currency === null) {
         // Missing records may be investigated using an already bound identity
         // and exact original provider lineage; reservation metadata alone fails.
-        if (!op || op.providerId !== intent.id || intent.metadata.operationKey !== op.key || !Number.isSafeInteger(intent.amount) || intent.amount <= 0 || !/^[a-z]{3}$/.test(intent.currency)) throw new Error("Amount/currency evidence unknown; escalate for investigation");
-        if (c.kind === "DEPOSIT" && r.deposit?.stripePaymentIntentId === intent.id && (r.deposit.amountCents !== intent.amount || r.deposit.currency !== intent.currency)) throw new Error("Linked authorization terms mismatch");
+        if (!originalAuthorization || originalAuthorization.providerId !== intent.id || intent.metadata.operationKey !== originalAuthorization.key || !Number.isSafeInteger(intent.amount) || intent.amount <= 0 || !/^[a-z]{3}$/.test(intent.currency)) throw new Error("Amount/currency evidence unknown; escalate for investigation");
+        if (["DEPOSIT", "DEPOSIT_RELEASE"].includes(c.kind) && r.deposit?.stripePaymentIntentId === intent.id && (r.deposit.amountCents !== intent.amount || r.deposit.currency !== intent.currency)) throw new Error("Linked authorization terms mismatch");
         await tx.financialCase.update({ where: { id: c.id }, data: { amountCents: intent.amount, currency: intent.currency } });
       }
       const expectedKind = c.kind === "DEPOSIT_RELEASE" ? "DEPOSIT" : c.kind;

@@ -105,6 +105,19 @@ describe("Batch 1E financial boundaries", () => {
     expect((await prisma.financialOperation.findUniqueOrThrow({ where: { id: leased.id } })).state).toBe("OBSERVED");
     expect((await prisma.refund.findUniqueOrThrow({ where: { id: f.id } })).status).toBe("SUCCEEDED");
   });
+  it("verifies unknown release terms only through the bound original authorization lineage", async () => {
+    const { r, u } = await fixture(), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);
+    const original = await prisma.financialOperation.create({ data: { key: randomUUID(), kind: "DEPOSIT", reservationId: r.id, providerId: "pi_historical_" + r.id, fingerprint: "legacy", payload: { legacy: true }, state: "REVIEW" } });
+    const release = await prisma.financialOperation.create({ data: { key: "deposit-release:" + original.providerId, kind: "DEPOSIT_RELEASE", reservationId: r.id, fingerprint: "release", payload: { intentId: original.providerId }, state: "REVIEW" } });
+    const c = await prisma.financialCase.create({ data: { sourceKey: randomUUID(), reservationId: r.id, customerId: u.id, operationId: release.id, kind: "DEPOSIT_RELEASE", amountCents: null, currency: null, reason: "Original authorization amount no longer projected" } });
+    const evidence = { id: original.providerId, amount: 15000, currency: "usd", status: "canceled", capture_method: "manual", customer: u.stripeCustomerId, metadata: { reservationId: r.id, purpose: "security_deposit" } };
+    provider.paymentIntents.retrieve.mockResolvedValue(evidence);
+    await expect(resolveFinancialCase(admin, { caseId: c.id, action: "ADOPT", providerId: original.providerId!, reason: "Reservation-only evidence must remain unknown" })).rejects.toThrow("unknown");
+    provider.paymentIntents.retrieve.mockResolvedValue({ ...evidence, metadata: { ...evidence.metadata, operationKey: original.key } });
+    await resolveFinancialCase(admin, { caseId: c.id, action: "ADOPT", providerId: original.providerId!, reason: "Exact original authorization identity and provider lineage verified" });
+    expect(await prisma.financialCase.findUniqueOrThrow({ where: { id: c.id } })).toMatchObject({ amountCents: 15000, currency: "usd", status: "VERIFIED" });
+    expect(await prisma.financialOperation.count({ where: { reservationId: r.id } })).toBe(2);
+  });
   it("database serializes duplicate provider ownership across separate connections", async () => {
     const x = await fixture(), y = await fixture(), gate = barrier(), release = barrier(), pid = (await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() pid`)[0].pid;
     expect((await a.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() pid`)[0].pid).not.toBe(pid);
