@@ -5,6 +5,7 @@ import { withReservationLock } from "@/lib/financial-locks";
 import { evaluateTripStartGate } from "@/lib/trip-gate";
 import { transitionReservation } from "@/lib/reservation-state-machine";
 import { planAllDepositReleases } from "@/lib/deposit-release-plan";
+import { assertReturnFinancialAuthority } from "@/lib/return-financial-authority";
 
 export async function tripParticipant(tx: Prisma.TransactionClient, userId: string, reservationId: string) {
   await marketplaceActor(tx, userId);
@@ -40,11 +41,12 @@ export async function tripCommand(userId: string, id: string, action: "keys" | "
       if (!customer || !host || [customer, host].some(report => !report.photos.some(p => p.category === "EXTERIOR") || !report.photos.some(p => p.category === "INTERIOR"))) throw new MarketplaceError("Both parties must accept return reports with exterior and interior photos.", 409);
       const trip = await tx.trip.findUnique({ where: { reservationId: id } });
       if (!trip?.startedAt || host.mileage < (trip.startMileage ?? 0) || customer.mileage < (trip.startMileage ?? 0)) throw new MarketplaceError("Return odometer cannot precede pickup.", 409);
+      await assertReturnFinancialAuthority(tx, id);
       if (host.damageNotes?.trim() || customer.damageNotes?.trim()) {
         await tx.damageReport.create({ data: { reservationId: id, description: [host.damageNotes, customer.damageNotes].filter(Boolean).join("\n"), photoUrls: [] } });
         await transitionReservation(tx, { id, from: "RETURN_IN_PROGRESS", to: "DISPUTED" });
       } else {
-        await transitionReservation(tx, { id, from: "RETURN_IN_PROGRESS", to: "COMPLETED", data: { financialDisposition: "TERMINATED" } });
+        await transitionReservation(tx, { id, from: "RETURN_IN_PROGRESS", to: "COMPLETED" });
         await planAllDepositReleases(tx, id);
       }
       await tx.trip.update({ where: { reservationId: id }, data: { endedAt: new Date(), endedByUserId: userId, endMileage: host.mileage, endFuelLevel: host.fuelLevel } });

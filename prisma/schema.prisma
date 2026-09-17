@@ -226,6 +226,8 @@ enum HostEmployeeRole {
 // Grants a user (who is not the host account owner) scoped access to a
 // single host's vehicles and bookings — never to any other host's data.
 model HostEmployee {
+  isActive Boolean @default(true)
+  expiresAt DateTime?
   id     String      @id @default(cuid())
   hostId String
   host   HostProfile @relation(fields: [hostId], references: [id], onDelete: Cascade)

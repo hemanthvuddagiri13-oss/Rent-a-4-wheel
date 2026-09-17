@@ -8,6 +8,7 @@ import { syncDepositIntent } from "@/lib/deposit-authorization";
 import { planAllDepositReleases } from "@/lib/deposit-release-plan";
 import { PRE_TRIP_STATES } from "@/lib/financial-projection";
 import { linkLegacyRentalEvidence } from "@/lib/legacy-rental-evidence";
+import { assertSettledReturnEvidence } from "@/lib/return-financial-authority";
 
 type Action = "ADOPT" | "CONFIRM_FAILURE" | "AUTHORIZE_SETTLEMENT" | "RELEASE_INVENTORY" | "ESCALATE" | "ASSIGN";
 export async function resolveFinancialCase(actor: { id: string; role: string }, input: { caseId: string; action: Action; reason: string; providerId?: string; assigneeId?: string }) {
@@ -26,6 +27,8 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
     else intent = await stripe.paymentIntents.retrieve(providerId);
   }
   await withReservationLock(c.reservationId, async tx => {
+    const authorizedActor = await tx.user.findUniqueOrThrow({ where: { id: actor.id } });
+    if (!authorizedActor.isActive || !["ADMIN", "SUPER_ADMIN"].includes(authorizedActor.role) || (["AUTHORIZE_SETTLEMENT", "RELEASE_INVENTORY"].includes(input.action) && authorizedActor.role !== "SUPER_ADMIN")) throw new Error("Forbidden");
     let current = await tx.financialCase.findUniqueOrThrow({ where: { id: input.caseId } });
     let c = current;
     if (current.status === "RESOLVED") throw new Error("Case already resolved");
@@ -122,21 +125,30 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
     }
     if (["AUTHORIZE_SETTLEMENT", "RELEASE_INVENTORY"].includes(input.action)) {
       if (current.status !== "VERIFIED") throw new Error("Verify provider evidence before authorizing settlement");
-      if (r.trip?.startedAt || ![...PRE_TRIP_STATES, "CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(r.status)) throw new Error("Operational trips cannot use pre-trip settlement");
-      const unresolved = await tx.financialCase.count({ where: { reservationId: r.id, id: { not: c.id }, status: { notIn: ["RESOLVED", "VERIFIED"] } } });
-      if (unresolved || r.refunds.some(f => f.legacyUncertain) || r.deposit?.legacyUncertain) throw new Error("Resolve uncertain provider outcomes before settlement");
-      if (input.action === "AUTHORIZE_SETTLEMENT") {
-        await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "REFUND_REQUIRED" } });
-        for (const p of r.payments.filter(p => p.type === "RENTAL" && p.status === "SUCCEEDED")) {
-          const held = r.refunds.filter(f => f.paymentId === p.id && ["PENDING", "SUCCEEDED"].includes(f.status)).reduce((n,f)=>n+f.amountCents,0);
-          if (p.amountCents > held) await reserveRefund(tx, { reservationId: r.id, paymentId: p.id, amountCents: p.amountCents-held, idempotencyKey: "case-settlement:"+c.id+":"+p.id, reason: input.reason, initiatedById: actor.id });
-        }
+      if (input.action === "AUTHORIZE_SETTLEMENT" && r.trip?.startedAt && ["RETURN_IN_PROGRESS", "DISPUTED", "UNDER_CLAIM_REVIEW"].includes(r.status)) {
+        // Existing super-admin case workflow may authorize a no-charge return
+        // only after provider verification and all other uncertainty is gone.
+        // It does not complete the trip or create a release; ordinary completion
+        // rechecks the resolved decision under the same lock.
+        await assertSettledReturnEvidence(tx, r.id, current.id);
+        await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "TERMINATED" } });
       } else {
-        const paid = r.payments.filter(p=>p.type==="RENTAL"&&p.status==="SUCCEEDED").reduce((n,p)=>n+p.amountCents,0);
-        const returned = r.refunds.filter(f=>f.status==="SUCCEEDED" && r.payments.some(p=>p.id===f.paymentId && p.type==="RENTAL" && p.status==="SUCCEEDED")).reduce((n,f)=>n+f.amountCents,0);
-        if (!paid || returned < paid || r.refunds.some(f=>f.status==="PENDING")) throw new Error("Inventory release requires durable full refund");
-        await tx.reservation.update({ where: { id: r.id }, data: { status: r.status.startsWith("CANCELLED") ? r.status : "EXPIRED", financialDisposition: "TERMINATED", expiresAt: null } });
-        await planAllDepositReleases(tx,r.id);
+        if (r.trip?.startedAt || ![...PRE_TRIP_STATES, "CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(r.status)) throw new Error("Operational trips cannot use pre-trip settlement");
+        const unresolved = await tx.financialCase.count({ where: { reservationId: r.id, id: { not: c.id }, status: { notIn: ["RESOLVED", "VERIFIED"] } } });
+        if (unresolved || r.refunds.some(f => f.legacyUncertain) || r.deposit?.legacyUncertain) throw new Error("Resolve uncertain provider outcomes before settlement");
+        if (input.action === "AUTHORIZE_SETTLEMENT") {
+          await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "REFUND_REQUIRED" } });
+          for (const p of r.payments.filter(p => p.type === "RENTAL" && p.status === "SUCCEEDED")) {
+            const held = r.refunds.filter(f => f.paymentId === p.id && ["PENDING", "SUCCEEDED"].includes(f.status)).reduce((n,f)=>n+f.amountCents,0);
+            if (p.amountCents > held) await reserveRefund(tx, { reservationId: r.id, paymentId: p.id, amountCents: p.amountCents-held, idempotencyKey: "case-settlement:"+c.id+":"+p.id, reason: input.reason, initiatedById: actor.id });
+          }
+        } else {
+          const paid = r.payments.filter(p=>p.type==="RENTAL"&&p.status==="SUCCEEDED").reduce((n,p)=>n+p.amountCents,0);
+          const returned = r.refunds.filter(f=>f.status==="SUCCEEDED" && r.payments.some(p=>p.id===f.paymentId && p.type==="RENTAL" && p.status==="SUCCEEDED")).reduce((n,f)=>n+f.amountCents,0);
+          if (!paid || returned < paid || r.refunds.some(f=>f.status==="PENDING")) throw new Error("Inventory release requires durable full refund");
+          await tx.reservation.update({ where: { id: r.id }, data: { status: r.status.startsWith("CANCELLED") ? r.status : "EXPIRED", financialDisposition: "TERMINATED", expiresAt: null } });
+          await planAllDepositReleases(tx,r.id);
+        }
       }
     }
     if (input.action === "ASSIGN") {

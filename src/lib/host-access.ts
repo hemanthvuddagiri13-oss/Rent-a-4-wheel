@@ -1,4 +1,9 @@
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
+
+export function activeHostEmployeeWhere(userId: string, hostId?: string): Prisma.HostEmployeeWhereInput {
+  return { userId, ...(hostId ? { hostId } : {}), isActive: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] };
+}
 
 export interface HostContext {
   hostId: string;
@@ -19,7 +24,7 @@ export async function getHostContext(userId: string): Promise<HostContext | null
   if (hostProfile) return hostProfile.onboardingStatus === "SUSPENDED" ? null : { hostId: hostProfile.id, role: "OWNER" };
 
   const employment = await prisma.hostEmployee.findFirst({
-    where: { userId },
+    where: activeHostEmployeeWhere(userId),
     select: { hostId: true, role: true, host: { select: { onboardingStatus: true } } },
   });
   if (employment && employment.host.onboardingStatus !== "SUSPENDED") return { hostId: employment.hostId, role: employment.role };

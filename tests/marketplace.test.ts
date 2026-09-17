@@ -88,6 +88,7 @@ describe("marketplace permissions and real PostgreSQL state", () => {
   it("isolates trip data and only completes after both accepted return reports", async () => {
     const f = await setup(), r = await createTestReservation({ vehicleId: f.vehicle.id, customerId: f.customer.id, pickupAt: new Date(Date.now() - 3600000), returnAt: new Date(Date.now() + 3600000), status: "ACTIVE" });
     await prisma.trip.create({ data: { reservationId: r.id, startedAt: new Date(), startMileage: 1000, startFuelLevel: 100 } });
+    await prisma.payment.create({ data: { reservationId: r.id, type: "RENTAL", status: "SUCCEEDED", amountCents: r.totalCents } });
     await expect(tripExperience(f.other.user.id, r.id)).rejects.toThrow("Reservation unavailable");
     await tripCommand(f.customer.id, r.id, "return");
     await expect(tripCommand(f.customer.id, r.id, "complete")).rejects.toThrow("assigned host");
@@ -106,7 +107,7 @@ describe("marketplace permissions and real PostgreSQL state", () => {
     }
     release(); await holder; await Promise.all(requests); await separate.$disconnect();
     expect(bothWaiting).toBe(true);
-    expect(await prisma.reservation.findUnique({ where: { id: r.id } })).toMatchObject({ status: "COMPLETED", financialDisposition: "TERMINATED" });
+    expect(await prisma.reservation.findUnique({ where: { id: r.id } })).toMatchObject({ status: "COMPLETED", financialDisposition: "OPEN" });
     expect(await prisma.tripEvent.count({ where: { reservationId: r.id, type: "RETURN_REVIEWED" } })).toBe(1);
   });
 });

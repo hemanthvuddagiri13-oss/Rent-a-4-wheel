@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { activeHostEmployeeWhere } from "@/lib/host-access";
 
 export class MarketplaceError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -17,7 +18,7 @@ export async function marketplaceHost(tx: Prisma.TransactionClient, userId: stri
   const user = await marketplaceActor(tx, userId);
   if (!["HOST", "HOST_EMPLOYEE"].includes(user.role)) throw new MarketplaceError("Host access required.", 403);
   const own = await tx.hostProfile.findUnique({ where: { userId } });
-  const employment = own ? null : await tx.hostEmployee.findFirst({ where: { userId }, include: { host: true } });
+  const employment = own ? null : await tx.hostEmployee.findFirst({ where: activeHostEmployeeWhere(userId), include: { host: true } });
   const host = own ?? employment?.host;
   if (!host || host.onboardingStatus === "SUSPENDED") throw new MarketplaceError("Host access unavailable.", 403);
   const role = own ? "OWNER" : employment!.role;

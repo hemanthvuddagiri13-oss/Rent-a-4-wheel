@@ -3,6 +3,7 @@ import { prisma, createSafePrismaClient } from "@/lib/prisma";
 import { eventFence } from "@/lib/financial-locks";
 import { OperationPendingError, UncertainOutcomeError } from "@/lib/financial-errors";
 import { safeErrorCode } from "@/lib/safe-log";
+import { assertDepositReleaseReviewClear } from "@/lib/return-financial-authority";
 
 function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value)); }
 
@@ -47,6 +48,7 @@ async function assertDispatchAuthority(db: PrismaClient, op: FinancialOperation)
   const r = await db.reservation.findUniqueOrThrow({ where: { id: op.reservationId }, include: { deposit: true, trip: true } });
   const payload = op.payload as { intentId?: string; amount?: number; currency?: string; refundId?: string; paymentIntentId?: string };
   if (op.kind === "DEPOSIT_RELEASE") {
+    await assertDepositReleaseReviewClear(db, r.id);
     const target = payload.intentId;
     const ownership = target ? await db.providerObjectOwnership.findUnique({ where: { providerId: target } }) : null;
     const originals = target ? await db.financialOperation.findMany({ where: { kind: "DEPOSIT", reservationId: r.id, providerId: target } }) : [];
@@ -57,7 +59,7 @@ async function assertDispatchAuthority(db: PrismaClient, op: FinancialOperation)
     else if (op.generation !== original.generation) throw new UncertainOutcomeError("Deposit release generation mismatch");
     const superseded = r.deposit?.operationId && r.deposit.operationId !== original.id && r.deposit.generation > original.generation;
     const expired = r.deposit?.stripePaymentIntentId === target && r.deposit.authorizationExpiresAt && r.deposit.authorizationExpiresAt <= new Date();
-    if (!["REFUND_REQUIRED", "TERMINATED"].includes(r.financialDisposition) && !r.status.startsWith("CANCELLED") && !superseded && !expired) throw new UncertainOutcomeError("Reservation no longer authorizes deposit release");
+    if (!["REFUND_REQUIRED", "TERMINATED"].includes(r.financialDisposition) && r.status !== "COMPLETED" && !r.status.startsWith("CANCELLED") && !superseded && !expired) throw new UncertainOutcomeError("Reservation no longer authorizes deposit release");
   } else if (op.kind === "DEPOSIT") {
     if (r.financialDisposition !== "OPEN" || r.status.startsWith("CANCELLED") || r.status === "EXPIRED" || !r.deposit || r.deposit.legacyUncertain || r.deposit.operationId !== op.id || r.deposit.generation !== op.generation || payload.amount !== r.deposit.amountCents || payload.amount !== r.depositCents) throw new UncertainOutcomeError("Deposit authorization no longer permitted");
   } else if (op.kind === "REFUND") {

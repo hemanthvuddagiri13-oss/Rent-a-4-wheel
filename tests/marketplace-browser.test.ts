@@ -109,7 +109,7 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
     const result = await response; expect(result.status(), await result.text()).toBe(200); return result.json();
   }
   const quarantined = await upload("OWNERSHIP"); expect(quarantined.scanStatus).toBe("QUARANTINED");
-  expect((await ac.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(403);
+  expect((await ac.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(404);
   expect((await context.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(200);
   expect((await context.request.post(`${base}/api/host/vehicles/${vehicle.id}/agreement`, { data: { signerName: "Synthetic Host", version: priorHostLegal?.version || "v1-draft", accept: "yes" } })).status()).toBe(409);
   scannerReply = "stream: OK\0";
@@ -150,7 +150,7 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   const unrelated = await login(other.user);
   expect((await unrelated.request.post(`${base}/api/host/workspace`, { data: { action: "availability", vehicleId: vehicle.id, isBookable: true } })).status()).toBe(404);
   expect((await context.request.post(`${base}/api/admin/marketplace`, { data: { action: "vehicle", id: vehicle.id, status: "APPROVED", reason: "self approval" } })).status()).toBe(403);
-  expect((await unrelated.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(403);
+  expect((await unrelated.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(404);
   const staff = await createTestCustomer(); users.push(staff.id);
   expect((await context.request.post(`${base}/api/host/workspace`, { data: { action: "employee", email: staff.email, role: "STAFF" } })).status()).toBe(200);
   const sc = await login(staff);

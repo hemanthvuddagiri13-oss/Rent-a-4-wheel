@@ -21,7 +21,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         if (r.status === "DISPUTED") await transitionReservation(tx, { id, from: "DISPUTED", to: "UNDER_CLAIM_REVIEW" });
       } else {
         if (r.financialDisposition === "REVIEW") throw new MarketplaceError("Resolve the financial case before releasing the deposit.", 409);
-        await transitionReservation(tx, { id, from: r.status, to: "COMPLETED", data: { financialDisposition: "TERMINATED" } });
+        await transitionReservation(tx, { id, from: r.status, to: "COMPLETED" });
         await planAllDepositReleases(tx, id);
       }
       await tx.auditLog.create({ data: { actorId: actor.id, action: `return-review.${data.action}`, entityType: "Reservation", entityId: id, metadata: { reason: data.reason } } });

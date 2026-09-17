@@ -1,11 +1,11 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { marketplaceVehicle, marketplaceHost, MarketplaceError, marketplaceLimit } from "@/lib/marketplace";
+import { marketplaceVehicle, MarketplaceError, marketplaceLimit } from "@/lib/marketplace";
 import { recordAgreementAcceptance, AgreementNotReviewedError } from "@/lib/agreements";
 import { evidencePdf } from "@/lib/marketplace-pdf";
 import { storePrivateDocument, readPrivateDocument } from "@/lib/storage";
 import { z } from "zod";
-import { canAccessAdmin } from "@/lib/rbac";
+import { canReadBusinessFile } from "@/lib/business-file-access";
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!session?.user) return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -34,14 +34,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 }
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user) return new Response("Unauthorized", { status: 401 });
   const { id } = await params;
-  if (!canAccessAdmin(session.user.role)) {
-    try {
-      const { host } = await marketplaceHost(prisma, session.user.id);
-      if (!await prisma.vehicle.findFirst({ where: { id, hostId: host.id } })) return new Response("Forbidden", { status: 403 });
-    } catch { return new Response("Forbidden", { status: 403 }); }
-  }
+  const vehicle = await prisma.vehicle.findUnique({ where: { id }, select: { hostId: true } });
+  if (!session?.user || !vehicle?.hostId || !await canReadBusinessFile(prisma, session.user.id, vehicle.hostId)) return new Response("Not found", { status: 404 });
   const acceptance = await prisma.agreementAcceptance.findFirst({ where: { id: new URL(req.url).searchParams.get("acceptanceId") ?? "", vehicleId: id, type: "HOST_AGREEMENT" } });
   if (!acceptance?.signedPdfStorageKey) return new Response("Signed PDF unavailable. Retry signing to recover PDF generation.", { status: 404 });
   await prisma.auditLog.create({ data: { actorId: session.user.id, action: "agreement.download", entityType: "AgreementAcceptance", entityId: acceptance.id } });
