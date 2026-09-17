@@ -1,3 +1,4 @@
+import { TripConnections } from "@/components/marketplace/trip-connections";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
@@ -51,6 +52,7 @@ export default async function ReservationDetailPage({ params }: { params: Promis
         <Badge>{RESERVATION_STATUS_LABELS[reservation.status]}</Badge>
       </div>
 
+      <TripConnections reservationId={id} />
       <div className="mt-6 relative aspect-[16/9] w-full overflow-hidden rounded-xl bg-surface">
         <Image src={reservation.vehicle.images[0]?.url || "/images/vehicles/sedan.svg"} alt="" fill className="object-cover" />
       </div>

@@ -467,3 +467,7 @@ reviewed and approved final language for each document.**
 - [ ] Responsive layouts spot-checked at 375/390/430/768/1024/1440px
 - [ ] Google Analytics 4 / Search Console / Meta Pixel IDs added once consent handling is finalized
 - [ ] Twilio SMS left disabled until a consent flow is implemented (architecture only, per project scope)
+
+### Communications, claims and support
+
+See [Phase 3 operations and deployment](docs/phase-3-communications.md) for role separation, private evidence, notification consent, cron configuration, retention recovery, and production/legal release gates.

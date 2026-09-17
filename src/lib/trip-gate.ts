@@ -44,6 +44,7 @@ export async function evaluateTripStartGate(reservationId: string, db: Prisma.Tr
     reasons.push(`Reservation status (${reservation.status}) is not eligible to start a trip.`);
   }
 
+  if (await db.serviceCase.count({ where: { vehicleId: reservation.vehicleId, safetyBlock: true } })) reasons.push("Vehicle safety review is required before key release or trip start.");
   const financial = financialProjection(reservation);
   if (reservation.financialDisposition !== "OPEN") reasons.push("Reservation has a terminal or unresolved financial disposition.");
   if (!financial.paidCents) reasons.push("Rental payment has not succeeded.");

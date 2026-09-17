@@ -8,6 +8,7 @@ export class ReturnFinancialReviewError extends Error {
 // resolved case. Only the case-resolution workflow may exclude its own verified
 // case while atomically recording the authorized settlement decision.
 export async function assertSettledReturnEvidence(tx: Prisma.TransactionClient, id: string, verifiedCaseId?: string) {
+  if (await tx.serviceCase.count({ where: { reservationId: id, kind: { in: ["CLAIM", "DISPUTE"] }, state: { not: "CLOSED" } } })) throw new Error("Resolve the outstanding claim or dispute before this action");
   const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: true } });
   const cases = await tx.financialCase.count({ where: { reservationId: id, status: { not: "RESOLVED" }, ...(verifiedCaseId ? { id: { not: verifiedCaseId } } : {}) } });
   const reconciliations = await tx.paymentReconciliation.count({ where: { OR: [{ reservationId: id }, { paymentId: { in: r.payments.map(p => p.id) } }], status: { in: ["OPEN", "NEEDS_MANUAL_REVIEW"] } } });
@@ -41,6 +42,7 @@ export async function assertDepositReleaseReviewClear(tx: Prisma.TransactionClie
 }
 
 export async function assertNoUnresolvedFinancialReview(tx: Prisma.TransactionClient, id: string) {
+  if (await tx.serviceCase.count({ where: { reservationId: id, kind: { in: ["CLAIM", "DISPUTE"] }, state: { not: "CLOSED" } } })) throw new Error("Resolve the outstanding claim or dispute before this action");
   const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: true } });
   const cases = await tx.financialCase.count({ where: { reservationId: id, status: { not: "RESOLVED" } } });
   const reconciliations = await tx.paymentReconciliation.count({ where: { OR: [{ reservationId: id }, { paymentId: { in: r.payments.map(p => p.id) } }], status: { in: ["OPEN", "NEEDS_MANUAL_REVIEW"] } } });

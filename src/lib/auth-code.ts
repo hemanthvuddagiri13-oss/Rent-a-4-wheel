@@ -59,7 +59,7 @@ async function auditAuthEvent(params: {
  * elsewhere in the app (Stripe, storage) and is never available in
  * production regardless of configuration.
  */
-export async function requestAuthCode(params: { email: string; ip: string | null }): Promise<RequestCodeResult> {
+export async function requestAuthCode(params: { email: string; ip: string | null; purpose?: "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" }): Promise<RequestCodeResult> {
   const email = normalizeEmail(params.email);
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -70,13 +70,13 @@ export async function requestAuthCode(params: { email: string; ip: string | null
     // Stable ordering serializes both per-email and per-IP issuance limits.
     const scopes = ["auth-email:" + email, ...(params.ip ? ["auth-ip:" + params.ip] : [])].sort();
     for (const scope of scopes) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope},0))::text`;
-    const last = await tx.authCode.findFirst({ where: { email, purpose: "SIGN_IN" }, orderBy: { createdAt: "desc" } });
+    const last = await tx.authCode.findFirst({ where: { email, purpose: params.purpose ?? "SIGN_IN" }, orderBy: { createdAt: "desc" } });
     if (last && now.getTime() - last.createdAt.getTime() < RESEND_COOLDOWN_SECONDS * 1000) return { ok: false as const, reason: "cooldown" as const, retryAfterSeconds: Math.ceil((RESEND_COOLDOWN_SECONDS * 1000 - (now.getTime() - last.createdAt.getTime())) / 1000) };
-    const emailCount = await tx.authCode.count({ where: { email, purpose: "SIGN_IN", createdAt: { gt: hourAgo } } });
-    const ipCount = params.ip ? await tx.authCode.count({ where: { requestIp: params.ip, purpose: "SIGN_IN", createdAt: { gt: hourAgo } } }) : 0;
+    const emailCount = await tx.authCode.count({ where: { email, purpose: params.purpose ?? "SIGN_IN", createdAt: { gt: hourAgo } } });
+    const ipCount = params.ip ? await tx.authCode.count({ where: { requestIp: params.ip, purpose: params.purpose ?? "SIGN_IN", createdAt: { gt: hourAgo } } }) : 0;
     if (emailCount >= MAX_CODES_PER_EMAIL_PER_HOUR || ipCount >= MAX_CODES_PER_IP_PER_HOUR) return { ok: false as const, reason: "rate_limited" as const };
-    await tx.authCode.updateMany({ where: { email, purpose: "SIGN_IN", consumedAt: null }, data: { consumedAt: now } });
-    await tx.authCode.create({ data: { email, purpose: "SIGN_IN", codeHash, maxAttempts: MAX_VERIFY_ATTEMPTS, requestIp: params.ip, expiresAt: new Date(now.getTime() + CODE_TTL_MINUTES * 60000) } });
+    await tx.authCode.updateMany({ where: { email, purpose: params.purpose ?? "SIGN_IN", consumedAt: null }, data: { consumedAt: now } });
+    await tx.authCode.create({ data: { email, purpose: params.purpose ?? "SIGN_IN", codeHash, maxAttempts: MAX_VERIFY_ATTEMPTS, requestIp: params.ip, expiresAt: new Date(now.getTime() + CODE_TTL_MINUTES * 60000) } });
     return { ok: true as const };
   });
   if (!issued.ok) return issued;
@@ -99,13 +99,13 @@ export async function requestAuthCode(params: { email: string; ip: string | null
  * can never be replayed), expiring, and attempt-limited (locks out further
  * guesses against that code after MAX_VERIFY_ATTEMPTS wrong tries).
  */
-export async function verifyAuthCode(params: { email: string; code: string; ip: string | null }): Promise<VerifyCodeResult> {
+export async function verifyAuthCode(params: { email: string; code: string; ip: string | null; purpose?: "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" }): Promise<VerifyCodeResult> {
   const email = normalizeEmail(params.email);
   const code = params.code.trim();
 
   const result: VerifyCodeResult = await prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"auth-email:" + email},0))::text`;
-    const authCode = await tx.authCode.findFirst({ where: { email, purpose: "SIGN_IN" }, orderBy: { createdAt: "desc" } });
+    const authCode = await tx.authCode.findFirst({ where: { email, purpose: params.purpose ?? "SIGN_IN" }, orderBy: { createdAt: "desc" } });
     if (!authCode || authCode.consumedAt) return { ok: false, reason: "no_code" };
     if (authCode.expiresAt <= new Date()) return { ok: false, reason: "expired" };
     if (authCode.attempts >= authCode.maxAttempts) return { ok: false, reason: "locked" };
