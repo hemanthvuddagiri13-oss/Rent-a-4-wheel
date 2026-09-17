@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { withReservationLock } from "@/lib/financial-locks";
+import { lockReservation, withReservationLock } from "@/lib/financial-locks";
 import { requireRefund, settleTerminatedReservation } from "@/lib/stripe-webhook-handlers";
 import type { Payment, Reservation, ReconciliationReason } from "@prisma/client";
 
@@ -45,17 +45,20 @@ export async function flagRepeatedProcessingFailure(params: {
   attemptCount: number;
   lastError: string;
 }): Promise<void> {
-  const existing = await prisma.paymentReconciliation.findFirst({
+  await prisma.$transaction(async tx => {
+  if (params.reservationId) await lockReservation(tx,params.reservationId);
+  const existing = await tx.paymentReconciliation.findFirst({
     where: { reason: "WEBHOOK_PROCESSING_REPEATEDLY_FAILED", detail: { path: ["stripeEventId"], equals: params.stripeEventId } },
   });
   if (existing) return; // already flagged for this event
 
-  await prisma.paymentReconciliation.create({
+  await tx.paymentReconciliation.create({
     data: {
       reservationId: params.reservationId,
       reason: "WEBHOOK_PROCESSING_REPEATEDLY_FAILED",
       status: "NEEDS_MANUAL_REVIEW",
       detail: { stripeEventId: params.stripeEventId, attemptCount: params.attemptCount, lastError: params.lastError },
     },
+  });
   });
 }

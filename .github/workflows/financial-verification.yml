@@ -64,6 +64,11 @@ jobs:
           for run in 1 2 3 4 5; do
             npm test -- tests/community.test.ts || exit 1
           done
+      - name: Retention and override blocker concurrency (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/community-blockers.test.ts || exit 1
+          done
       - name: Community screenshots
         if: always()
         uses: actions/upload-artifact@v4

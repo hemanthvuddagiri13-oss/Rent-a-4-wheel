@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { withReservationLock } from "@/lib/financial-locks";
+import { lockReservation, withReservationLock } from "@/lib/financial-locks";
 import { MarketplaceError, marketplaceActor, marketplaceHost } from "@/lib/marketplace";
 import { participant, policy, afterDays, safeText, isOperator, audit } from "@/lib/collaboration-access";
 
@@ -32,6 +32,9 @@ export async function saveTripReview(userId: string, input: unknown) {
 export async function moderateTripReview(userId: string, id: string, action: "hide" | "restore" | "report", reason: string) {
   return prisma.$transaction(async tx => {
     const actor = await marketplaceActor(tx, userId);
+    const scope = await tx.tripReview.findUniqueOrThrow({ where: { id }, select:{reservationId:true} });
+    await lockReservation(tx,scope.reservationId);
+    await tx.$queryRaw`SELECT id FROM "TripReview" WHERE id=${id} FOR UPDATE`;
     const review = await tx.tripReview.findUniqueOrThrow({ where: { id } });
     if (action === "report") {
       if (review.subject === "CUSTOMER") {

@@ -1,3 +1,4 @@
+import { lockReservation } from "@/lib/financial-locks";
 import { lockFileRetention } from "@/lib/collaboration-retention";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -27,6 +28,14 @@ export async function communityAdmin(userId: string, input: unknown) {
     } else if (data.command === "hold") {
       if (actor.role !== "SUPER_ADMIN") throw new MarketplaceError("Only a super administrator may change retention holds.", 403);
       const legalHold = data.held === "yes";
+      if (data.entity !== "FILE") {
+        const record = data.entity === "CASE" ? await tx.serviceCase.findUniqueOrThrow({where:{id:data.id}}) : data.entity === "CONVERSATION" ? await tx.conversation.findUniqueOrThrow({where:{id:data.id}}) : await tx.tripReview.findUniqueOrThrow({where:{id:data.id}});
+        if (record.reservationId) await lockReservation(tx, record.reservationId);
+        // Lock child only after its shared reservation guard.
+        if (data.entity === "CASE") await tx.$queryRaw`SELECT id FROM "ServiceCase" WHERE id=${data.id} FOR UPDATE`;
+        else if (data.entity === "CONVERSATION") await tx.$queryRaw`SELECT id FROM "Conversation" WHERE id=${data.id} FOR UPDATE`;
+        else await tx.$queryRaw`SELECT id FROM "TripReview" WHERE id=${data.id} FOR UPDATE`;
+      }
       if (data.entity === "FILE") {
         await lockFileRetention(tx, data.id);
         const file = await tx.collaborationFile.findUniqueOrThrow({ where: { id: data.id } });
@@ -43,6 +52,9 @@ export async function communityAdmin(userId: string, input: unknown) {
       await tx.auditLog.create({ data: { actorId: userId, action: "retention.deletion.retry", entityType: "StorageDeletionJob", entityId: data.id, metadata: { reason: safeText(data.reason) } } });
     } else if (data.command === "privacyReview") {
       if (actor.role !== "SUPER_ADMIN") throw new MarketplaceError("Super administrator required.", 403);
+      const request = await tx.privacyDeletion.findUniqueOrThrow({where:{id:data.id}});
+      const reservations = await tx.reservation.findMany({where:{OR:[{customerId:request.userId},{vehicle:{host:{userId:request.userId}}},{id:{in:(await tx.tripReview.findMany({where:{reviewerId:request.userId},select:{reservationId:true}})).map(r=>r.reservationId)}}]},orderBy:[{vehicleId:"asc"},{id:"asc"}],select:{id:true}});
+      for (const reservation of reservations) await lockReservation(tx,reservation.id);
       await tx.privacyDeletion.update({ where: { id: data.id }, data: { state: data.state, reviewedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: userId, action: "privacy.review", entityType: "PrivacyDeletion", entityId: data.id, metadata: { state: data.state, reason: safeText(data.reason) } } });
       // A review never bypasses the retention worker's per-record legal,

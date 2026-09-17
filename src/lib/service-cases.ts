@@ -1,3 +1,4 @@
+import { independentCaseActor } from "@/lib/case-decision-authority";
 import { verifyAuthCode } from "@/lib/auth-code";
 import { enqueueNoticeEmail } from "@/lib/notice-center";
 import { createHash } from "node:crypto";
@@ -5,8 +6,8 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { lockReservation } from "@/lib/financial-locks";
-import { MarketplaceError, marketplaceActor } from "@/lib/marketplace";
-import { afterDays, audit, isOperator, participant, policy, reservationScope, safeText, type ServiceKind } from "@/lib/collaboration-access";
+import { MarketplaceError } from "@/lib/marketplace";
+import { afterDays, audit, participant, policy, reservationScope, safeText, type ServiceKind } from "@/lib/collaboration-access";
 
 export const caseStates: Record<ServiceKind, Record<string, readonly string[]>> = {
   CLAIM: { REPORTED: ["EVIDENCE_SUBMITTED"], EVIDENCE_SUBMITTED: ["INITIAL_REVIEW"], INITIAL_REVIEW: ["CUSTOMER_RESPONSE"], CUSTOMER_RESPONSE: ["ESTIMATE_REVIEW"], ESTIMATE_REVIEW: ["RESPONSIBILITY_DECISION"], RESPONSIBILITY_DECISION: ["PROPOSED_SETTLEMENT"], PROPOSED_SETTLEMENT: ["ACCEPTED", "DISPUTED"], ACCEPTED: ["RESOLVED"], DISPUTED: ["RESOLVED"], RESOLVED: ["CLOSED"] },
@@ -81,18 +82,17 @@ async function notifyCase(tx: Prisma.TransactionClient, id: string, actorId: str
   const recipients = new Set([c.openedById, c.assignedToId, r?.customerId, r?.vehicle.host?.userId].filter((v): v is string => Boolean(v) && v !== actorId));
   for (const userId of recipients) { await enqueueNoticeEmail(tx, userId, c.kind, `case:${id}:${c.version}`, true); await tx.inboxNotice.upsert({ where: { eventKey_userId: { eventKey: `case:${id}:${c.version}`, userId } }, update: {}, create: { eventKey: `case:${id}:${c.version}`, userId, category: c.kind, resourceType: "CASE", resourceId: id, title: `${c.kind.toLowerCase()} update`, required: true } }); }
 }
-export const caseCommandSchema = z.object({ action: z.enum(["reply", "internal", "transition", "assign", "escalate", "appeal", "satisfaction", "override", "safetyClear", "reference"]), version: z.coerce.number().int().min(0), body: z.string().min(1).max(5000), state: z.string().optional(), assigneeId: z.string().optional(), rating: z.coerce.number().int().min(1).max(5).optional(), photoId: z.string().optional(), stepUpCode: z.string().regex(/^\d{6}$/).optional(), confirm: z.enum(["yes", "no"]).optional() });
+export const caseCommandSchema = z.object({ action: z.enum(["reply", "internal", "transition", "assign", "escalate", "appeal", "satisfaction", "override", "takeover", "safetyClear", "reference"]), version: z.coerce.number().int().min(0), body: z.string().min(1).max(5000), state: z.string().optional(), assigneeId: z.string().optional(), rating: z.coerce.number().int().min(1).max(5).optional(), photoId: z.string().optional(), stepUpCode: z.string().regex(/^\d{6}$/).optional(), confirm: z.enum(["yes", "no"]).optional() });
 export async function caseCommand(userId: string, id: string, input: unknown, db: PrismaClient = prisma) {
   const data = caseCommandSchema.parse(input);
-  if (data.action === "override") {
-    const actor = await marketplaceActor(db, userId);
-    if (actor.role !== "SUPER_ADMIN" || data.confirm !== "yes" || data.body.trim().length < 10 || !data.stepUpCode || !(await verifyAuthCode({ email: actor.email, code: data.stepUpCode, ip: null, purpose: "EMERGENCY_OVERRIDE_STEP_UP" })).ok) throw new MarketplaceError("A fresh super-admin step-up code, confirmation and reason are required.", 403);
-  }
   return db.$transaction(async tx => {
     const prior = await tx.serviceCase.findUnique({ where: { id } });
     if (!prior) throw new MarketplaceError("Not found.", 404);
     if (prior.reservationId) await lockReservation(tx, prior.reservationId);
     await tx.$queryRaw`SELECT "id" FROM "ServiceCase" WHERE "id"=${id} FOR UPDATE`;
+    for (const actorId of [...new Set([userId, ...(data.action === "assign" && data.assigneeId ? [data.assigneeId] : [])])].sort()) {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id=${actorId} FOR UPDATE`;
+    }
     const { c, role, actor } = await caseAccess(tx, userId, id);
     if (c.retainUntil < new Date() && c.state === "CLOSED") throw new MarketplaceError("This case is archived under the retention policy.", 409);
     if (c.version !== data.version) throw new MarketplaceError("This case changed. Refresh before submitting.", 409);
@@ -103,12 +103,9 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
     if (["assign", "escalate"].includes(data.action)) {
       if (role !== "OPERATOR") throw new MarketplaceError("Operator access required.", 403);
       if (data.action === "assign") {
-        const assignee = await marketplaceActor(tx, data.assigneeId ?? "");
-        if (!isOperator(assignee.role, c.kind as ServiceKind) || assignee.id === c.openedById) throw new MarketplaceError("Choose an authorized agent without a party conflict.");
-        const vehicle = c.vehicleId ? await tx.vehicle.findUnique({ where: { id: c.vehicleId }, include: { host: true } }) : null;
-        const reservation = c.reservationId ? await tx.reservation.findUnique({ where: { id: c.reservationId } }) : null;
-        const affiliation = vehicle?.hostId ? await tx.hostEmployee.count({ where: { hostId: vehicle.hostId, userId: assignee.id } }) : 0;
-        if (vehicle?.host?.userId === assignee.id || reservation?.customerId === assignee.id || affiliation) throw new MarketplaceError("A party cannot adjudicate their own case.");
+        await independentCaseActor(tx, c, userId);
+        const assignee = await independentCaseActor(tx, c, data.assigneeId ?? "");
+        if (c.assignedToId && c.assignedToId !== assignee.id) throw new MarketplaceError("Use an explicit super-admin takeover to replace the assigned agent.",409);
         update.assignedToId = assignee.id;
       } else { update.priority = "URGENT"; update.dueAt = new Date(); }
     }
@@ -122,10 +119,29 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
     }
     if (data.action === "safetyClear") {
       if (role !== "OPERATOR" || c.kind !== "INCIDENT" || c.state !== "CLOSED" || !c.vehicleId || !await tx.maintenanceRecord.count({ where: { vehicleId: c.vehicleId, serviceDate: { gte: c.createdAt }, service: { in: ["INSPECTION", "REPAIR"] } } })) throw new MarketplaceError("Close the incident and record a subsequent maintenance inspection or repair first.", 409);
+      await independentCaseActor(tx,c,userId);
+      if (c.assignedToId !== userId) throw new MarketplaceError("The assigned independent agent must clear safety review.",409);
       update.safetyBlock = false;
+    }
+    if (data.action === "takeover") {
+      const decisionMaker = await independentCaseActor(tx, c, userId);
+      if (decisionMaker.role !== "SUPER_ADMIN" || body.length < 10 || ["CLOSED","DECIDED","RESOLVED"].includes(c.state)) throw new MarketplaceError("An independent super-admin and a specific takeover reason are required.",403);
+      if (c.assignedToId === userId) throw new MarketplaceError("This case is already assigned to you.",409);
+      await tx.auditLog.create({data:{actorId:userId,action:"case.assignment.takeover",entityType:"ServiceCase",entityId:id,metadata:{previousAssigneeId:c.assignedToId,newAssigneeId:userId,reason:body,version:c.version+1}}});
+      if (c.assignedToId) {
+        await enqueueNoticeEmail(tx,c.assignedToId,c.kind,`takeover:${id}:${c.version+1}`,true);
+        await tx.inboxNotice.create({data:{userId:c.assignedToId,eventKey:`takeover:${id}:${c.version+1}`,category:c.kind,resourceType:"CASE",resourceId:id,title:"Case assignment changed",required:true}});
+      }
+      update.assignedToId=userId;
     }
     if (data.action === "override") {
       if (actor.role !== "SUPER_ADMIN" || ["CLOSED", "DECIDED", "RESOLVED"].includes(c.state) || !["CLAIM", "DISPUTE"].includes(c.kind)) throw new MarketplaceError("Overrides cannot reopen a decision; use the appeal workflow.", 403);
+      const decisionMaker = await independentCaseActor(tx,c,userId);
+      if (c.assignedToId !== userId) throw new MarketplaceError("Assign this case to yourself or explicitly take over before an override.",409);
+      // Reject conflicts/assignment/version failures without consuming a code.
+      // After authorization, verification consumes it independently: even a later
+      // transaction failure requires a new code; failed guesses remain counted.
+      if (data.confirm !== "yes" || body.length < 10 || !data.stepUpCode || !(await verifyAuthCode({email:decisionMaker.email,code:data.stepUpCode,ip:null,purpose:"EMERGENCY_OVERRIDE_STEP_UP"})).ok) throw new MarketplaceError("A fresh super-admin step-up code, confirmation and reason are required.",403);
       state = c.kind === "DISPUTE" ? "DECIDED" : "RESOLVED"; update.state = state;
       await tx.auditLog.create({ data: { actorId: userId, action: "case.step_up_override", entityType: "ServiceCase", entityId: id, metadata: { reason: body, stepUpVerifiedAt: new Date().toISOString(), fromState: c.state, toState: state } } });
     }
@@ -143,6 +159,7 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
       }
       const partyStep = c.kind === "CLAIM" && (state === "EVIDENCE_SUBMITTED" && role === "HOST" || ["ACCEPTED", "DISPUTED"].includes(state) && role === "CUSTOMER");
       if (role !== "OPERATOR" && !partyStep) throw new MarketplaceError("An authorized agent must perform this transition.", 403);
+      if (role === "OPERATOR") await independentCaseActor(tx,c,userId);
       if (role === "OPERATOR" && c.assignedToId !== userId) throw new MarketplaceError("Assign this case to yourself before deciding it.", 409);
       if (state === "EVIDENCE_SUBMITTED" && !await tx.collaborationFile.count({ where: { caseId: id, scanStatus: "CLEAN", deletedAt: null } }) && !(c.details as { originalPhotoIds?: string[] }).originalPhotoIds?.length) throw new MarketplaceError("Add evidence before submitting.");
       update.state = state; if (!["RESOLVED", "DECIDED", "CLOSED"].includes(state)) update.dueAt = new Date(Date.now() + p.responseHours * 3600000);
@@ -165,7 +182,7 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
       update.satisfaction = data.rating;
     }
     if (["reply", "internal"].includes(data.action) && c.state === "CLOSED") throw new MarketplaceError("This case is closed.", 409);
-    await tx.serviceCaseEvent.create({ data: { caseId: id, actorId: userId, action: data.action === "reply" ? `${role}_REPLY` : data.action.toUpperCase(), fromState: c.state, toState: state, body, internal: ["internal", "assign", "escalate"].includes(data.action), version: c.version + 1, deadlineAt: c.dueAt } });
+    await tx.serviceCaseEvent.create({ data: { caseId: id, actorId: userId, action: data.action === "reply" ? `${role}_REPLY` : data.action.toUpperCase(), fromState: c.state, toState: state, body, internal: ["internal", "assign", "takeover", "escalate"].includes(data.action), version: c.version + 1, deadlineAt: c.dueAt } });
     await tx.serviceCase.update({ where: { id }, data: update });
     await notifyCase(tx, id, userId);
     await audit(tx, userId, `service.${data.action}`, "ServiceCase", id);
