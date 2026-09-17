@@ -7,6 +7,7 @@ import { applyRefundObservation, reserveRefund } from "@/lib/refund-operations";
 import { syncDepositIntent } from "@/lib/deposit-authorization";
 import { planAllDepositReleases } from "@/lib/deposit-release-plan";
 import { PRE_TRIP_STATES } from "@/lib/financial-projection";
+import { linkLegacyRentalEvidence } from "@/lib/legacy-rental-evidence";
 
 type Action = "ADOPT" | "CONFIRM_FAILURE" | "AUTHORIZE_SETTLEMENT" | "RELEASE_INVENTORY" | "ESCALATE" | "ASSIGN";
 export async function resolveFinancialCase(actor: { id: string; role: string }, input: { caseId: string; action: Action; reason: string; providerId?: string; assigneeId?: string }) {
@@ -25,7 +26,8 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
     else intent = await stripe.paymentIntents.retrieve(providerId);
   }
   await withReservationLock(c.reservationId, async tx => {
-    const current = await tx.financialCase.findUniqueOrThrow({ where: { id: c.id } });
+    let current = await tx.financialCase.findUniqueOrThrow({ where: { id: input.caseId } });
+    let c = current;
     if (current.status === "RESOLVED") throw new Error("Case already resolved");
     const r = await tx.reservation.findUniqueOrThrow({ where: { id: c.reservationId }, include: { deposit: true, payments: true, refunds: true, trip: true } });
     let evidence: Prisma.InputJsonValue | null = current.evidence;
@@ -46,6 +48,9 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
     }
     if (intent) {
       if (intent.id !== providerId) throw new Error("Provider returned a different identity");
+      if (c.kind === "RENTAL" && c.reason === "LEGACY_RESERVATION_REVIEW" && (!c.paymentId || !c.operationId)) {
+        c = current = await linkLegacyRentalEvidence(tx, c, intent);
+      }
       if ((current.currency !== null && intent.currency !== current.currency) || (current.amountCents !== null && intent.amount !== current.amountCents)) throw new Error("Provider amount/currency mismatch");
       const owner = await tx.user.findUniqueOrThrow({ where: { id: r.customerId } });
       const customer = typeof intent.customer === "string" ? intent.customer : intent.customer?.id;
@@ -113,7 +118,7 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
         if (!p || (p.stripePaymentIntentId && p.stripePaymentIntentId !== intent.id)) throw new Error("Payment mapping missing or conflicting");
         await tx.payment.update({ where: { id: p.id }, data: { stripePaymentIntentId: intent.id, ...(intent.status === "succeeded" ? { status: "SUCCEEDED" } : {}) } });
       } else throw new Error("Unsupported provider operation; escalate for manual review");
-      evidence = json({ providerId: intent.id, status: intent.status, amount: intent.amount, customer });
+      evidence = json({ providerId: intent.id, status: intent.status, amount: intent.amount, currency: intent.currency, customer, paymentId: c.paymentId, operationId: op.id, originalKey: op.key });
     }
     if (["AUTHORIZE_SETTLEMENT", "RELEASE_INVENTORY"].includes(input.action)) {
       if (current.status !== "VERIFIED") throw new Error("Verify provider evidence before authorizing settlement");

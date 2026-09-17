@@ -69,13 +69,19 @@ describe("Batch 1E financial boundaries", () => {
   });
   it.each(["RENTAL", "DEPOSIT"])("rejects inverse %s adoption with identical amounts and preserves every financial record", async kind => {
     const { r, p, u } = await fixture(), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);
+    if (kind === "RENTAL") await prisma.payment.update({ where: { id: p.id }, data: { stripePaymentIntentId: null } });
     const op = await prisma.financialOperation.create({ data: { key: kind === "RENTAL" ? p.idempotencyKey! : randomUUID(), kind, reservationId: r.id, fingerprint: "test", payload: {}, state: "REVIEW" } });
     const c = await prisma.financialCase.create({ data: { sourceKey: randomUUID(), operationId: op.id, paymentId: kind === "RENTAL" ? p.id : null, reservationId: r.id, customerId: u.id, kind, amountCents: 15000, reason: "Uncertain legacy evidence" } });
     const snapshot = async () => Promise.all([prisma.payment.findMany({ where: { reservationId: r.id } }), prisma.securityDeposit.findUnique({ where: { reservationId: r.id } }), prisma.financialOperation.findMany({ where: { reservationId: r.id } }), prisma.financialCase.findUnique({ where: { id: c.id } })]);
     const before = await snapshot();
     provider.paymentIntents.retrieve.mockResolvedValue({ id: kind === "RENTAL" ? "pi_deposit_" + r.id : p.stripePaymentIntentId, amount: 15000, currency: "usd", customer: u.stripeCustomerId, status: "succeeded", capture_method: kind === "RENTAL" ? "manual" : "automatic", metadata: { reservationId: r.id, purpose: kind === "RENTAL" ? "security_deposit" : "rental", paymentId: p.id, operationKey: op.key } });
-    await expect(resolveFinancialCase(admin, { caseId: c.id, action: "ADOPT", providerId: kind === "RENTAL" ? "pi_deposit_" + r.id : p.stripePaymentIntentId!, reason: "Test matching identity with wrong financial purpose" })).rejects.toThrow();
+    await expect(resolveFinancialCase(admin, { caseId: c.id, action: "ADOPT", providerId: kind === "RENTAL" ? "pi_deposit_" + r.id : p.stripePaymentIntentId!, reason: "Test matching identity with wrong financial purpose" })).rejects.toThrow(kind === "RENTAL" ? "Rental purpose/capture method mismatch" : "Provider identity already belongs to another operation");
     expect(await snapshot()).toEqual(before);
+    if (kind === "RENTAL") {
+      expect((await prisma.payment.findUniqueOrThrow({ where: { id: p.id } })).stripePaymentIntentId).toBeNull();
+      expect(await prisma.providerObjectOwnership.findUnique({ where: { providerId: "pi_deposit_" + r.id } })).toBeNull();
+      expect((await prisma.financialCase.findUniqueOrThrow({ where: { id: c.id } })).status).toBe("OPEN");
+    }
   });
   it("rejects ambiguous rental lineage and accepts the original payment/operation evidence", async () => {
     const { r, p, u } = await fixture(), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);

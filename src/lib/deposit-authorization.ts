@@ -1,4 +1,5 @@
 import { planDepositRelease } from "@/lib/deposit-release-plan";
+import { checkDepositReleaseOwnership } from "@/lib/deposit-release-ownership";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
@@ -108,19 +109,27 @@ export async function executeDepositOperation(prepared: FinancialOperation): Pro
 }
 
 export async function releaseDeposits(reservationId: string, onlyIntentId?: string) {
-  if (!stripe) throw new Error("Stripe unavailable");
-  const client = stripe;
   const attempts = await prisma.financialOperation.findMany({ where: { reservationId, kind: "DEPOSIT", providerId: onlyIntentId ?? { not: null } } });
   const targets = new Set(attempts.map(a => a.providerId!));
   const deposit = await prisma.securityDeposit.findUnique({ where: { reservationId } });
   if (deposit?.stripePaymentIntentId && (!onlyIntentId || onlyIntentId === deposit.stripePaymentIntentId)) targets.add(deposit.stripePaymentIntentId);
   for (const intentId of targets) {
-    const ownership = await prisma.providerObjectOwnership.findUnique({ where: { providerId: intentId } });
-    if (!ownership || ownership.kind !== "DEPOSIT" || ownership.reservationId !== reservationId) throw new UncertainOutcomeError("Deposit ownership requires review before release");
     const operation = await withReservationLock(reservationId, tx => prepareOperation(tx, {
       key: `deposit-release:${intentId}`, kind: "DEPOSIT_RELEASE", reservationId, payload: { intentId },
     }));
+    await executeDepositReleaseOperation(operation);
+  }
+}
+
+export async function executeDepositReleaseOperation(operation: FinancialOperation): Promise<"processed" | "quarantined"> {
+    const reservationId = operation.reservationId;
+    if (!reservationId) throw new Error("Release reservation missing");
+    if (!await checkDepositReleaseOwnership(operation.id, reservationId)) return "quarantined";
+    if (!stripe) throw new Error("Stripe unavailable");
+    const client = stripe;
+    const intentId = (operation.payload as { intentId: string }).intentId;
     const cancelExactIntent = async () => {
+      if (!await checkDepositReleaseOwnership(operation.id, reservationId)) throw new UncertainOutcomeError("Deposit release quarantined");
       const current = await client.paymentIntents.retrieve(intentId);
       if (current.status === "canceled") return current;
       if (current.status === "succeeded") throw new UncertainOutcomeError("Captured deposit requires manual resolution");
@@ -128,16 +137,19 @@ export async function releaseDeposits(reservationId: string, onlyIntentId?: stri
       if (canceled.status !== "canceled") throw new Error("Deposit release unresolved");
       return canceled;
     };
-    await runOperation(operation, {
+    try { await runOperation(operation, {
       apply: (tx, result) => syncDepositIntent(reservationId, result, tx),
       // A release's provider ID identifies its immutable target, not proof of
       // cancellation. It is safe to cancel that exact still-live target again.
       create: cancelExactIntent,
       retrieve: cancelExactIntent,
       discover: cancelExactIntent,
-    });
-
-  }
+    }); } catch (error) {
+      const current = await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } });
+      if (current.state === "REVIEW") return "quarantined";
+      throw error;
+    }
+    return "processed";
 }
 
 export async function handleDepositAuthorizationCanceled(intent: Stripe.PaymentIntent) {

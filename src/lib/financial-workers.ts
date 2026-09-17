@@ -9,7 +9,7 @@ import { stripe } from "@/lib/stripe";
 import { claimRecoverableStripeEvents } from "@/lib/stripe-event-ledger";
 import { dispatchClaimedStripeEvent } from "@/lib/stripe-event-dispatch";
 import { executeRefundOperation, reconcileRefundStatus } from "@/lib/refund-operations";
-import { executeDepositOperation, releaseDeposits } from "@/lib/deposit-authorization";
+import { executeDepositOperation, executeDepositReleaseOperation, releaseDeposits } from "@/lib/deposit-authorization";
 import { handlePaymentIntentSucceeded, settleTerminatedReservation } from "@/lib/stripe-webhook-handlers";
 import { processOutboxOnce } from "@/lib/outbox";
 import { expireStaleReservations } from "@/lib/cleanup";
@@ -55,7 +55,9 @@ export async function recoverRefunds() {
   });
 }
 export async function recoverDeposits() {
-  const legacyIds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT d."id" FROM "SecurityDeposit" d WHERE NOT d."legacyUncertain" AND d."stripePaymentIntentId" IS NOT NULL
+  const legacyIds = await prisma.$queryRaw<Array<{ id: string }>>`SELECT d."id" FROM "SecurityDeposit" d
+    JOIN "ProviderObjectOwnership" p ON p."providerId"=d."stripePaymentIntentId" AND p."kind"='DEPOSIT' AND p."reservationId"=d."reservationId"
+    WHERE NOT d."legacyUncertain" AND d."stripePaymentIntentId" IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId" = d."reservationId" AND o."kind" = 'DEPOSIT') LIMIT 25`;
   const legacy = await prisma.securityDeposit.findMany({ where: { id: { in: legacyIds.map(d => d.id) } } });
   for (const deposit of legacy) await withReservationLock(deposit.reservationId, async tx => {
@@ -65,9 +67,13 @@ export async function recoverDeposits() {
     await tx.securityDeposit.update({ where: { id: deposit.id }, data: { operationId: op.id, generation: { increment: 1 } } });
   });
   const releases = await dueOperations("DEPOSIT_RELEASE");
-  await each(releases, op => releaseDeposits(op.reservationId!, (op.payload as { intentId: string }).intentId));
+  const releaseCounts = { processed: 0, failed: 0, quarantined: 0 };
+  for (const op of releases) {
+    try { releaseCounts[await executeDepositReleaseOperation(op)]++; }
+    catch (error) { releaseCounts.failed++; safeLog("RELEASE_RECOVERY_PENDING", error); }
+  }
   const operations = await dueOperations("DEPOSIT");
-  return each(operations, async operation => {
+  const deposits = await each(operations, async operation => {
     if (!operation.reservationId) return;
     const r = await prisma.reservation.findUnique({ where: { id: operation.reservationId } });
     if (!r) return;
@@ -83,6 +89,8 @@ export async function recoverDeposits() {
       if (deposit?.operationId && deposit.operationId !== observed.id && observed.providerId) await releaseDeposits(r.id, observed.providerId);
     }
   });
+  return { processed: deposits.processed + releaseCounts.processed, pending: deposits.pending + releaseCounts.failed,
+    failed: deposits.pending + releaseCounts.failed, quarantined: releaseCounts.quarantined, releases: releaseCounts, deposits };
 }
 export async function recoverReconciliation() {
   await expireStaleReservations();
