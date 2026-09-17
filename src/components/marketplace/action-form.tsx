@@ -19,6 +19,7 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
     const form = new FormData(event.currentTarget);
     const data: Record<string, unknown> = { ...Object.fromEntries(form.entries()), ...values, ...(action ? { action } : {}) };
     for (const field of fields) {
+      if (field.type === "money") data[field.name] = Math.round(Number(data[field.name]) * 100);
       if (field.type === "date" || field.type === "datetime-local") {
         const value = String(data[field.name] || "");
         if (value) data[field.name] = new Date(value).toISOString();
@@ -41,7 +42,7 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
         {field.label}
         {field.options ? <select id={`${prefix}-${field.name}`} name={field.name} defaultValue={field.value} required={field.required !== false} className="workspace-input">{field.options.map(option => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}</select>
           : field.type === "textarea" ? <textarea id={`${prefix}-${field.name}`} name={field.name} defaultValue={field.value} required={field.required !== false} maxLength={5000} rows={4} className="workspace-input" />
-          : <input id={`${prefix}-${field.name}`} name={field.name} type={field.type || "text"} defaultValue={field.type === "file" ? undefined : field.value} required={field.required !== false} min={field.min} max={field.max} step={field.step} accept={field.type === "file" ? "image/jpeg,image/png,image/webp" : undefined} className="workspace-input" />}
+          : <input id={`${prefix}-${field.name}`} name={field.name} type={field.type === "money" ? "number" : field.type || "text"} defaultValue={field.type === "file" ? undefined : field.value} required={field.required !== false} min={field.min} max={field.max} step={field.type === "money" ? "0.01" : field.step} accept={field.type === "file" ? "image/jpeg,image/png,image/webp" : undefined} className="workspace-input" />}
       </label>)}
       {children}
     </fieldset>

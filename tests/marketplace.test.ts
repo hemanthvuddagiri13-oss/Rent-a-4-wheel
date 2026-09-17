@@ -41,7 +41,7 @@ describe("marketplace permissions and real PostgreSQL state", () => {
     await expect(hostCommand(staff.id, { action: "availability", vehicleId: f.vehicle.id, isBookable: false })).rejects.toThrow("Only the host owner or manager");
     const employee = await prisma.hostEmployee.findFirstOrThrow({ where: { userId: staff.id } });
     await hostCommand(f.user.id, { action: "removeEmployee", id: employee.id });
-    await expect(marketplaceHost(prisma, staff.id)).rejects.toThrow("Host access unavailable");
+    await expect(marketplaceHost(prisma, staff.id)).rejects.toThrow("Host access required");
   });
   it("requires listing and host approval for availability", async () => {
     const f = await setup(), start = new Date("2034-01-01"), end = new Date("2034-01-03");

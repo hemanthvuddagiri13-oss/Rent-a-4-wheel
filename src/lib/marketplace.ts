@@ -112,7 +112,14 @@ export async function hostCommand(userId: string, input: unknown) {
     if (data.action === "owner") await tx.vehicleOwner.create({ data: { hostId: context.host.id, name: data.name, email: data.email, phone: data.phone } });
     if (data.action === "employee" || data.action === "removeEmployee") {
       if (context.role !== "OWNER") throw new MarketplaceError("Only the business owner can manage access.", 403);
-      if (data.action === "removeEmployee") await tx.hostEmployee.deleteMany({ where: { id: data.id, hostId: context.host.id } });
+      if (data.action === "removeEmployee") {
+        const employee = await tx.hostEmployee.findFirst({ where: { id: data.id, hostId: context.host.id } });
+        if (employee) {
+          await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${employee.userId} FOR UPDATE`;
+          await tx.hostEmployee.deleteMany({ where: { id: employee.id, hostId: context.host.id } });
+          if (!await tx.hostEmployee.count({ where: { userId: employee.userId } })) await tx.user.updateMany({ where: { id: employee.userId, role: "HOST_EMPLOYEE" }, data: { role: "CUSTOMER" } });
+        }
+      }
       else {
         await tx.$queryRaw`SELECT "id" FROM "User" WHERE "email"=${data.email.toLowerCase()} FOR UPDATE`;
         const user = await tx.user.findUnique({ where: { email: data.email.toLowerCase() }, include: { hostEmployments: true } });

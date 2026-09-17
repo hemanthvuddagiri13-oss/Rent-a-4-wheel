@@ -122,6 +122,20 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   const approval = await ac.request.post(`${base}/api/admin/marketplace`, { data: { action: "vehicle", id: vehicle.id, status: "APPROVED", reason: "Synthetic compliance files and signed snapshot reviewed" } });
   expect(approval.status(), await approval.text()).toBe(200);
   expect(await prisma.vehicle.findUnique({ where: { id: vehicle.id } })).toMatchObject({ listingApproval: "APPROVED", status: "ACTIVE" });
+  const signedBefore = await (await context.request.get(`${base}/api/host/vehicles/${vehicle.id}/agreement?acceptanceId=${acceptance.id}`)).body();
+  await page.reload(); await page.getByLabel("Describe your vehicle").fill("Revised synthetic vehicle description requiring a new signed listing snapshot.");
+  const edited = page.waitForResponse(r => r.url().endsWith("/api/host/workspace") && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Save listing for review" }).click(); expect((await edited).status()).toBe(200);
+  expect((await ac.request.post(`${base}/api/admin/marketplace`, { data: { action: "vehicle", id: vehicle.id, status: "APPROVED", reason: "Attempt to reuse an outdated listing signature" } })).status()).toBe(409);
+  expect(await (await context.request.get(`${base}/api/host/vehicles/${vehicle.id}/agreement?acceptanceId=${acceptance.id}`)).body()).toEqual(signedBefore);
+  await page.reload(); await page.getByLabel("Full legal name", { exact: true }).fill("Synthetic Host"); await page.getByRole("checkbox").check();
+  const resigned = page.waitForResponse(r => r.url().endsWith(`/api/host/vehicles/${vehicle.id}/agreement`) && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Sign listing agreement" }).click(); expect((await resigned).status()).toBe(200);
+  expect(await prisma.agreementAcceptance.count({ where: { vehicleId: vehicle.id } })).toBe(2);
+  expect((await ac.request.post(`${base}/api/admin/marketplace`, { data: { action: "vehicle", id: vehicle.id, status: "APPROVED", reason: "Review current revision with matching signed evidence" } })).status()).toBe(200);
+  await prisma.legalDocument.update({ where: { type: "HOST_AGREEMENT" }, data: { version: "browser-host-v2", content: "Changed synthetic template for stale-version rejection test" } });
+  expect((await context.request.post(`${base}/api/host/vehicles/${vehicle.id}/agreement`, { data: { signerName: "Synthetic Host", version: "browser-host", accept: "yes" } })).status()).toBe(409);
+  expect(await (await context.request.get(`${base}/api/host/vehicles/${vehicle.id}/agreement?acceptanceId=${acceptance.id}`)).body()).toEqual(signedBefore);
   const ap = await ac.newPage(); await ap.goto(`${base}/admin/marketplace/vehicles/${vehicle.id}`); await screenshot(ap, "admin-listing-review");
   await ap.goto(`${base}/admin/marketplace`); await screenshot(ap, "admin-operations"); await ac.close();
   await page.goto(`${base}/host/team`);
@@ -132,6 +146,16 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   const unrelated = await login(other.user);
   expect((await unrelated.request.post(`${base}/api/host/workspace`, { data: { action: "availability", vehicleId: vehicle.id, isBookable: true } })).status()).toBe(404);
   expect((await context.request.post(`${base}/api/admin/marketplace`, { data: { action: "vehicle", id: vehicle.id, status: "APPROVED", reason: "self approval" } })).status()).toBe(403);
+  expect((await unrelated.request.get(`${base}/api/marketplace/files/${quarantined.id}`)).status()).toBe(403);
+  const staff = await createTestCustomer(); users.push(staff.id);
+  expect((await context.request.post(`${base}/api/host/workspace`, { data: { action: "employee", email: staff.email, role: "STAFF" } })).status()).toBe(200);
+  const sc = await login(staff);
+  expect((await sc.request.get(`${base}/api/host/vehicles`)).status()).toBe(200);
+  expect((await sc.request.post(`${base}/api/host/workspace`, { data: { action: "availability", vehicleId: vehicle.id, isBookable: false } })).status()).toBe(403);
+  const employment = await prisma.hostEmployee.findFirstOrThrow({ where: { userId: staff.id } });
+  expect((await context.request.post(`${base}/api/host/workspace`, { data: { action: "removeEmployee", id: employment.id } })).status()).toBe(200);
+  expect((await sc.request.get(`${base}/api/host/vehicles`)).status()).toBe(403);
+  await sc.close();
   await context.close(); await unrelated.close();
 }, 180000);
 

@@ -10,7 +10,7 @@ export function ListingForm({ vehicle, features = "", owners }: { vehicle?: Vehi
     { name: "fuelType", label: "Fuel or power", options: ["GASOLINE", "DIESEL", "HYBRID", "ELECTRIC"], value: vehicle?.fuelType },
     { name: "seats", label: "Seats", type: "number", value: vehicle?.seats ?? 5, min: 1, max: 15 },
     { name: "mileage", label: "Current odometer (miles)", type: "number", value: vehicle?.mileage ?? 0, min: 0 },
-    ...(["dailyRateCents", "weeklyRateCents", "monthlyRateCents", "securityDepositCents", "additionalMileageFeeCents"] as const).map((name, i) => ({ name, label: ["Daily price (cents)", "Weekly price (cents)", "Monthly price (cents)", "Security deposit (cents)", "Extra mileage (cents/mile)"][i], type: "number", min: 0, value: vehicle?.[name] ?? [5000, 30000, 100000, 30000, 35][i] })),
+    ...(["dailyRateCents", "weeklyRateCents", "monthlyRateCents", "securityDepositCents", "additionalMileageFeeCents"] as const).map((name, i) => ({ name, label: ["Daily price ($)", "Weekly price ($)", "Monthly price ($)", "Security deposit ($)", "Extra mileage ($/mile)"][i], type: "money", min: 0, value: (vehicle?.[name] ?? [5000, 30000, 100000, 30000, 35][i]) / 100 })),
     { name: "mileageAllowancePerDay", label: "Included miles per day", type: "number", min: 1, value: vehicle?.mileageAllowancePerDay ?? 150 },
     { name: "location", label: "Pickup city and state", value: vehicle?.location ?? "Dallas, TX" },
     { name: "registrationExpiresAt", label: "Registration expiration", type: "date", value: vehicle?.registrationExpiresAt?.toISOString().slice(0, 10) },
