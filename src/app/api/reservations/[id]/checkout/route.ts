@@ -108,15 +108,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       if (attached.count !== requestedDocIds.length) throw new Error("Document ownership changed concurrently");
 
-      await recordAgreementAcceptance(tx, {
-        type: "RENTAL_AGREEMENT",
-        reservationId: reservation.id,
-        signedByUserId: session.user.id,
-        signerName: `${driver.firstName} ${driver.lastName}`,
-        ipAddress: ip,
-        userAgent,
-      });
-
       await transitionReservation(tx, {
         id: reservation.id,
         from: "CHECKOUT_HOLD",
@@ -138,6 +129,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           licenseState: driver.licenseState,
           licenseExpiration: new Date(driver.licenseExpiration),
         },
+      });
+
+      // Freeze the finalized driver details, not the earlier empty checkout hold.
+      // Legal rejection still rolls back this entire transaction.
+      await recordAgreementAcceptance(tx, {
+        type: "RENTAL_AGREEMENT",
+        reservationId: reservation.id,
+        signedByUserId: session.user.id,
+        signerName: `${driver.firstName} ${driver.lastName}`,
+        ipAddress: ip,
+        userAgent,
       });
 
       await tx.tripEvent.create({

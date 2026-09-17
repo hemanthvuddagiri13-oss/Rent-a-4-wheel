@@ -42,6 +42,7 @@ export async function recordAgreementAcceptance(
     userAgent: string | null;
   }
 ) {
+  await tx.$queryRaw`SELECT "id" FROM "LegalDocument" WHERE "type"::text = ${params.type} FOR UPDATE`;
   const legalDocument = await tx.legalDocument.findUnique({ where: { type: params.type } });
   if (!legalDocument) {
     throw new Error(`No LegalDocument configured for type ${params.type}.`);

@@ -234,6 +234,8 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
   const id = new URL(page.url()).searchParams.get("reservationId")!;
   const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id } });
   expect(reservation.status).toBe("AWAITING_PAYMENT"); expect(reservation.checkoutFingerprint).toBeTruthy();
+  const signedAgreement = await prisma.agreementAcceptance.findFirstOrThrow({ where: { reservationId: id } });
+  expect(signedAgreement.subjectSnapshot).toMatchObject({ reservation: { driverFirstName: "Synthetic", driverLastName: "Driver", driverAddress: "1 Synthetic Street", licenseNumber: "SYNTHETIC_PRIVATE_LICENSE" } });
   expect(await prisma.driverDocument.count({ where: { reservationId: id, malwareScanStatus: "CLEAN" } })).toBe(3);
   const pdf = await context.request.get(`${base}/api/reservations/${id}/agreement`);
   expect(pdf.status()).toBe(200); expect(pdf.headers()["content-type"]).toBe("application/pdf");
