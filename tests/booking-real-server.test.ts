@@ -8,7 +8,7 @@ import { prisma, createTestVehicle, createTestCustomer, cleanupReservationsForVe
 import { bookingLocal } from "@/lib/booking-time";
 let child:ChildProcess,browser:Browser,context:BrowserContext,page:Page;
 const base="http://127.0.0.1:3199",secret="isolated-browser-test-secret-not-a-deployment-secret";
-const vehicles:string[]=[],users:string[]=[],extras:string[]=[];
+const vehicles:string[]=[],users:string[]=[],extras:string[]=[],coupons:string[]=[];
 let priorLegal:Awaited<ReturnType<typeof prisma.legalDocument.findUnique>>;
 let priorZone:Awaited<ReturnType<typeof prisma.siteSetting.findUnique>>;
 beforeAll(async()=>{
@@ -24,7 +24,7 @@ beforeAll(async()=>{
 },150000);
 afterAll(async()=>{
  await browser?.close();child?.kill();
- await cleanupReservationsForVehicles(vehicles);await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.extra.deleteMany({where:{id:{in:extras}}});await prisma.user.deleteMany({where:{id:{in:users}}});
+ await cleanupReservationsForVehicles(vehicles);await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.extra.deleteMany({where:{id:{in:extras}}});await prisma.coupon.deleteMany({where:{id:{in:coupons}}});await prisma.user.deleteMany({where:{id:{in:users}}});
  if(priorLegal)await prisma.legalDocument.update({where:{type:"RENTAL_AGREEMENT"},data:{needsAttorneyReview:priorLegal.needsAttorneyReview}});else await prisma.legalDocument.deleteMany({where:{type:"RENTAL_AGREEMENT"}});
  if(priorZone)await prisma.siteSetting.update({where:{key:"bookingTimezone"},data:{value:priorZone.value!}});else await prisma.siteSetting.deleteMany({where:{key:"bookingTimezone"}});
  await prisma.$disconnect();
@@ -34,6 +34,7 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   const v=await createTestVehicle({securityDepositCents:0}),u=await createTestCustomer();vehicles.push(v.id);users.push(u.id);
   const extra=await prisma.extra.create({data:{name:"Browser child seat",chargeType:"ONE_TIME",amountCents:1200}});extras.push(extra.id);
   const inactive=await prisma.extra.create({data:{name:"Unavailable fixture",chargeType:"ONE_TIME",amountCents:900,isActive:false}});extras.push(inactive.id);
+  const coupon=await prisma.coupon.create({data:{code:"BROWSER"+Date.now(),discountType:"FIXED",amountCents:1000,startsAt:new Date(0),expiresAt:new Date("2040-01-01"),isActive:true,applicableVehicleIds:[v.id]}});coupons.push(coupon.id);
   const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:"CUSTOMER"},secret,salt:"authjs.session-token"});
   await context.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);
   // Real HTTP requests prove rejection before the UI creates its first hold.
@@ -51,11 +52,12 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   const buffer=await sharp({create:{width:20,height:20,channels:3,background:"white"}}).png().toBuffer();
   for(let i=0;i<3;i++){const uploaded=page.waitForResponse(r=>r.url().endsWith("/api/documents/upload"));await page.locator("input[type=file]").nth(i).setInputFiles({name:"synthetic.png",mimeType:"image/png",buffer});expect((await uploaded).status()).toBe(200)}
   await page.getByRole("button",{name:"Continue",exact:true}).click();await page.getByRole("heading",{name:"Review Your Booking"}).waitFor();
+  await page.getByLabel("Promo Code").fill(coupon.code);const applied=page.waitForResponse(r=>r.url().endsWith("/api/reservations/hold"));await page.getByRole("button",{name:"Apply",exact:true}).click();expect((await applied).status()).toBe(200);
   await page.getByRole("checkbox").check();await page.getByRole("button",{name:"Continue to Payment"}).click();await page.getByRole("button",{name:"Simulate Successful Payment"}).waitFor();
   const id=new URL(page.url()).searchParams.get("reservationId")!;
   const saved=await prisma.reservation.findUniqueOrThrow({where:{id},include:{extras:true}}),draft=await prisma.bookingDraft.findFirstOrThrow({where:{reservationId:id}});
   expect(saved.pickupAt.toISOString()).toBe("2030-03-09T16:00:00.000Z");expect(saved.returnAt.toISOString()).toBe("2030-03-12T15:00:00.000Z");expect(saved.bookingTimezone).toBe("America/Chicago");
-  expect(saved.extras.map(e=>[e.extraId,e.quantity,e.amountCents])).toEqual([[extra.id,1,1200]]);expect(saved.units).toBe(3);expect(saved.bookingFingerprint).toBe(draft.fingerprint);expect(saved.checkoutFingerprint).toBeTruthy();
+  expect(saved.extras.map(e=>[e.extraId,e.quantity,e.amountCents])).toEqual([[extra.id,1,1200]]);expect(saved.units).toBe(3);expect(saved.couponId).toBe(coupon.id);expect(saved.discountCents).toBe(1000);expect(saved.taxCents).toBe(1254);expect(saved.totalCents).toBe(16454);expect(saved.bookingFingerprint).toBe(draft.fingerprint);expect(saved.checkoutFingerprint).toBeTruthy();
   for(const action of ["back","reload","stripe"]){
    if(action==="reload")await page.reload();
    if(action==="stripe")await page.goto(base+"/book/"+v.id+"?reservationId="+id+"&payment_intent=pi_fixture&payment_intent_client_secret=synthetic_secret&redirect_status=succeeded");
@@ -63,6 +65,7 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
    await page.getByRole("heading",{name:"Review Your Booking"}).waitFor();
    expect(await page.getByText("2030-03-09 at 10:00",{exact:true}).count()).toBe(1);expect(await page.getByText("2030-03-12 at 10:00",{exact:true}).count()).toBe(1);
    expect(await page.getByText("Browser child seat × 1",{exact:true}).count()).toBe(1);expect(await page.getByText("All booking times: America/Chicago",{exact:true}).count()).toBe(1);
+   expect(await page.getByLabel("Promo Code").inputValue()).toBe(coupon.code);expect(await page.getByText("$164.54",{exact:true}).count()).toBeGreaterThan(0);
    const resumed=await prisma.reservation.findUniqueOrThrow({where:{id}});expect([resumed.pickupAt,resumed.returnAt,resumed.bookingFingerprint,resumed.checkoutFingerprint]).toEqual([saved.pickupAt,saved.returnAt,saved.bookingFingerprint,saved.checkoutFingerprint]);
    expect((await prisma.bookingDraft.findUniqueOrThrow({where:{id:draft.id}})).revision).toBe(draft.revision);expect(await prisma.reservation.count({where:{vehicleId:v.id}})).toBe(1);
    expect(bookingLocal(resumed.pickupAt,resumed.bookingTimezone)).toBe("2030-03-09T10:00");

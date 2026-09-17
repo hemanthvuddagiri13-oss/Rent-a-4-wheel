@@ -478,6 +478,7 @@ enum RateType {
 model Reservation {
   bookingTimezone String @default("America/Chicago")
   financialCheckedAt DateTime?
+  @@index([financialCheckedAt, id])
   // Terminal financial disposition is independent of captured payment status.
   financialDisposition String @default("OPEN")
   bookingFingerprint String?
@@ -664,6 +665,7 @@ enum RefundStatus {
 // Stripe. Creating a Refund row is NOT refund completion — only
 // `status: SUCCEEDED` is; see src/lib/refund-operations.ts.
 model Refund {
+  @@index([status, legacyUncertain, createdAt])
   legacyUncertain Boolean @default(false)
   id            String      @id @default(cuid())
   reservationId String
@@ -1497,6 +1499,7 @@ model SiteSetting {
 
 // Durable operator queue. IDs/evidence are retained after resolution.
 model FinancialCase {
+  paymentId String?
   id String @id @default(cuid())
   sourceKey String @unique
   reservationId String

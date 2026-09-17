@@ -75,9 +75,25 @@ describe("Batch 1D durable boundaries",()=>{
   expect(await prisma.refund.count({where:{reservationId:r.id,status:"PENDING",amountCents:1000}})).toBe(1);
   expect(await prisma.auditLog.count({where:{entityId:c.id}})).toBe(2);
  });
+ it("requires active administrator authority, a reason and provider failure evidence",async()=>{
+  const {r,u}=await fixture();const c=await prisma.financialCase.create({data:{sourceKey:randomUUID(),reservationId:r.id,customerId:u.id,kind:"RENTAL",amountCents:15000,reason:"Uncertain provider result"}});
+  await expect(resolveFinancialCase(u,{caseId:c.id,action:"ESCALATE",reason:"Customer cannot resolve their own financial review"})).rejects.toThrow("Forbidden");
+  const admin=await createTestCustomer({role:"ADMIN"});users.push(admin.id);
+  await expect(resolveFinancialCase(admin,{caseId:c.id,action:"ESCALATE",reason:""})).rejects.toThrow("reason");
+  await expect(resolveFinancialCase(admin,{caseId:c.id,action:"CONFIRM_FAILURE",reason:"No provider identity is not sufficient failure evidence"})).rejects.toThrow("identity");
+  await resolveFinancialCase(admin,{caseId:c.id,action:"ESCALATE",reason:"Provider records require further manual investigation"});expect((await prisma.financialCase.findUniqueOrThrow({where:{id:c.id}})).status).toBe("MANUAL_REVIEW");expect(provider.refunds.create).not.toHaveBeenCalled();
+ });
  it("selects urgent work ahead of thousands of historical observations",async()=>{
   const {r}=await fixture();await prisma.financialOperation.createMany({data:Array.from({length:2500},(_,i)=>({key:r.id+":"+i,kind:"DEPOSIT",reservationId:r.id,fingerprint:"historical",payload:{},state:"OBSERVED",createdAt:new Date(0)}))});
   const urgent=await prisma.financialOperation.create({data:{key:randomUUID(),kind:"DEPOSIT",reservationId:r.id,fingerprint:"urgent",payload:{},state:"RETRY",priority:0,nextAttemptAt:new Date(0)}});
   const selected=await dueOperations("DEPOSIT");expect(selected.some(o=>o.id===urgent.id)).toBe(true);expect(selected.every(o=>o.state!=="OBSERVED")).toBe(true);
+  await prisma.financialOperation.update({where:{id:urgent.id},data:{state:"REVIEW"}});
+  const target="pi_urgent_release_"+r.id;
+  await prisma.financialOperation.create({data:{key:randomUUID(),kind:"DEPOSIT",reservationId:r.id,providerId:target,fingerprint:"target",payload:{},state:"OBSERVED"}});
+  const { planDepositRelease }=await import("@/lib/deposit-release-plan");await withReservationLock(r.id,tx=>planDepositRelease(tx,r.id,target));
+  provider.paymentIntents.retrieve.mockResolvedValue({id:target,status:"canceled"});
+  await prisma.securityDeposit.create({data:{reservationId:r.id,amountCents:30000}});
+  await recoverDeposits();expect(provider.paymentIntents.retrieve).toHaveBeenCalledWith(target);
+  expect(provider.paymentIntents.create).not.toHaveBeenCalled();
  });
 });

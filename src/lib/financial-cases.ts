@@ -6,7 +6,7 @@ export async function quarantineOperation(tx: Prisma.TransactionClient, id: stri
   const payload = op.payload as { amount?: number };
   await tx.financialCase.upsert({ where: { sourceKey: "operation:" + id }, update: { attempts: op.attempts, lastError: reason }, create: {
     sourceKey: "operation:" + id, reservationId: r.id, customerId: r.customerId, operationId: id, kind: op.kind,
-    amountCents: payload.amount ?? 0, originalKey: op.key, providerId: op.providerId, reason, attempts: op.attempts,
+    amountCents: payload.amount ?? (op.kind === "DEPOSIT_RELEASE" ? r.depositCents : 0), originalKey: op.key, providerId: op.providerId, reason, attempts: op.attempts,
   } });
   await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "REVIEW" } });
 }

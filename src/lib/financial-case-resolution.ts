@@ -62,9 +62,13 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
         if (duplicate) throw new Error("Ambiguous deposit ownership requires escalation");
         await tx.securityDeposit.update({ where: { id: r.deposit.id }, data: { operationId: op.id, generation: generation!, legacyUncertain: false } });
         await syncDepositIntent(r.id, intent, tx);
+      } else if (c.kind === "DEPOSIT_RELEASE") {
+        if (intent.capture_method !== "manual" || intent.metadata.purpose !== "security_deposit" || (op.payload as { intentId?: string }).intentId !== intent.id) throw new Error("Deposit release target mismatch");
+        if (intent.status === "succeeded") throw new Error("Captured deposit requires claim review; do not cancel or automatically refund");
+        await syncDepositIntent(r.id, intent, tx);
       } else if (c.kind === "RENTAL") {
-        const p = r.payments.find(p => p.idempotencyKey === op!.key || p.stripePaymentIntentId === intent!.id);
-        if (!p) throw new Error("Payment mapping missing");
+        const p = r.payments.find(p => p.id === c.paymentId || p.idempotencyKey === op!.key || p.stripePaymentIntentId === intent!.id);
+        if (!p || (p.stripePaymentIntentId && p.stripePaymentIntentId !== intent.id)) throw new Error("Payment mapping missing or conflicting");
         await tx.payment.update({ where: { id: p.id }, data: { stripePaymentIntentId: intent.id, ...(intent.status === "succeeded" ? { status: "SUCCEEDED" } : {}) } });
       } else throw new Error("Unsupported provider operation; escalate for manual review");
       evidence = json({ providerId: intent.id, status: intent.status, amount: intent.amount, customer });
@@ -72,7 +76,7 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
     if (["AUTHORIZE_SETTLEMENT", "RELEASE_INVENTORY"].includes(input.action)) {
       if (current.status !== "VERIFIED") throw new Error("Verify provider evidence before authorizing settlement");
       if (r.trip?.startedAt || ![...PRE_TRIP_STATES, "CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(r.status)) throw new Error("Operational trips cannot use pre-trip settlement");
-      const unresolved = await tx.financialCase.count({ where: { reservationId: r.id, id: { not: c.id }, status: { not: "RESOLVED" } } });
+      const unresolved = await tx.financialCase.count({ where: { reservationId: r.id, id: { not: c.id }, status: { notIn: ["RESOLVED", "VERIFIED"] } } });
       if (unresolved || r.refunds.some(f => f.legacyUncertain) || r.deposit?.legacyUncertain) throw new Error("Resolve uncertain provider outcomes before settlement");
       if (input.action === "AUTHORIZE_SETTLEMENT") {
         await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "REFUND_REQUIRED" } });

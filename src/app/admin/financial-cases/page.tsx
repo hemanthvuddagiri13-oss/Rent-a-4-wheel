@@ -4,7 +4,9 @@ import { resolveCase } from "./actions";
 export const dynamic = "force-dynamic";
 export default async function FinancialCases() {
  const session=await auth(); if (!session?.user || !["ADMIN","SUPER_ADMIN"].includes(session.user.role)) return <p>Forbidden</p>;
- const cases=await prisma.financialCase.findMany({ orderBy:{createdAt:"asc"},take:100 });
+ const viewer=await prisma.user.findUnique({where:{id:session.user.id}});
+ if(!viewer?.isActive || !["ADMIN","SUPER_ADMIN"].includes(viewer.role)) return <p>Forbidden</p>;
+ const cases=await prisma.financialCase.findMany({ where:{status:{not:"RESOLVED"}}, orderBy:{createdAt:"asc"},take:100 });
  const history=await prisma.auditLog.findMany({where:{entityType:"FinancialCase",entityId:{in:cases.map(c=>c.id)}},orderBy:{createdAt:"desc"},take:500});
  const failedRefunds=await prisma.refund.count({where:{status:"FAILED"}});
  const quarantined=await prisma.financialCase.count({where:{status:{in:["OPEN","MANUAL_REVIEW"]}}});

@@ -30,7 +30,10 @@ export async function executeRentalOperation(operation: FinancialOperation) {
   const client = stripe;
   const payload = operation.payload as unknown as Stripe.PaymentIntentCreateParams;
   const intent = await runOperation(operation, {
-    apply: (tx, result) => tx.payment.update({ where: { idempotencyKey: operation.key }, data: { stripePaymentIntentId: result.id } }),
+    apply: async (tx, result) => {
+      const payment = await tx.payment.findFirstOrThrow({ where: { reservationId: operation.reservationId!, type: "RENTAL", OR: [{ idempotencyKey: operation.key }, { stripePaymentIntentId: result.id }] } });
+      return tx.payment.update({ where: { id: payment.id }, data: { stripePaymentIntentId: result.id } });
+    },
     create: key => client.paymentIntents.create({ ...payload, metadata: { ...payload.metadata, operationKey: key } }, { idempotencyKey: key }),
     retrieve: id => client.paymentIntents.retrieve(id),
     discover: async () => { for await (const p of client.paymentIntents.list({ customer: payload.customer as string, limit: 100 })) if (p.metadata.operationKey === operation.key) return p; return null; },

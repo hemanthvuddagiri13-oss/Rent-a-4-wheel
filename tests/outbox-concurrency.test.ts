@@ -1,3 +1,4 @@
+import { PrismaClient } from "@prisma/client";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { barrier } from "./helpers/barrier";
 import { prisma, createTestCustomer } from "./helpers/factories";
@@ -5,12 +6,14 @@ import { prisma as workerDb } from "@/lib/prisma";
 const email = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/email", () => ({ sendEmail: email }));
 const { processOutboxOnce } = await import("@/lib/outbox");
+const workerUrl = new URL(process.env.DATABASE_URL!); workerUrl.searchParams.set("connection_limit", "1");
+const senderA = new PrismaClient({ datasources: { db: { url: workerUrl.toString() } } }), senderB = new PrismaClient({ datasources: { db: { url: workerUrl.toString() } } });
 const users: string[] = [], messages: string[] = [];
 afterAll(async () => {
   await prisma.outboxMessage.deleteMany({ where: { id: { in: messages } } });
   await prisma.notification.deleteMany({ where: { userId: { in: users } } });
   await prisma.user.deleteMany({ where: { id: { in: users } } });
-  await prisma.$disconnect();
+  await Promise.all([senderA.$disconnect(), senderB.$disconnect(), prisma.$disconnect()]);
 });
 async function fixture() {
   const u = await createTestCustomer(); users.push(u.id);
@@ -65,9 +68,10 @@ describe("outbox execution", () => {
 it("replacement outbox success fences the old worker's later failure on both projections",async()=>{
  const message=await fixture(),entered=barrier(),release=barrier();
  email.mockReset().mockImplementationOnce(async()=>{entered.release();await release.wait;throw new Error("late transport failure")}).mockResolvedValueOnce({sent:true});
- const stale=processOutboxOnce(1,[message.id]);await entered.wait;
+ const [a,b]=await Promise.all([senderA.$queryRaw<Array<{pid:number}>>`SELECT pg_backend_pid() AS pid`,senderB.$queryRaw<Array<{pid:number}>>`SELECT pg_backend_pid() AS pid`]);expect(a[0].pid).not.toBe(b[0].pid);
+ const stale=processOutboxOnce(1,[message.id],senderA);await entered.wait;
  await prisma.outboxMessage.update({where:{id:message.id},data:{leaseExpiresAt:new Date(0)}});
- try {expect((await processOutboxOnce(1,[message.id])).processed).toBe(1)} finally {release.release()}
+ try {expect((await processOutboxOnce(1,[message.id],senderB)).processed).toBe(1)} finally {release.release()}
  await stale;
  expect((await prisma.outboxMessage.findUniqueOrThrow({where:{id:message.id}})).status).toBe("SENT");
  expect((await prisma.notification.findUniqueOrThrow({where:{deliveryKey:message.id}})).status).toBe("SENT");

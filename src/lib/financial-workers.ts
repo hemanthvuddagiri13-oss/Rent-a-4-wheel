@@ -95,7 +95,7 @@ export async function recoverReconciliation() {
 export async function auditHistoricalFinancials() {
   if (!stripe) throw new Error("Stripe unavailable");
   const client = stripe;
-  const reservations = await prisma.reservation.findMany({ where: { payments: { some: { type: "RENTAL" } } }, orderBy: { financialCheckedAt: { sort: "asc", nulls: "first" } }, take: 25, include: { payments: true } });
+  const reservations = await prisma.reservation.findMany({ where: { payments: { some: { type: "RENTAL" } } }, orderBy: [{ financialCheckedAt: { sort: "asc", nulls: "first" } }, { id: "asc" }], take: 25, include: { payments: true } });
   return each(reservations, async r => {
     await prisma.reservation.update({ where: { id: r.id }, data: { financialCheckedAt: new Date() } });
     for (const payment of r.payments.filter(p => p.type === "RENTAL" && p.stripePaymentIntentId)) {

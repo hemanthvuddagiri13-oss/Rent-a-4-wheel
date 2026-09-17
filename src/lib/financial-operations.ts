@@ -25,7 +25,7 @@ export async function prepareOperation(tx: Prisma.TransactionClient, params: {
   await assertEventFence(tx);
   const hash = fingerprint(params);
   const operation = await tx.financialOperation.upsert({
-    where: { key: params.key }, create: { ...params, fingerprint: hash }, update: {},
+    where: { key: params.key }, create: { ...params, fingerprint: hash, priority: ["REFUND", "DEPOSIT_RELEASE"].includes(params.kind) ? 10 : params.kind === "RENTAL" ? 20 : 50 }, update: {},
   });
   if (operation.fingerprint !== hash) throw new Error("Idempotency key was reused with different parameters");
   return operation;
@@ -73,7 +73,7 @@ export async function runOperation<T extends { id: string }>(operation: Financia
       else await assertEventFence(tx);
       const saved = await tx.financialOperation.updateMany({
         where: { id: claimed.id, leaseToken: token, leaseExpiresAt: { gt: new Date() } },
-        data: { providerId: result.id, result: json(result), state: polling ? "POLL" : "OBSERVED", leaseToken: null, leaseExpiresAt: null, lastError: null, consecutiveFailures: 0, nextAttemptAt: polling ? nextPoll : null },
+        data: { providerId: result.id, result: json(result), state: polling ? "POLL" : "OBSERVED", priority: providerStatus === "requires_capture" ? 90 : claimed.priority, leaseToken: null, leaseExpiresAt: null, lastError: null, consecutiveFailures: 0, nextAttemptAt: polling ? nextPoll : null },
       });
       if (!saved.count) throw new OperationPendingError("Financial operation lease lost; result will be reconciled");
       await provider.apply?.(tx, result);
@@ -86,7 +86,7 @@ export async function runOperation<T extends { id: string }>(operation: Financia
       if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
       const saved = await tx.financialOperation.updateMany({
       where: { id: claimed.id, leaseToken: token },
-      data: { consecutiveFailures: { increment: 1 }, state: error instanceof UncertainOutcomeError || claimed.consecutiveFailures >= 19 ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: safeErrorCode(error) },
+      data: { consecutiveFailures: { increment: 1 }, priority: ["REFUND", "DEPOSIT_RELEASE"].includes(claimed.kind) ? 10 : 20, state: error instanceof UncertainOutcomeError || claimed.consecutiveFailures >= 19 ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: safeErrorCode(error) },
     });
       if (saved.count && (error instanceof UncertainOutcomeError || claimed.consecutiveFailures >= 19)) await quarantineOperation(tx, claimed.id, safeErrorCode(error));
     });
