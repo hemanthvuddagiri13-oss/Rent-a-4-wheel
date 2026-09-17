@@ -160,3 +160,15 @@ it("restricts privacy decisions and deletion retries to super admins without cle
  expect(await prisma.privacyDeletion.findUnique({where:{id:request.id}})).toMatchObject({state:"RETAINED_LEGAL_REVIEW",reviewedAt:expect.any(Date)});
  expect(await prisma.auditLog.count({where:{entityId:request.id,action:"privacy.review"}})).toBe(1);
 });
+
+it("does not let a full batch of held files starve a later eligible deletion",async()=>{
+ const f=await fixture();const c=await openConversation(f.customer.id,{vehicleId:f.v.id});const past=new Date(Date.now()-86400000);
+ await prisma.conversation.update({where:{id:c.id},data:{retainUntil:past}});
+ const common={conversationId:c.id,uploadedById:f.customer.id,purpose:"MESSAGE",mimeType:"image/png",sha256:"synthetic-hash",size:20,scanStatus:"CLEAN",retainUntil:past};
+ await prisma.collaborationFile.createMany({data:Array.from({length:101},(_,i)=>({...common,storageKey:"local:held-"+c.id+"-"+i,legalHold:true}))});
+ const eligible=await prisma.collaborationFile.create({data:{...common,storageKey:"local:eligible-"+c.id}});
+ privateDelete.mockClear();await runCollaborationRetention();
+ expect(privateDelete).toHaveBeenCalledWith(eligible.storageKey);
+ expect(await prisma.storageDeletionJob.findUnique({where:{fileId:eligible.id}})).toMatchObject({state:"DONE"});
+ expect(await prisma.collaborationFile.count({where:{conversationId:c.id,legalHold:true,deletedAt:null}})).toBe(101);
+});

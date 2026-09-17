@@ -33,7 +33,11 @@ export async function runCollaborationRetention() {
   const p = await policy(prisma);
   const terminal = await prisma.reservation.findMany({ where: { status: { in: ["COMPLETED", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"] } }, select: { id: true } });
   await prisma.conversation.updateMany({ where: { reservationId: { in: terminal.map(r => r.id) }, closedAt: null }, data: { closedAt: new Date(), retainUntil: afterDays(p.messageDays) } });
-  const files = await prisma.collaborationFile.findMany({ where: { retainUntil: { lte: new Date() }, deletedAt: null }, take: 100 });
+  // Filter held records before limiting the batch: an old legal hold must not
+  // permanently starve later eligible records. Authorization is checked again
+  // under parent/file locks at the irreversible deletion point.
+  const eligibleFiles = await prisma.$queryRaw<Array<{id:string}>>`SELECT f.id FROM "CollaborationFile" f LEFT JOIN "Conversation" c ON c.id=f."conversationId" LEFT JOIN "ServiceCase" s ON s.id=f."caseId" WHERE f."retainUntil"<=now() AND f."deletedAt" IS NULL AND NOT f."legalHold" AND (c.id IS NULL OR (NOT c."legalHold" AND c."retainUntil"<=now() AND (c."reservationId" IS NULL OR c."closedAt" IS NOT NULL))) AND (s.id IS NULL OR (s.state='CLOSED' AND NOT s."legalHold" AND NOT s."securityHold" AND s."retainUntil"<=now())) AND NOT EXISTS (SELECT 1 FROM "Payment" p WHERE p."reservationId"=COALESCE(c."reservationId",s."reservationId")) AND NOT EXISTS (SELECT 1 FROM "AgreementAcceptance" a WHERE a."reservationId"=COALESCE(c."reservationId",s."reservationId")) AND NOT EXISTS (SELECT 1 FROM "ServiceCase" h WHERE h."reservationId"=COALESCE(c."reservationId",s."reservationId") AND (h."legalHold" OR h."securityHold" OR h.state<>'CLOSED')) ORDER BY f."retainUntil",f.id LIMIT 100`;
+  const files = await prisma.collaborationFile.findMany({where:{id:{in:eligibleFiles.map(f=>f.id)}}});
   for (const f of files) if (!await fileHeld(prisma, f.id)) await prisma.storageDeletionJob.upsert({ where: { fileId: f.id }, update: {}, create: { fileId: f.id } });
   const jobs = await prisma.storageDeletionJob.findMany({ where: { OR: [{ state: "PENDING", nextAttemptAt: { lte: new Date() } }, { state: "RUNNING", leaseUntil: { lt: new Date() } }] }, take: 50 });
   let deleted = 0;
@@ -69,7 +73,8 @@ export async function runCollaborationRetention() {
       await prisma.storageDeletionJob.updateMany({ where: { id: job.id, state: "RUNNING", leaseToken: token }, data: { state: job.attempts >= 4 ? "DEAD_LETTER" : "PENDING", leaseToken: null, leaseUntil: null, errorCode: "PRIVATE_DELETE_FAILED", nextAttemptAt: new Date(Date.now()+60000) } });
     }
   }
-  const conversations = await prisma.conversation.findMany({ where: { legalHold: false, retainUntil: { lt: new Date() }, messages: { some: {} } }, take: 50 });
+  const eligibleConversations = await prisma.$queryRaw<Array<{id:string}>>`SELECT c.id FROM "Conversation" c WHERE NOT c."legalHold" AND c."retainUntil"<now() AND (c."reservationId" IS NULL OR c."closedAt" IS NOT NULL) AND EXISTS (SELECT 1 FROM "ConversationMessage" m WHERE m."conversationId"=c.id) AND NOT EXISTS (SELECT 1 FROM "Payment" p WHERE p."reservationId"=c."reservationId") AND NOT EXISTS (SELECT 1 FROM "AgreementAcceptance" a WHERE a."reservationId"=c."reservationId") AND NOT EXISTS (SELECT 1 FROM "ServiceCase" h WHERE h."reservationId"=c."reservationId" AND (h."legalHold" OR h."securityHold" OR h.state<>'CLOSED')) ORDER BY c."retainUntil",c.id LIMIT 50`;
+  const conversations = await prisma.conversation.findMany({where:{id:{in:eligibleConversations.map(c=>c.id)}}});
   for (const c of conversations) await prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT "id" FROM "Conversation" WHERE "id"=${c.id} FOR UPDATE`;
     const current = await tx.conversation.findUniqueOrThrow({ where: { id: c.id } });
@@ -78,7 +83,8 @@ export async function runCollaborationRetention() {
     await tx.conversationMessage.deleteMany({ where: { conversationId: c.id } });
     await tx.auditLog.create({ data: { action: "retention.messages.purged", entityType: "Conversation", entityId: c.id } });
   });
-  const cases = await prisma.serviceCase.findMany({ where: { state: "CLOSED", legalHold: false, securityHold: false, retainUntil: { lt: new Date() }, events: { some: {} } }, take: 50 });
+  const eligibleCases = await prisma.$queryRaw<Array<{id:string}>>`SELECT c.id FROM "ServiceCase" c WHERE c.state='CLOSED' AND NOT c."legalHold" AND NOT c."securityHold" AND c."retainUntil"<now() AND EXISTS (SELECT 1 FROM "ServiceCaseEvent" e WHERE e."caseId"=c.id) AND NOT EXISTS (SELECT 1 FROM "Payment" p WHERE p."reservationId"=c."reservationId") AND NOT EXISTS (SELECT 1 FROM "AgreementAcceptance" a WHERE a."reservationId"=c."reservationId") AND NOT EXISTS (SELECT 1 FROM "ServiceCase" h WHERE h."reservationId"=c."reservationId" AND (h."legalHold" OR h."securityHold" OR h.state<>'CLOSED')) ORDER BY c."retainUntil",c.id LIMIT 50`;
+  const cases = await prisma.serviceCase.findMany({where:{id:{in:eligibleCases.map(c=>c.id)}}});
   for (const c of cases) await prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT "id" FROM "ServiceCase" WHERE "id"=${c.id} FOR UPDATE`;
     const current = await tx.serviceCase.findUniqueOrThrow({ where: { id: c.id } });
