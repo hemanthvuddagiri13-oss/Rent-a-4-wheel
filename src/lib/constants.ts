@@ -21,9 +21,21 @@ export const VEHICLE_CATEGORY_LABELS: Record<string, string> = {
 };
 
 export const RESERVATION_STATUS_LABELS: Record<string, string> = {
-  PENDING: "Pending",
+  DRAFT: "Draft",
+  CHECKOUT_HOLD: "Checkout Hold",
+  AWAITING_PAYMENT: "Awaiting Payment",
   CONFIRMED: "Confirmed",
+  DOCUMENTS_REQUIRED: "Documents Required",
+  READY_FOR_CHECK_IN: "Ready for Check-In",
+  CHECK_IN_PROGRESS: "Check-In in Progress",
+  READY_TO_START: "Ready to Start",
   ACTIVE: "Active",
+  RETURN_IN_PROGRESS: "Return in Progress",
   COMPLETED: "Completed",
-  CANCELLED: "Cancelled",
+  CANCELLED_BY_CUSTOMER: "Cancelled by Customer",
+  CANCELLED_BY_HOST: "Cancelled by Host",
+  PAYMENT_FAILED: "Payment Failed",
+  EXPIRED: "Expired",
+  DISPUTED: "Disputed",
+  UNDER_CLAIM_REVIEW: "Under Claim Review",
 };

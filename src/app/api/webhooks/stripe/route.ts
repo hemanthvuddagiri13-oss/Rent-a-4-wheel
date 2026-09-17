@@ -1,8 +1,10 @@
+import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import { stripe } from "@/lib/stripe";
-import { queueNotification } from "@/lib/notifications";
+import { claimStripeEventForProcessing } from "@/lib/stripe-event-ledger";
+import { dispatchClaimedStripeEvent } from "@/lib/stripe-event-dispatch";
 
 export async function POST(req: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -18,91 +20,32 @@ export async function POST(req: NextRequest) {
     if (!signature) throw new Error("Missing stripe-signature header");
     event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
   } catch (err) {
-    console.error("Stripe webhook signature verification failed", err);
+    safeLog("STRIPE_WEBHOOK_SIGNATURE_VERIFICATION_FAILED", err);
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
 
-  switch (event.type) {
-    case "payment_intent.succeeded":
-      await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
-      break;
-    case "payment_intent.payment_failed":
-      await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
-      break;
-    case "charge.refunded":
-      // Refund state is authoritatively tracked via our own /api/admin/refunds
-      // flow; this case is a placeholder for reconciling refunds initiated
-      // directly from the Stripe dashboard.
-      break;
-    default:
-      break;
+  const claim = await claimStripeEventForProcessing({
+    stripeEventId: event.id,
+    type: event.type,
+    payload: event as unknown as Prisma.InputJsonValue,
+  });
+
+  if (!claim.shouldProcess) {
+    // Either already fully processed (true duplicate — no-op) or another
+    // in-flight request is handling it right now (not stale yet). Either
+    // way, tell Stripe we're done; it should not treat this as a failure.
+    return NextResponse.json({ received: true, claimed: false, reason: claim.reason });
+  }
+
+  const result = await dispatchClaimedStripeEvent({ eventRecordId: claim.eventRecordId, leaseToken: claim.leaseToken, event });
+
+  if (!result.ok) {
+    // Do NOT swallow this and return 200 — a non-2xx response tells
+    // Stripe to retry per its own schedule, on top of our own ledger
+    // making the next delivery (or a manual replay) retryable rather than
+    // a rejected duplicate.
+    return NextResponse.json({ error: "Processing failed; will retry." }, { status: 500 });
   }
 
   return NextResponse.json({ received: true });
-}
-
-async function handlePaymentIntentSucceeded(intent: Stripe.PaymentIntent) {
-  const payment = await prisma.payment.findUnique({ where: { stripePaymentIntentId: intent.id } });
-  if (!payment) return;
-
-  await prisma.payment.update({ where: { id: payment.id }, data: { status: "SUCCEEDED" } });
-
-  const reservation = await prisma.reservation.findUnique({
-    where: { id: payment.reservationId },
-    include: { deposit: true },
-  });
-  if (!reservation) return;
-
-  if (payment.type === "RENTAL" && reservation.status === "PENDING") {
-    await prisma.reservation.update({ where: { id: reservation.id }, data: { status: "CONFIRMED" } });
-    await queueNotification({ userId: reservation.customerId, reservationId: reservation.id, type: "BOOKING_CONFIRMATION" });
-    await queueNotification({
-      userId: reservation.customerId,
-      reservationId: reservation.id,
-      type: "PAYMENT_RECEIPT",
-      extra: { amountCents: payment.amountCents, description: "Rental payment" },
-    });
-
-    // Authorize the security deposit (manual capture hold) using the same
-    // payment method the customer just used, so they aren't asked to enter
-    // card details twice. If off-session confirmation fails (e.g. the
-    // issuer requires additional authentication), the deposit is left
-    // REQUIRES_PAYMENT for staff to collect manually at pickup.
-    if (reservation.deposit && reservation.deposit.status === "REQUIRES_PAYMENT" && stripe) {
-      try {
-        const paymentMethodId =
-          typeof intent.payment_method === "string" ? intent.payment_method : intent.payment_method?.id;
-        const customerId = typeof intent.customer === "string" ? intent.customer : intent.customer?.id;
-
-        if (paymentMethodId) {
-          const depositIntent = await stripe.paymentIntents.create(
-            {
-              amount: reservation.deposit.amountCents,
-              currency: "usd",
-              customer: customerId,
-              payment_method: paymentMethodId,
-              capture_method: "manual",
-              confirm: true,
-              off_session: true,
-              metadata: { reservationId: reservation.id, purpose: "security_deposit" },
-            },
-            { idempotencyKey: `deposit-${reservation.id}` }
-          );
-
-          await prisma.securityDeposit.update({
-            where: { id: reservation.deposit.id },
-            data: { stripePaymentIntentId: depositIntent.id, status: "SUCCEEDED" },
-          });
-        }
-      } catch (err) {
-        console.error("Deposit authorization failed — will require manual collection at pickup", err);
-      }
-    }
-  }
-}
-
-async function handlePaymentIntentFailed(intent: Stripe.PaymentIntent) {
-  const payment = await prisma.payment.findUnique({ where: { stripePaymentIntentId: intent.id } });
-  if (!payment) return;
-  await prisma.payment.update({ where: { id: payment.id }, data: { status: "FAILED" } });
 }

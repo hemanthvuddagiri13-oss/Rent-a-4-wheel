@@ -1,4 +1,4 @@
-import { differenceInCalendarDays } from "date-fns";
+import { bookingDays } from "@/lib/booking-time";
 import type { Coupon, Extra, Vehicle } from "@prisma/client";
 
 export type RateType = "DAILY" | "WEEKLY" | "MONTHLY";
@@ -20,9 +20,10 @@ export interface RateSelection {
 export function selectRate(
   vehicle: Pick<Vehicle, "dailyRateCents" | "weeklyRateCents" | "monthlyRateCents">,
   pickupAt: Date,
-  returnAt: Date
+  returnAt: Date,
+  bookingTimezone?: string
 ): RateSelection {
-  const days = Math.max(1, differenceInCalendarDays(returnAt, pickupAt));
+  const days = Math.max(1, bookingDays(pickupAt, returnAt, bookingTimezone));
 
   if (days >= 28) {
     const units = Math.ceil(days / 30);
@@ -82,6 +83,7 @@ export function calculatePricing(params: {
   >;
   pickupAt: Date;
   returnAt: Date;
+  bookingTimezone?: string;
   extras?: ExtraSelection[];
   coupon?: Pick<Coupon, "discountType" | "amountCents" | "percent"> | null;
   taxRatePercent?: number;
@@ -89,7 +91,7 @@ export function calculatePricing(params: {
 }): PricingBreakdown {
   const { vehicle, pickupAt, returnAt, extras = [], coupon, taxRatePercent = 0, feesCents = 0 } = params;
 
-  const rate = selectRate(vehicle, pickupAt, returnAt);
+  const rate = selectRate(vehicle, pickupAt, returnAt, params.bookingTimezone);
 
   const extraLineItems = extras.map(({ extra, quantity }) => {
     let amount = 0;

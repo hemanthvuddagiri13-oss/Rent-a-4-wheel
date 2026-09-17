@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "ReconciliationReason" ADD VALUE 'DEPOSIT_RECOVERY_WINDOW_EXPIRED';

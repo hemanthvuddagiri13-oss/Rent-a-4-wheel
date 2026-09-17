@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "ReconciliationReason" ADD VALUE 'PAYMENT_SUCCEEDED_AFTER_CANCELLATION';
+

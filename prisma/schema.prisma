@@ -17,8 +17,11 @@ datasource db {
 
 enum Role {
   CUSTOMER
+  HOST
+  HOST_EMPLOYEE
   STAFF
   ADMIN
+  SUPER_ADMIN
 }
 
 model User {
@@ -27,10 +30,11 @@ model User {
   email         String    @unique
   emailVerified DateTime?
   image         String?
-  passwordHash  String?
   phone         String?
   role          Role      @default(CUSTOMER)
   isActive      Boolean   @default(true)
+
+  stripeCustomerId String? @unique
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -38,15 +42,57 @@ model User {
   accounts Account[]
   sessions Session[]
 
-  customer        Customer?
-  reservations    Reservation[]    @relation("ReservationCustomer")
-  documents       DriverDocument[]
-  notifications   Notification[]
-  auditLogs       AuditLog[]       @relation("AuditActor")
-  reviews         Review[]
-  contactMessages ContactMessage[]
+  customer             Customer?
+  hostProfile          HostProfile?
+  hostEmployments      HostEmployee[]
+  reservations         Reservation[]                 @relation("ReservationCustomer")
+  documents            DriverDocument[]
+  documentAccessLogs   DocumentAccessLog[]
+  agreementAcceptances AgreementAcceptance[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]                    @relation("AuditActor")
+  tripEvents           TripEvent[]                   @relation("TripEventActor")
+  tripChecklistEntries TripChecklist[]               @relation("TripChecklistActor")
+  identityHandoffs     IdentityHandoffVerification[] @relation("IdentityHandoffHost")
+  conditionReports     ConditionReport[]             @relation("ConditionReportSubmitter")
+  emergencyOverrides   EmergencyOverrideRecord[]     @relation("EmergencyOverrideActor")
+  reviews              Review[]
+  contactMessages      ContactMessage[]
 
   @@index([role])
+}
+
+// ---------------------------------------------------------------------------
+// PASSWORDLESS EMAIL-CODE AUTHENTICATION
+// ---------------------------------------------------------------------------
+
+enum AuthCodePurpose {
+  SIGN_IN
+  EMERGENCY_OVERRIDE_STEP_UP
+}
+
+// Six-digit, single-use, short-lived, hashed sign-in codes. Never store the
+// plaintext code — only a bcrypt hash. One row per code requested; the most
+// recent non-consumed, non-expired row for an email is the "live" code.
+model AuthCode {
+  id      String          @id @default(cuid())
+  email   String
+  purpose AuthCodePurpose @default(SIGN_IN)
+
+  codeHash String
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5)
+
+  requestIp String?
+
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([email, purpose, createdAt])
+  @@index([requestIp, createdAt])
 }
 
 model Account {
@@ -112,6 +158,83 @@ model Customer {
   updatedAt DateTime @updatedAt
 
   @@index([verificationStatus])
+}
+
+// ---------------------------------------------------------------------------
+// HOST ARCHITECTURE
+// ---------------------------------------------------------------------------
+
+enum HostOnboardingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUBMITTED
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum StripeConnectStatus {
+  NOT_CONNECTED
+  ONBOARDING
+  ACTIVE
+  RESTRICTED
+  DISABLED
+}
+
+// A host is the party that lists and operates vehicles on the marketplace
+// and receives payouts. Distinct from `VehicleOwner`, which tracks a purely
+// financial/legal ownership arrangement for company-managed vehicles.
+model HostProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  businessName String?
+  legalName    String
+  phone        String?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  zip          String?
+  country      String  @default("US")
+
+  onboardingStatus HostOnboardingStatus @default(NOT_STARTED)
+  approvedAt       DateTime?
+  approvedById     String?
+
+  stripeConnectAccountId String?
+  stripeConnectStatus    StripeConnectStatus @default(NOT_CONNECTED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees HostEmployee[]
+  vehicles  Vehicle[]
+
+  @@index([onboardingStatus])
+}
+
+enum HostEmployeeRole {
+  MANAGER
+  STAFF
+}
+
+// Grants a user (who is not the host account owner) scoped access to a
+// single host's vehicles and bookings — never to any other host's data.
+model HostEmployee {
+  id     String      @id @default(cuid())
+  hostId String
+  host   HostProfile @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  userId String
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role HostEmployeeRole @default(STAFF)
+
+  createdAt DateTime @default(now())
+
+  @@unique([hostId, userId])
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -199,21 +322,28 @@ model Vehicle {
   owner         VehicleOwner? @relation(fields: [ownerId], references: [id])
   ownershipType OwnershipType @default(COMPANY_OWNED)
 
+  // The host who lists/operates this vehicle and is paid out for it. Null
+  // for company-owned demo/legacy inventory not yet assigned to a host.
+  hostId String?
+  host   HostProfile? @relation(fields: [hostId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  images             VehicleImage[]
-  features           VehicleFeatureOnVehicle[]
-  reservations       Reservation[]
-  blocks             VehicleBlock[]
-  inspections        VehicleInspection[]
-  maintenanceRecords MaintenanceRecord[]
-  reviews            Review[]
-  availability       VehicleAvailabilityConfig?
+  images               VehicleImage[]
+  features             VehicleFeatureOnVehicle[]
+  reservations         Reservation[]
+  blocks               VehicleBlock[]
+  inspections          VehicleInspection[]
+  maintenanceRecords   MaintenanceRecord[]
+  reviews              Review[]
+  availability         VehicleAvailabilityConfig?
+  agreementAcceptances AgreementAcceptance[]
 
   @@index([category])
   @@index([status])
   @@index([make, model])
+  @@index([hostId])
 }
 
 model VehicleAvailabilityConfig {
@@ -309,12 +439,34 @@ model OwnerAgreement {
 // RESERVATIONS / BOOKING
 // ---------------------------------------------------------------------------
 
+// Full booking lifecycle state machine. Legal transitions are enforced in
+// application code (see `src/lib/reservation-state-machine.ts`) using a
+// compare-and-swap update so concurrent transition attempts can't race.
+//
+//   DRAFT -> CHECKOUT_HOLD -> AWAITING_PAYMENT -> CONFIRMED
+//     -> DOCUMENTS_REQUIRED -> READY_FOR_CHECK_IN -> CHECK_IN_PROGRESS
+//     -> READY_TO_START -> ACTIVE -> RETURN_IN_PROGRESS -> COMPLETED
+//
+// Side branches: PAYMENT_FAILED, EXPIRED, CANCELLED_BY_CUSTOMER,
+// CANCELLED_BY_HOST, DISPUTED, UNDER_CLAIM_REVIEW.
 enum ReservationStatus {
-  PENDING
+  DRAFT
+  CHECKOUT_HOLD
+  AWAITING_PAYMENT
   CONFIRMED
+  DOCUMENTS_REQUIRED
+  READY_FOR_CHECK_IN
+  CHECK_IN_PROGRESS
+  READY_TO_START
   ACTIVE
+  RETURN_IN_PROGRESS
   COMPLETED
-  CANCELLED
+  CANCELLED_BY_CUSTOMER
+  CANCELLED_BY_HOST
+  PAYMENT_FAILED
+  EXPIRED
+  DISPUTED
+  UNDER_CLAIM_REVIEW
 }
 
 enum RateType {
@@ -324,6 +476,14 @@ enum RateType {
 }
 
 model Reservation {
+  bookingTimezone String @default("America/Chicago")
+  financialCheckedAt DateTime?
+  @@index([financialCheckedAt, id])
+  // Terminal financial disposition is independent of captured payment status.
+  financialDisposition String @default("OPEN")
+  bookingFingerprint String?
+  bookingFingerprintVersion Int @default(2)
+  checkoutFingerprint String?
   id                 String @id @default(cuid())
   confirmationNumber String @unique // e.g. RA4W-XXXXXX
 
@@ -353,43 +513,64 @@ model Reservation {
   couponId String?
   coupon   Coupon? @relation(fields: [couponId], references: [id])
 
-  status ReservationStatus @default(PENDING)
+  status ReservationStatus @default(CHECKOUT_HOLD)
 
-  driverFirstName   String
-  driverLastName    String
-  driverDob         DateTime
-  driverEmail       String
-  driverPhone       String
-  driverAddress     String
-  driverCity        String
-  driverState       String
-  driverZip         String
-  driverCountry     String   @default("US")
-  licenseNumber     String
-  licenseState      String
-  licenseExpiration DateTime
+  // Deadline for the current transient phase (CHECKOUT_HOLD / AWAITING_PAYMENT).
+  // Null once the reservation reaches a state with no expiry (CONFIRMED+).
+  // Both the exclusion constraint (see migration) and background cleanup
+  // ignore/release rows once this passes, so an unpaid hold can never block
+  // inventory indefinitely.
+  expiresAt DateTime?
 
-  agreementAcceptedAt      DateTime?
-  agreementVersionAccepted String?
+  // Driver/license fields are collected during the checkout step (after the
+  // hold exists) and are therefore optional until the AWAITING_PAYMENT
+  // transition, which requires them all to be present.
+  driverFirstName   String?
+  driverLastName    String?
+  driverDob         DateTime?
+  driverEmail       String?
+  driverPhone       String?
+  driverAddress     String?
+  driverCity        String?
+  driverState       String?
+  driverZip         String?
+  driverCountry     String    @default("US")
+  licenseNumber     String?
+  licenseState      String?
+  licenseExpiration DateTime?
 
   notes String? @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  extras        ReservationExtra[]
-  payments      Payment[]
-  refunds       Refund[]
-  deposit       SecurityDeposit?
-  documents     DriverDocument[]
-  agreement     RentalAgreement?
-  inspections   VehicleInspection[]
-  damageReports DamageReport[]
-  notifications Notification[]
+  extras                 ReservationExtra[]
+  payments               Payment[]
+  refunds                Refund[]
+  deposit                SecurityDeposit?
+  documents              DriverDocument[]
+  agreementAcceptances   AgreementAcceptance[]
+  inspections            VehicleInspection[]
+  damageReports          DamageReport[]
+  notifications          Notification[]
+  trip                   Trip?
+  conditionReports       ConditionReport[]
+  identityHandoff        IdentityHandoffVerification?
+  tripChecklistEntries   TripChecklist[]
+  tripEvents             TripEvent[]
+  paymentReconciliations PaymentReconciliation[]
+  emergencyOverrides     EmergencyOverrideRecord[]
+
+  // Postgres-only generated column backing the overlap exclusion constraint
+  // added by hand in the phase1 migration SQL (Prisma Migrate can't express
+  // GENERATED ALWAYS AS / EXCLUDE USING gist). Never write to this field and
+  // never edit it via schema changes — edit the migration SQL directly.
+  duringRange Unsupported("tsrange")?
 
   @@index([vehicleId, pickupAt, returnAt])
   @@index([customerId])
   @@index([status])
+  @@index([status, expiresAt])
 }
 
 model Extra {
@@ -473,9 +654,20 @@ enum RefundStatus {
   PENDING
   SUCCEEDED
   FAILED
+  CANCELLED
 }
 
+// Doubles as the durable, idempotent "refund operation" record: a row is
+// created here in PENDING status (with a deterministic, unique
+// `idempotencyKey`) BEFORE the Stripe refund API is ever called. Any
+// retry/replay (a crash between the Stripe call succeeding and this row
+// being updated, a webhook re-delivery, a duplicate staff click) looks up
+// the existing row by `idempotencyKey` first instead of re-calling
+// Stripe. Creating a Refund row is NOT refund completion — only
+// `status: SUCCEEDED` is; see src/lib/refund-operations.ts.
 model Refund {
+  @@index([status, legacyUncertain, createdAt])
+  legacyUncertain Boolean @default(false)
   id            String      @id @default(cuid())
   reservationId String
   reservation   Reservation @relation(fields: [reservationId], references: [id])
@@ -488,13 +680,35 @@ model Refund {
   status         RefundStatus @default(PENDING)
   stripeRefundId String?      @unique
 
+  idempotencyKey String  @unique
+  initiatedById  String? // null = system/reconciliation-initiated; set = staff-initiated
+  lastError      String? @db.Text
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([reservationId])
 }
 
+model BookingDraft {
+  fingerprintVersion Int @default(2)
+  id String @id
+  customerId String
+  vehicleId String
+  revision Int @default(0)
+  fingerprint String?
+  reservationId String?
+  updatedAt DateTime @updatedAt
+  @@index([customerId, vehicleId])
+}
+
 model SecurityDeposit {
+  currency String @default("usd")
+  capturableAmountCents Int @default(0)
+  operation FinancialOperation? @relation(fields: [operationId], references: [id])
+  legacyUncertain Boolean @default(false)
+  generation Int @default(0)
+  operationId String?
   id            String      @id @default(cuid())
   reservationId String      @unique
   reservation   Reservation @relation(fields: [reservationId], references: [id])
@@ -503,10 +717,213 @@ model SecurityDeposit {
   status                PaymentStatus @default(REQUIRES_PAYMENT)
   stripePaymentIntentId String?       @unique
   capturedAmountCents   Int?
+  failureReason         String?
   releasedAt            DateTime?
+
+  // The raw Stripe PaymentIntent status at last sync (e.g.
+  // "requires_capture", "canceled") — an authorization is only genuinely
+  // valid when this is "requires_capture"; a resolved create() call alone
+  // does not guarantee that (see src/lib/deposit-authorization.ts).
+  stripeStatus String?
+
+  // When the manual-capture authorization actually succeeded, and our
+  // conservative estimate of when Stripe will auto-release it if never
+  // captured (uncaptured card authorizations are not held indefinitely).
+  // Trip start requires `authorizationExpiresAt` to still be in the
+  // future — see src/lib/trip-gate.ts.
+  authorizedAt           DateTime?
+  authorizationExpiresAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum StripeEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+// Idempotency + retry ledger for Stripe webhook deliveries. Stripe (and any
+// proxy in front of it) may deliver the same event more than once, or
+// deliver events out of order. Every event is claimed here by its unique
+// Stripe event ID before any side effect runs, moves through
+// RECEIVED -> PROCESSING -> PROCESSED (success) or FAILED (retryable), and
+// is only ever considered "done" once `status = PROCESSED` — a duplicate
+// PROCESSED event is a no-op, a duplicate RECEIVED/FAILED event (or a
+// PROCESSING event whose `processingStartedAt` is stale) is safely
+// re-claimable. See src/lib/stripe-event-ledger.ts.
+model StripeEvent {
+  id            String            @id @default(cuid())
+  stripeEventId String            @unique
+  type          String
+  status        StripeEventStatus @default(RECEIVED)
+
+  attemptCount Int @default(0)
+
+  lastError String? @db.Text
+
+  receivedAt          DateTime  @default(now())
+  processingStartedAt DateTime?
+  processedAt         DateTime?
+  nextRetryAt         DateTime?
+
+  // Fencing token: a fresh random value generated on every successful
+  // claim (initial or recovery). `markProcessed`/`markFailed` require the
+  // caller's token to still match the row's current token — if a recovery
+  // worker has since reclaimed a stale PROCESSING row (generating a new
+  // token), the original, merely-slow worker's eventual completion can no
+  // longer overwrite the newer worker's outcome. See
+  // src/lib/stripe-event-ledger.ts.
+  leaseToken String?
+
+  payload Json?
+
+  @@index([type])
+  @@index([status])
+}
+
+enum OutboxMessageStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// Transactional outbox: notifications and other required post-payment
+// side effects are written here in the SAME database transaction as the
+// state change that requires them, then dispatched separately (see
+// src/lib/outbox.ts) — so a crash after the state change commits can
+// never lose the notification, and a notification can never be sent for
+// a state change that itself rolled back.
+model OutboxMessage {
+  firstAttemptAt DateTime?
+  deliveryKey String? @unique
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  id      String              @id @default(cuid())
+  type    String
+  payload Json
+  status  OutboxMessageStatus @default(PENDING)
+
+  attempts  Int     @default(0)
+  lastError String? @db.Text
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+  nextRetryAt DateTime?
+
+  @@index([status, nextRetryAt])
+}
+
+// Immutable provider request plus resumable execution state. Payload contains
+// provider IDs, never card details. Unknown outcomes retain their original key.
+model FinancialOperation {
+  dispatches FinancialDispatch[]
+  consecutiveFailures Int @default(0)
+  deposits SecurityDeposit[]
+  generation Int?
+  priority Int @default(50)
+  id String @id @default(cuid())
+  key String @unique
+  kind String
+  reservationId String?
+  fingerprint String
+  payload Json
+  providerId String?
+  result Json?
+  state String @default("READY")
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  firstAttemptAt DateTime?
+  nextAttemptAt DateTime?
+  attempts Int @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([kind, state, priority, nextAttemptAt, createdAt], map: "financial_recovery_due_idx")
+  @@index([reservationId, kind])
+}
+
+enum ReconciliationReason {
+  DEPOSIT_AUTH_SUCCEEDED_DB_UPDATE_FAILED
+  PAYMENT_SUCCEEDED_AFTER_HOLD_EXPIRED
+  PAYMENT_SUCCEEDED_DATES_UNAVAILABLE
+  PAYMENT_SUCCEEDED_AFTER_CANCELLATION
+  DEPOSIT_RECOVERY_WINDOW_EXPIRED
+  WEBHOOK_PROCESSING_REPEATEDLY_FAILED
+}
+
+enum ReconciliationStatus {
+  OPEN
+  AUTO_RESOLVED
+  REFUNDED
+  NEEDS_MANUAL_REVIEW
+  RESOLVED
+}
+
+// Records every case where a Stripe payment succeeded but could not be
+// cleanly turned into a confirmed reservation (hold expired mid-payment,
+// dates became unavailable, or a DB failure struck after a successful
+// Stripe-side charge/authorization). The invariant this model exists to
+// guarantee: a successful charge never silently disappears — it always
+// ends up either auto-resolved into a valid reservation, refunded, or
+// flagged here for a human. See src/lib/payment-reconciliation.ts.
+model PaymentReconciliation {
+  id String @id @default(cuid())
+
+  reservationId String?
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+
+  paymentId             String?
+  stripePaymentIntentId String?
+
+  reason ReconciliationReason
+  status ReconciliationStatus @default(OPEN)
+
+  detail   Json?
+  refundId String?
+
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+
+  @@index([status])
+  @@index([reservationId])
+}
+
+// An audited, step-up-verified escape hatch for staff to force a
+// reservation past a gate it hasn't actually satisfied (e.g. starting a
+// trip whose documents/identity-handoff/condition-reports aren't
+// complete). Never exposed as an ordinary admin action — see
+// src/lib/emergency-override.ts and the SUPER_ADMIN-only route that
+// creates these.
+model EmergencyOverrideRecord {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  actorId String
+  actor   User   @relation("EmergencyOverrideActor", fields: [actorId], references: [id])
+
+  action           String // e.g. "FORCE_START_TRIP", "FORCE_COMPLETE_TRIP"
+  reason           String            @db.Text
+  originalStatus   ReservationStatus
+  resultingStatus  ReservationStatus
+  unmetGateReasons Json
+
+  // Timestamp of the fresh step-up email-code verification required
+  // immediately before this override (AuthCodePurpose.EMERGENCY_OVERRIDE_STEP_UP)
+  // — the closest equivalent to "recent MFA" this system can enforce, since
+  // no TOTP/WebAuthn factor exists yet. Documented explicitly as a scoping
+  // decision, not silently substituted.
+  stepUpVerifiedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([reservationId])
 }
 
 // ---------------------------------------------------------------------------
@@ -520,9 +937,17 @@ enum DocumentStatus {
   NEEDS_INFORMATION
 }
 
-enum DocumentSide {
-  FRONT
-  BACK
+enum DocumentType {
+  LICENSE_FRONT
+  LICENSE_BACK
+  SELFIE_WITH_LICENSE
+}
+
+enum MalwareScanStatus {
+  QUARANTINED
+  CLEAN
+  INFECTED
+  SCAN_UNAVAILABLE
 }
 
 model DriverDocument {
@@ -534,10 +959,24 @@ model DriverDocument {
   reservationId String?
   reservation   Reservation? @relation(fields: [reservationId], references: [id])
 
-  side         DocumentSide
+  type DocumentType
+
   // Private storage key/URL only — never served publicly. Access must go
-  // through an authenticated, signed route (see /api/documents/[id]).
-  storageKey   String
+  // through an authenticated, signed route (see /api/documents/[id]), which
+  // also writes a DocumentAccessLog row on every read.
+  storageKey    String
+  mimeType      String
+  fileSizeBytes Int
+  contentSha256 String // integrity fingerprint of the re-encoded file, not the raw upload
+
+  malwareScanStatus MalwareScanStatus @default(QUARANTINED)
+
+  // Configurable retention: documents are eligible for deletion by the
+  // retention-cleanup job once this passes (see PlatformSetting-driven
+  // default in src/lib/documents.ts). Null = retention not yet computed.
+  retentionExpiresAt DateTime?
+  deletedAt          DateTime?
+
   status       DocumentStatus @default(PENDING_VERIFICATION)
   reviewedById String?
   reviewedAt   DateTime?
@@ -546,40 +985,84 @@ model DriverDocument {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  accessLogs DocumentAccessLog[]
+
   @@index([userId])
   @@index([reservationId])
   @@index([status])
+  @@index([retentionExpiresAt])
 }
 
-// ---------------------------------------------------------------------------
-// RENTAL AGREEMENT (legal e-sign workflow)
-// ---------------------------------------------------------------------------
+// Every time a driver document (license image, selfie) is read — by its
+// owner or by a reviewer/host — a row is written here. Never mutated or
+// deleted by application code; this is the access audit trail.
+model DocumentAccessLog {
+  id         String         @id @default(cuid())
+  documentId String
+  document   DriverDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
-model RentalAgreement {
-  id            String      @id @default(cuid())
-  reservationId String      @unique
-  reservation   Reservation @relation(fields: [reservationId], references: [id])
+  accessedById String
+  accessedBy   User   @relation(fields: [accessedById], references: [id])
 
-  documentVersion    String // version of the LegalDocument (RENTAL_AGREEMENT) accepted
-  acceptedAt         DateTime
-  signerName         String
-  signatureProvider  String? // e.g. "docusign", "hellosign" — architecture placeholder
-  signatureRequestId String?
-  pdfUrl             String? // generated agreement PDF (private storage)
+  purpose   String // e.g. "owner_view", "staff_review", "host_pickup_verification"
+  ipAddress String?
 
   createdAt DateTime @default(now())
 
-  @@index([reservationId])
+  @@index([documentId])
+  @@index([accessedById])
 }
+
+// ---------------------------------------------------------------------------
+// VERSIONED LEGAL AGREEMENT ACCEPTANCE (e-sign workflow)
+// ---------------------------------------------------------------------------
 
 enum LegalDocumentType {
   RENTAL_AGREEMENT
+  HOST_AGREEMENT
   TERMS_AND_CONDITIONS
   PRIVACY_POLICY
   CANCELLATION_POLICY
   INSURANCE_POLICY
   DAMAGE_POLICY
   SECURITY_DEPOSIT_POLICY
+}
+
+// An immutable record of one signer accepting one exact version of a legal
+// document. `contentHash`/`contentSnapshot` freeze what was actually shown
+// and signed even if the editable `LegalDocument` row is revised later.
+// Creating one is refused server-side while the source LegalDocument is
+// still flagged `needsAttorneyReview` (see src/lib/agreements.ts).
+model AgreementAcceptance {
+  id   String            @id @default(cuid())
+  type LegalDocumentType
+
+  documentVersion String
+  contentHash     String // sha256 hex of contentSnapshot
+  contentSnapshot String @db.Text
+
+  // Exactly one of these is set, depending on `type`.
+  reservationId String?
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+  vehicleId     String?
+  vehicle       Vehicle?     @relation(fields: [vehicleId], references: [id])
+
+  signedByUserId String
+  signedByUser   User   @relation(fields: [signedByUserId], references: [id])
+  signerName     String
+
+  signedAt  DateTime @default(now())
+  ipAddress String?
+  userAgent String?  @db.Text
+
+  // Private-storage key for the generated, immutable signed PDF snapshot.
+  signedPdfStorageKey String?
+
+  createdAt DateTime @default(now())
+
+  @@index([reservationId])
+  @@index([vehicleId])
+  @@index([signedByUserId])
 }
 
 // Admin-editable legal content. Content flagged `needsAttorneyReview` must
@@ -595,6 +1078,161 @@ model LegalDocument {
 
   updatedAt   DateTime @updatedAt
   updatedById String?
+}
+
+// ---------------------------------------------------------------------------
+// TRIP LIFECYCLE (check-in -> active trip -> return)
+// ---------------------------------------------------------------------------
+
+// One row per reservation once the trip actually starts. Separate from
+// Reservation so pickup/return odometer+fuel readings have an unambiguous
+// home distinct from the fleet-wide VehicleInspection log.
+model Trip {
+  id            String      @id @default(cuid())
+  reservationId String      @unique
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  startedAt       DateTime?
+  startedByUserId String?
+  startMileage    Int?
+  startFuelLevel  Int? // percentage 0-100
+
+  endedAt       DateTime?
+  endedByUserId String?
+  endMileage    Int?
+  endFuelLevel  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ConditionReportPhase {
+  PRE_TRIP
+  POST_TRIP
+}
+
+enum SubmitterRole {
+  CUSTOMER
+  HOST
+}
+
+// A condition report is one party's (customer's or host's) record of the
+// vehicle's state at pickup or return. Both a customer and a host report
+// are required per phase; a trip cannot start (or a return cannot
+// complete) until both exist and both have been accepted by their author.
+model ConditionReport {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  phase ConditionReportPhase
+
+  submittedByRole SubmitterRole
+  submittedById   String
+  submittedBy     User          @relation("ConditionReportSubmitter", fields: [submittedById], references: [id])
+
+  mileage     Int
+  fuelLevel   Int
+  damageNotes String? @db.Text
+
+  // Set once the *author* explicitly accepts their own report as accurate.
+  // "Both parties accepted the condition report" (trip-start gate) means a
+  // customer PRE_TRIP report and a host PRE_TRIP report both have this set.
+  acceptedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  photos ConditionPhoto[]
+
+  @@index([reservationId, phase])
+}
+
+enum ConditionPhotoCategory {
+  EXTERIOR
+  INTERIOR
+  ODOMETER
+  FUEL_GAUGE
+  DAMAGE
+}
+
+model ConditionPhoto {
+  id                String          @id @default(cuid())
+  conditionReportId String
+  conditionReport   ConditionReport @relation(fields: [conditionReportId], references: [id], onDelete: Cascade)
+
+  category   ConditionPhotoCategory
+  storageKey String // private storage — never public
+
+  createdAt DateTime @default(now())
+
+  @@index([conditionReportId])
+}
+
+// The host's in-person verification, at pickup, that the physical license
+// matches the uploaded documents and the customer matches the selfie. This
+// is a hard gate on Start Trip and cannot be self-certified by the customer.
+model IdentityHandoffVerification {
+  id            String      @id @default(cuid())
+  reservationId String      @unique
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  verifiedByHostId String
+  verifiedByHost   User   @relation("IdentityHandoffHost", fields: [verifiedByHostId], references: [id])
+
+  licenseMatchesUpload     Boolean @default(false)
+  physicalLicenseUnexpired Boolean @default(false)
+  selfieMatchesCustomer    Boolean @default(false)
+
+  notes      String?   @db.Text
+  verifiedAt DateTime?
+
+  @@index([reservationId])
+}
+
+enum TripChecklistPhase {
+  PICKUP
+  RETURN
+}
+
+// Append-only log of individual checklist steps completed by either party
+// during pickup or return, each attributable to a specific actor and time
+// (e.g. "customer confirmed pickup location", "host confirmed keys handed
+// over"). Queried by step key rather than modeled as fixed columns so new
+// steps can be added without a migration.
+model TripChecklist {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  phase TripChecklistPhase
+  role  SubmitterRole
+  step  String
+
+  completedById String
+  completedBy   User     @relation("TripChecklistActor", fields: [completedById], references: [id])
+  completedAt   DateTime @default(now())
+
+  @@unique([reservationId, phase, role, step])
+  @@index([reservationId])
+}
+
+// Reservation-scoped lifecycle audit trail: state transitions, hold
+// creation, payment/deposit outcomes, document approvals, identity
+// verification, condition-report submission, trip start/end. Distinct from
+// the platform-wide `AuditLog`, which is oriented around admin actions.
+model TripEvent {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  type     String
+  actorId  String?
+  actor    User?   @relation("TripEventActor", fields: [actorId], references: [id])
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([reservationId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +1430,7 @@ model Faq {
 enum NotificationType {
   BOOKING_CONFIRMATION
   PAYMENT_RECEIPT
+  DEPOSIT_AUTH_FAILED
   UPCOMING_RENTAL_REMINDER
   DRIVER_VERIFICATION_REQUEST
   PICKUP_REMINDER
@@ -799,6 +1438,7 @@ enum NotificationType {
   CANCELLATION
   REFUND
   LATE_RETURN
+  TRIP_EMERGENCY_OVERRIDE
 }
 
 enum NotificationChannel {
@@ -813,6 +1453,7 @@ enum NotificationStatus {
 }
 
 model Notification {
+  deliveryKey String? @unique
   id String @id @default(cuid())
 
   userId        String?
@@ -858,4 +1499,55 @@ model SiteSetting {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+// Durable operator queue. IDs/evidence are retained after resolution.
+model FinancialDispatch {
+  id String @id @default(cuid())
+  operationId String
+  operation FinancialOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  leaseToken String
+  phase String
+  providerId String?
+  result Json?
+  errorCode String?
+  createdAt DateTime @default(now())
+  @@index([operationId, createdAt])
+}
+
+model ProviderObjectOwnership {
+  providerId String @id
+  kind String
+  reservationId String
+  operationId String?
+  paymentId String?
+  depositId String?
+  refundId String?
+}
+
+model FinancialCase {
+  paymentId String?
+  id String @id @default(cuid())
+  sourceKey String @unique
+  reservationId String
+  customerId String
+  operationId String?
+  refundId String?
+  kind String
+  amountCents Int?
+  currency String? @default("usd")
+  originalKey String?
+  providerId String?
+  reason String
+  evidence Json?
+  status String @default("OPEN")
+  assignedToId String?
+  attempts Int @default(0)
+  lastError String?
+  resolution String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  resolvedAt DateTime?
+  @@index([status, createdAt])
+  @@index([reservationId])
 }

@@ -1,0 +1,56 @@
+name: Financial verification
+on:
+  push:
+    branches: [claude/tender-goodall-6aobde]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rent_a_4wheel_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rent_a_4wheel_test
+      AUTH_SECRET: ci-only-not-a-deployment-secret
+      NEXTAUTH_URL: http://localhost:3000
+      CRON_SECRET: ci-only-cron-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Browser test runtime
+        run: npx playwright install --with-deps chromium
+      - name: Fresh database migrations
+        run: npx prisma migrate deploy
+      - name: Seed
+        run: npm run db:seed
+      - name: Typecheck
+        run: npx next typegen && npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Full suite including populated migration, first run
+        run: npm test
+      - name: Full suite, second run
+        run: npm test
+      - name: Dispatch concurrency stability (five consecutive runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/phase1-dispatch-concurrency.test.ts tests/batch1f-release-worker.test.ts || exit 1
+          done
+      - name: Production build
+        run: npm run build

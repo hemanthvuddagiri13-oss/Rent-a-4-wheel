@@ -6,15 +6,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  updateDocumentStatus,
-  cancelReservation,
-  issueRefund,
-  startRental,
-  completeRental,
-} from "@/app/admin/reservations/actions";
+import { updateDocumentStatus, cancelReservation, issueRefund } from "@/app/admin/reservations/actions";
 
-export function DocumentReviewRow({ id, side, status }: { id: string; side: string; status: string }) {
+export function DocumentReviewRow({ id, type, status }: { id: string; type: string; status: string }) {
   const [isPending, startTransitionFn] = useTransition();
   const router = useRouter();
 
@@ -29,7 +23,7 @@ export function DocumentReviewRow({ id, side, status }: { id: string; side: stri
   return (
     <div className="flex items-center justify-between rounded-lg border border-white/10 bg-surface/60 p-3">
       <div>
-        <p className="text-sm font-medium text-white">License — {side}</p>
+        <p className="text-sm font-medium text-white">License — {type}</p>
         <p className="text-xs text-muted">Status: {status.replace(/_/g, " ")}</p>
       </div>
       <div className="flex gap-2">
@@ -70,6 +64,11 @@ export function CancelReservationAdminButton({ reservationId }: { reservationId:
 export function RefundForm({ reservationId, maxCents }: { reservationId: string; maxCents: number }) {
   const [amount, setAmount] = useState((maxCents / 100).toFixed(2));
   const [reason, setReason] = useState("");
+  // Stable for the lifetime of one refund attempt (including any
+  // network-level retry of the same submission), but rotated after each
+  // completed attempt so a later, deliberate refund is never coalesced
+  // with a prior one under the same idempotency key.
+
   const [isPending, startTransitionFn] = useTransition();
   const router = useRouter();
 
@@ -90,8 +89,16 @@ export function RefundForm({ reservationId, maxCents }: { reservationId: string;
           onClick={() =>
             startTransitionFn(async () => {
               try {
-                await issueRefund(reservationId, Math.round(Number(amount) * 100), reason || undefined);
-                toast.success("Refund issued.");
+                const storageKey = `refund-operation:${reservationId}`;
+                const amountCents = Math.round(Number(amount) * 100);
+                const stored = localStorage.getItem(storageKey);
+                const request = stored ? JSON.parse(stored) as { id: string; amountCents: number; reason: string } : { id: crypto.randomUUID(), amountCents, reason };
+                if (request.amountCents !== amountCents || request.reason !== reason) throw new Error(`An unresolved refund of ${(request.amountCents / 100).toFixed(2)} exists. Resume its original amount and reason before starting another.`);
+                localStorage.setItem(storageKey, JSON.stringify(request));
+                const result = await issueRefund(reservationId, amountCents, request.id, reason || undefined);
+                if (result.status === "succeeded") { localStorage.removeItem(storageKey); toast.success("Refund issued."); }
+                else if (result.status === "failed") { localStorage.removeItem(storageKey); toast.error("Provider rejected this refund. Review the recorded failure before submitting a new request."); }
+                else toast.info("Refund pending. Retry this same request to check progress.");
                 router.refresh();
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Unable to issue refund.");
@@ -106,58 +113,11 @@ export function RefundForm({ reservationId, maxCents }: { reservationId: string;
   );
 }
 
-export function CheckOutForm({ reservationId }: { reservationId: string }) {
-  return (
-    <form action={startRental} className="rounded-xl border border-white/10 bg-card p-4 space-y-3">
-      <p className="text-sm font-semibold text-white">Start Rental (Check-Out)</p>
-      <input type="hidden" name="reservationId" value={reservationId} />
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label htmlFor="co-mileage">Starting Mileage</Label>
-          <Input id="co-mileage" name="mileage" type="number" required className="mt-1.5" />
-        </div>
-        <div>
-          <Label htmlFor="co-fuel">Fuel Level (%)</Label>
-          <Input id="co-fuel" name="fuelLevel" type="number" min={0} max={100} required className="mt-1.5" />
-        </div>
-      </div>
-      <div>
-        <Label htmlFor="co-notes">Exterior/Interior Notes</Label>
-        <Input id="co-notes" name="notes" className="mt-1.5" />
-      </div>
-      <Button type="submit">Start Rental</Button>
-    </form>
-  );
-}
-
-export function CheckInForm({ reservationId }: { reservationId: string }) {
-  return (
-    <form action={completeRental} className="rounded-xl border border-white/10 bg-card p-4 space-y-3">
-      <p className="text-sm font-semibold text-white">Complete Rental (Check-In)</p>
-      <input type="hidden" name="reservationId" value={reservationId} />
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label htmlFor="ci-mileage">Ending Mileage</Label>
-          <Input id="ci-mileage" name="mileage" type="number" required className="mt-1.5" />
-        </div>
-        <div>
-          <Label htmlFor="ci-fuel">Fuel Level (%)</Label>
-          <Input id="ci-fuel" name="fuelLevel" type="number" min={0} max={100} required className="mt-1.5" />
-        </div>
-      </div>
-      <div>
-        <Label htmlFor="ci-notes">New Damage Notes</Label>
-        <Input id="ci-notes" name="notes" className="mt-1.5" />
-      </div>
-      <div className="flex items-center gap-2">
-        <input id="ci-late" name="lateReturn" type="checkbox" className="h-4 w-4 rounded border-white/25 bg-card accent-gold" />
-        <Label htmlFor="ci-late">Returned Late</Label>
-      </div>
-      <div>
-        <Label htmlFor="ci-charge">Additional Charge ($)</Label>
-        <Input id="ci-charge" name="additionalCharge" type="number" step="0.01" defaultValue="0" className="mt-1.5 w-40" />
-      </div>
-      <Button type="submit">Complete Rental</Button>
-    </form>
-  );
-}
+// The ordinary "quick start / quick complete" staff forms that used to
+// live here were removed following security review — starting or
+// completing a trip must go through the customer/host self-serve
+// trip-start gate (src/lib/trip-gate.ts), or, only in a genuine
+// emergency, the separate SUPER_ADMIN-only, step-up-verified,
+// reason-required, confirmed, and fully audited override
+// (src/lib/emergency-override.ts). Neither is an ordinary admin-role
+// action, so neither is exposed here.

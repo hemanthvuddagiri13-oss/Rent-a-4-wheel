@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 
 export interface SiteSettings {
+  bookingTimezone: string;
   businessName: string;
   phone: string;
   email: string;
@@ -12,9 +13,14 @@ export interface SiteSettings {
   mileagePolicySummary: string;
   cancellationPolicySummary: string;
   socialLinks: { instagram?: string; facebook?: string; tiktok?: string };
+  // How many hours before pickup the customer/host check-in workflow (and
+  // the trip-start gate's "pickup time is within the permitted window"
+  // check) opens up. Admin-configurable per README "Customer Check-In".
+  checkInWindowHours: number;
 }
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
+  bookingTimezone: "America/Chicago",
   businessName: "Rent A 4Wheel",
   phone: "(214) 555-0123",
   email: "hello@renta4wheel.com",
@@ -26,6 +32,7 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   mileagePolicySummary: "Daily mileage allowance varies by vehicle; see vehicle details.",
   cancellationPolicySummary: "PLACEHOLDER — pending attorney review.",
   socialLinks: {},
+  checkInWindowHours: 24,
 };
 
 /**

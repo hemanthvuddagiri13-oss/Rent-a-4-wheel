@@ -1,12 +1,21 @@
 import { prisma } from "@/lib/prisma";
+import { DURABLE_BLOCKING_STATUSES, TRANSIENT_HOLD_STATUSES } from "@/lib/reservation-state-machine";
 import type { Prisma } from "@prisma/client";
-
-// Reservation statuses that hold a vehicle unavailable for the same period.
-export const BLOCKING_RESERVATION_STATUSES = ["PENDING", "CONFIRMED", "ACTIVE"] as const;
 
 /**
  * Two date ranges [aStart, aEnd) and [bStart, bEnd) overlap when
  * aStart < bEnd && bStart < aEnd.
+ *
+ * A reservation blocks the vehicle when either:
+ *  - its status is in `DURABLE_BLOCKING_STATUSES` (CONFIRMED-and-later,
+ *    plus PAYMENT_FAILED while we still hold the rental payment) — these
+ *    block UNCONDITIONALLY, `expiresAt` is never consulted for them, so a
+ *    stale/forgotten checkout deadline can never make a durably-blocking
+ *    reservation look available; or
+ *  - its status is in `TRANSIENT_HOLD_STATUSES` (CHECKOUT_HOLD,
+ *    AWAITING_PAYMENT) AND its `expiresAt` is still in the future — an
+ *    expired hold releases inventory immediately, in real time, even
+ *    before a cleanup job has gotten around to flipping its status.
  */
 export async function isVehicleAvailable(
   vehicleId: string,
@@ -15,14 +24,18 @@ export async function isVehicleAvailable(
   opts: { excludeReservationId?: string; tx?: Prisma.TransactionClient } = {}
 ): Promise<boolean> {
   const client = opts.tx ?? prisma;
+  const now = new Date();
 
   const overlappingReservation = await client.reservation.findFirst({
     where: {
       vehicleId,
-      status: { in: [...BLOCKING_RESERVATION_STATUSES] },
       ...(opts.excludeReservationId ? { id: { not: opts.excludeReservationId } } : {}),
       pickupAt: { lt: returnAt },
       returnAt: { gt: pickupAt },
+      OR: [
+        { status: { in: DURABLE_BLOCKING_STATUSES } },
+        { status: { in: TRANSIENT_HOLD_STATUSES }, expiresAt: { gt: now } },
+      ],
     },
     select: { id: true },
   });
@@ -52,12 +65,16 @@ export async function getAvailableVehicleIds(
   pickupAt: Date,
   returnAt: Date
 ): Promise<string[]> {
+  const now = new Date();
   const [reserved, blocked] = await Promise.all([
     prisma.reservation.findMany({
       where: {
-        status: { in: [...BLOCKING_RESERVATION_STATUSES] },
         pickupAt: { lt: returnAt },
         returnAt: { gt: pickupAt },
+        OR: [
+          { status: { in: DURABLE_BLOCKING_STATUSES } },
+          { status: { in: TRANSIENT_HOLD_STATUSES }, expiresAt: { gt: now } },
+        ],
       },
       select: { vehicleId: true },
     }),

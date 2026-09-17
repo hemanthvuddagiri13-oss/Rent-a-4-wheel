@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { prisma } from "@/lib/prisma";
 import { cn } from "@/lib/utils";
+import { BLOCKING_RESERVATION_STATUSES } from "@/lib/reservation-state-machine";
 
 export const metadata: Metadata = { title: "Fleet Calendar", robots: { index: false } };
 export const revalidate = 0;
@@ -24,7 +25,7 @@ export default async function AdminCalendarPage() {
   const [vehicles, reservations, blocks] = await Promise.all([
     prisma.vehicle.findMany({ where: { status: { not: "RETIRED" } }, orderBy: { make: "asc" } }),
     prisma.reservation.findMany({
-      where: { status: { in: ["PENDING", "CONFIRMED", "ACTIVE"] }, pickupAt: { lt: rangeEnd }, returnAt: { gt: today } },
+      where: { status: { in: BLOCKING_RESERVATION_STATUSES }, pickupAt: { lt: rangeEnd }, returnAt: { gt: today } },
     }),
     prisma.vehicleBlock.findMany({ where: { startAt: { lt: rangeEnd }, endAt: { gt: today } } }),
   ]);

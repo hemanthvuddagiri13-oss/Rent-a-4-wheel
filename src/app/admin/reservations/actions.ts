@@ -4,8 +4,10 @@ import { canAccessAdmin } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { stripe } from "@/lib/stripe";
 import { queueNotification } from "@/lib/notifications";
+import { transitionReservation } from "@/lib/reservation-state-machine";
+import { getOrCreateRefundOperation, executeRefundOperation } from "@/lib/refund-operations";
+import { withReservationLock } from "@/lib/financial-locks";
 
 async function requireAdmin() {
   const session = await auth();
@@ -17,10 +19,12 @@ async function requireAdmin() {
 
 export async function updateDocumentStatus(documentId: string, status: "APPROVED" | "REJECTED" | "NEEDS_INFORMATION") {
   const session = await requireAdmin();
-  const doc = await prisma.driverDocument.update({
+  const prior = await prisma.driverDocument.findUniqueOrThrow({ where: { id: documentId } });
+  const update = (tx: import("@prisma/client").Prisma.TransactionClient) => tx.driverDocument.update({
     where: { id: documentId },
     data: { status, reviewedById: session.user.id, reviewedAt: new Date() },
   });
+  const doc = prior.reservationId ? await withReservationLock(prior.reservationId, update) : await update(prisma);
   await prisma.auditLog.create({
     data: { actorId: session.user.id, action: "document.review", entityType: "DriverDocument", entityId: documentId, metadata: { status } },
   });
@@ -44,10 +48,19 @@ export async function updateDocumentStatus(documentId: string, status: "APPROVED
 
 export async function cancelReservation(reservationId: string, notes?: string) {
   const session = await requireAdmin();
-  const reservation = await prisma.reservation.update({
-    where: { id: reservationId },
-    data: { status: "CANCELLED", notes },
+  const reservation = await withReservationLock(reservationId, async (tx) => {
+    const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservationId } });
+    await transitionReservation(tx, {
+      id: reservationId,
+      from: current.status,
+      to: "CANCELLED_BY_HOST",
+      force: true, // staff can cancel from any pre-trip status, not just the ordinary customer-facing set
+      data: { notes, expiresAt: null },
+    });
+    await tx.tripEvent.create({ data: { reservationId, type: "CANCELLED_BY_HOST", actorId: session.user.id } });
+    return current;
   });
+
   await prisma.auditLog.create({
     data: { actorId: session.user.id, action: "reservation.cancel", entityType: "Reservation", entityId: reservationId, metadata: { initiatedBy: "staff" } },
   });
@@ -56,115 +69,70 @@ export async function cancelReservation(reservationId: string, notes?: string) {
   revalidatePath("/admin/reservations");
 }
 
-export async function issueRefund(reservationId: string, amountCents: number, reason?: string) {
+/**
+ * Staff-initiated refund. `requestId` must be a client-generated token
+ * that is stable across retries of the SAME submission (so a network
+ * retry or a double-click while the button is still disabled resumes the
+ * same durable Refund row instead of calling Stripe a second time) but
+ * fresh for each genuinely new refund a staff member issues. Amount is
+ * validated against the reservation's actual remaining refundable
+ * balance — never trusted as-is from the client.
+ */
+export async function issueRefund(reservationId: string, amountCents: number, requestId: string, reason?: string) {
   const session = await requireAdmin();
+  if (!Number.isInteger(amountCents) || amountCents <= 0) {
+    throw new Error("Refund amount must be a positive number.");
+  }
+  if (!requestId) {
+    throw new Error("Missing request id.");
+  }
+
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
-    include: { payments: { where: { type: "RENTAL", status: "SUCCEEDED" } } },
+    include: {
+      payments: { where: { type: "RENTAL", status: "SUCCEEDED" } },
+      refunds: true,
+    },
   });
   if (!reservation) throw new Error("Reservation not found.");
   const payment = reservation.payments[0];
   if (!payment) throw new Error("No successful payment found to refund.");
 
-  let stripeRefundId: string | undefined;
-  if (stripe && payment.stripePaymentIntentId) {
-    const refund = await stripe.refunds.create({ payment_intent: payment.stripePaymentIntentId, amount: amountCents });
-    stripeRefundId = refund.id;
+  // Exclude this exact requestId's own prior attempt (if any) from the
+  // "already refunded" total — resuming an idempotent retry must never
+  // be rejected as exceeding the balance against itself.
+  const idempotencyKey = `staff-${requestId}`;
+  const alreadyRefundedCents = reservation.refunds
+    .filter((r) => r.idempotencyKey !== idempotencyKey && (r.status === "SUCCEEDED" || r.status === "PENDING"))
+    .reduce((sum, r) => sum + r.amountCents, 0);
+  const remainingCents = payment.amountCents - alreadyRefundedCents;
+  if (amountCents > remainingCents) {
+    throw new Error(`Refund amount exceeds the remaining refundable balance ($${(remainingCents / 100).toFixed(2)}).`);
   }
 
-  await prisma.refund.create({
-    data: {
-      reservationId,
-      paymentId: payment.id,
-      amountCents,
-      reason,
-      status: "SUCCEEDED",
-      stripeRefundId,
-    },
+  const refund = await getOrCreateRefundOperation({
+    idempotencyKey,
+    reservationId,
+    paymentId: payment.id,
+    amountCents,
+    reason,
+    initiatedById: session.user.id,
   });
+  const result = await executeRefundOperation(refund.id, payment.stripePaymentIntentId);
+  if (result.status === "FAILED" || result.status === "CANCELLED" || (result.status === "already_terminal" && ["FAILED", "CANCELLED"].includes(result.refund.status))) return { status: "failed" };
 
-  await prisma.auditLog.create({
-    data: { actorId: session.user.id, action: "reservation.refund", entityType: "Reservation", entityId: reservationId, metadata: { amountCents } },
-  });
-
-  await queueNotification({ userId: reservation.customerId, reservationId, type: "REFUND", extra: { amountCents } });
   revalidatePath(`/admin/reservations/${reservationId}`);
+  return { status: result.status === "SUCCEEDED" || (result.status === "already_terminal" && result.refund.status === "SUCCEEDED") ? "succeeded" : "pending" };
 }
 
-export async function startRental(formData: FormData) {
-  const session = await requireAdmin();
-  const reservationId = String(formData.get("reservationId"));
-  const mileage = Number(formData.get("mileage"));
-  const fuelLevel = Number(formData.get("fuelLevel"));
-  const notes = String(formData.get("notes") || "");
-
-  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
-
-  await prisma.$transaction([
-    prisma.vehicleInspection.create({
-      data: {
-        vehicleId: reservation.vehicleId,
-        reservationId,
-        type: "CHECK_OUT",
-        mileage,
-        fuelLevel,
-        photoUrls: [],
-        damageNotes: notes || null,
-        performedById: session.user.id,
-      },
-    }),
-    prisma.reservation.update({ where: { id: reservationId }, data: { status: "ACTIVE" } }),
-    prisma.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } }),
-  ]);
-
-  await queueNotification({ userId: reservation.customerId, reservationId, type: "PICKUP_REMINDER" });
-  revalidatePath(`/admin/reservations/${reservationId}`);
-}
-
-export async function completeRental(formData: FormData) {
-  const session = await requireAdmin();
-  const reservationId = String(formData.get("reservationId"));
-  const mileage = Number(formData.get("mileage"));
-  const fuelLevel = Number(formData.get("fuelLevel"));
-  const notes = String(formData.get("notes") || "");
-  const lateReturn = formData.get("lateReturn") === "on";
-  const additionalChargeCents = Math.round(Number(formData.get("additionalCharge") || 0) * 100);
-
-  const reservation = await prisma.reservation.findUniqueOrThrow({
-    where: { id: reservationId },
-    include: { vehicle: true },
-  });
-  const checkOut = await prisma.vehicleInspection.findFirst({
-    where: { reservationId, type: "CHECK_OUT" },
-    orderBy: { performedAt: "desc" },
-  });
-  const milesDriven = checkOut ? Math.max(0, mileage - checkOut.mileage) : 0;
-  const allowance = reservation.vehicle.mileageAllowancePerDay * Math.max(1, reservation.units);
-  const additionalMileage = Math.max(0, milesDriven - allowance);
-
-  await prisma.$transaction([
-    prisma.vehicleInspection.create({
-      data: {
-        vehicleId: reservation.vehicleId,
-        reservationId,
-        type: "CHECK_IN",
-        mileage,
-        fuelLevel,
-        photoUrls: [],
-        damageNotes: notes || null,
-        performedById: session.user.id,
-        lateReturn,
-        additionalMileage,
-        additionalChargeCents,
-      },
-    }),
-    prisma.reservation.update({ where: { id: reservationId }, data: { status: "COMPLETED" } }),
-    prisma.vehicle.update({ where: { id: reservation.vehicleId }, data: { mileage } }),
-  ]);
-
-  if (lateReturn && additionalChargeCents > 0) {
-    await queueNotification({ userId: reservation.customerId, reservationId, type: "LATE_RETURN", extra: { additionalChargeCents } });
-  }
-  await queueNotification({ userId: reservation.customerId, reservationId, type: "RETURN_REMINDER" });
-  revalidatePath(`/admin/reservations/${reservationId}`);
-}
+// NOTE: the ordinary "quick start rental" / "quick complete rental" staff
+// shortcuts that used to live here (bypassing src/lib/trip-gate.ts via a
+// bare admin-role check, with no step-up verification, no mandatory
+// reason, and no confirmation step) have been removed following security
+// review — an ordinary ADMIN/STAFF session must never be able to force a
+// reservation into ACTIVE/COMPLETED on its own. The only remaining path
+// to force a reservation past an unmet gate is the dedicated,
+// SUPER_ADMIN-only, step-up-verified, reason-required, confirmed, and
+// fully audited emergency override — see src/lib/emergency-override.ts
+// and POST /api/admin/reservations/[id]/emergency-override. It is
+// intentionally not linked from this ordinary admin UI.

@@ -17,6 +17,7 @@ import { Logo } from "@/components/layout/logo";
 const links = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/vehicles", label: "Vehicles", icon: Car },
+  { href: "/admin/financial-cases", label: "Financial reconciliation", icon: ClipboardList },
   { href: "/admin/reservations", label: "Reservations", icon: ClipboardList },
   { href: "/admin/calendar", label: "Fleet Calendar", icon: CalendarRange },
   { href: "/admin/owners", label: "Vehicle Owners", icon: Users },

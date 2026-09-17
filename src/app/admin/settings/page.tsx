@@ -39,6 +39,8 @@ export default async function AdminSettingsPage() {
               <Input id="address" name="address" defaultValue={settings.address} className="mt-1.5" />
             </div>
             <div className="sm:col-span-2">
+              <Label htmlFor="bookingTimezone">Booking time zone (IANA)</Label>
+              <Input id="bookingTimezone" name="bookingTimezone" defaultValue={settings.bookingTimezone} />
               <Label htmlFor="operatingHours">Operating Hours</Label>
               <Input id="operatingHours" name="operatingHours" defaultValue={settings.operatingHours} className="mt-1.5" />
             </div>
@@ -59,6 +61,17 @@ export default async function AdminSettingsPage() {
             <div>
               <Label htmlFor="minimumAge">Minimum Driver Age</Label>
               <Input id="minimumAge" name="minimumAge" type="number" defaultValue={settings.minimumAge} className="mt-1.5" />
+            </div>
+            <div>
+              <Label htmlFor="checkInWindowHours">Check-In Window (hours before pickup)</Label>
+              <Input
+                id="checkInWindowHours"
+                name="checkInWindowHours"
+                type="number"
+                min={1}
+                defaultValue={settings.checkInWindowHours}
+                className="mt-1.5"
+              />
             </div>
           </div>
           <div>

@@ -5,13 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatCurrency } from "@/lib/utils";
 import { RESERVATION_STATUS_LABELS } from "@/lib/constants";
-import {
-  DocumentReviewRow,
-  CancelReservationAdminButton,
-  RefundForm,
-  CheckOutForm,
-  CheckInForm,
-} from "@/components/admin/reservation-actions";
+import { DocumentReviewRow, CancelReservationAdminButton, RefundForm } from "@/components/admin/reservation-actions";
 
 export const metadata: Metadata = { title: "Reservation Detail", robots: { index: false } };
 export const revalidate = 0;
@@ -29,14 +23,16 @@ export default async function AdminReservationDetailPage({ params }: { params: P
       deposit: true,
       documents: true,
       extras: { include: { extra: true } },
-      agreement: true,
+      agreementAcceptances: { where: { type: "RENTAL_AGREEMENT" }, orderBy: { signedAt: "desc" }, take: 1 },
     },
   });
   if (!reservation) notFound();
 
   const successfulPayment = reservation.payments.find((p) => p.type === "RENTAL" && p.status === "SUCCEEDED");
-  const alreadyRefunded = reservation.refunds.reduce((sum, r) => sum + r.amountCents, 0);
-  const refundableCents = Math.max(0, (successfulPayment?.amountCents ?? 0) - alreadyRefunded);
+  const alreadyRefunded = reservation.refunds.filter(r => r.status === "SUCCEEDED").reduce((sum, r) => sum + r.amountCents, 0);
+  const pendingRefunds = reservation.refunds.filter(r => r.status === "PENDING").reduce((sum, r) => sum + r.amountCents, 0);
+  const refundableCents = Math.max(0, (successfulPayment?.amountCents ?? 0) - alreadyRefunded - pendingRefunds);
+  const operations = await prisma.financialOperation.findMany({ where: { reservationId: id, state: { in: ["RETRY", "REVIEW", "RUNNING"] } }, select: { id: true, kind: true, state: true, lastError: true } });
 
   return (
     <div className="max-w-4xl">
@@ -79,6 +75,9 @@ export default async function AdminReservationDetailPage({ params }: { params: P
           <Row label="Total" value={formatCurrency(reservation.totalCents)} bold />
           <Row label="Deposit" value={`${formatCurrency(reservation.depositCents)} (${reservation.deposit?.status ?? "n/a"})`} />
           {reservation.refunds.length > 0 && <Row label="Refunded" value={formatCurrency(alreadyRefunded)} />}
+          {pendingRefunds > 0 && <Row label="Refund pending" value={formatCurrency(pendingRefunds)} />}
+          {reservation.refunds.filter(refund => ["FAILED", "CANCELLED"].includes(refund.status)).map(refund => <p key={refund.id} className="text-amber-300">Refund {formatCurrency(refund.amountCents)}: {refund.status}. {refund.lastError}</p>)}
+          {operations.map(operation => <p key={operation.id} className="text-amber-300">{operation.kind}: {operation.state}. {operation.lastError} Reference: {operation.id}</p>)}
         </div>
         {successfulPayment && refundableCents > 0 && (
           <div className="mt-4">
@@ -92,16 +91,17 @@ export default async function AdminReservationDetailPage({ params }: { params: P
         <div className="mt-3 space-y-2">
           {reservation.documents.length === 0 && <p className="text-sm text-muted">No documents uploaded yet.</p>}
           {reservation.documents.map((d) => (
-            <DocumentReviewRow key={d.id} id={d.id} side={d.side} status={d.status} />
+            <DocumentReviewRow key={d.id} id={d.id} type={d.type} status={d.status} />
           ))}
         </div>
       </div>
 
-      {reservation.agreement && (
+      {reservation.agreementAcceptances[0] && (
         <div className="mt-6 rounded-xl border border-white/10 bg-card p-5">
           <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-gold-bright">Rental Agreement</h2>
           <p className="mt-2 text-sm text-muted">
-            Accepted {reservation.agreement.acceptedAt.toLocaleString()} &middot; version {reservation.agreement.documentVersion}
+            Signed {reservation.agreementAcceptances[0].signedAt.toLocaleString()} &middot; version{" "}
+            {reservation.agreementAcceptances[0].documentVersion}
           </p>
           <a href={`/api/reservations/${reservation.id}/agreement`} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-gold hover:underline">
             View PDF
@@ -109,12 +109,9 @@ export default async function AdminReservationDetailPage({ params }: { params: P
         </div>
       )}
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {reservation.status === "CONFIRMED" && <CheckOutForm reservationId={reservation.id} />}
-        {reservation.status === "ACTIVE" && <CheckInForm reservationId={reservation.id} />}
-      </div>
-
-      {["PENDING", "CONFIRMED"].includes(reservation.status) && (
+      {(["AWAITING_PAYMENT", "CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN"] as string[]).includes(
+        reservation.status
+      ) && (
         <div className="mt-6">
           <CancelReservationAdminButton reservationId={reservation.id} />
         </div>

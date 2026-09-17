@@ -4,8 +4,8 @@ import { canCustomerCancel } from "@/lib/reservation-rules";
 const now = new Date("2026-06-01T00:00:00Z");
 
 describe("canCustomerCancel", () => {
-  it("allows cancelling a PENDING reservation before pickup", () => {
-    const result = canCustomerCancel({ status: "PENDING", pickupAt: new Date("2026-07-01") }, now);
+  it("allows cancelling an AWAITING_PAYMENT reservation before pickup", () => {
+    const result = canCustomerCancel({ status: "AWAITING_PAYMENT", pickupAt: new Date("2026-07-01") }, now);
     expect(result.allowed).toBe(true);
   });
 
@@ -24,8 +24,8 @@ describe("canCustomerCancel", () => {
     expect(result.allowed).toBe(false);
   });
 
-  it("denies cancelling an already CANCELLED reservation", () => {
-    const result = canCustomerCancel({ status: "CANCELLED", pickupAt: new Date("2026-07-01") }, now);
+  it("denies cancelling an already-cancelled reservation", () => {
+    const result = canCustomerCancel({ status: "CANCELLED_BY_CUSTOMER", pickupAt: new Date("2026-07-01") }, now);
     expect(result.allowed).toBe(false);
   });
 

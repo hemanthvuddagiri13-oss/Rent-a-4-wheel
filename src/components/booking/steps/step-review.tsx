@@ -26,6 +26,8 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
   const [couponMessage, setCouponMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    if (state.checkoutComplete) return;
+    let cancelled = false;
     async function fetchQuote() {
       const pickupAt = `${state.pickupDate}T${state.pickupTime}:00`;
       const returnAt = `${state.returnDate}T${state.returnTime}:00`;
@@ -33,27 +35,27 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
       setError(null);
 
       try {
-        const res = await fetch(`/api/vehicles/${vehicle.id}/quote`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pickupAt, returnAt, extraIds: state.selectedExtraIds, couponCode: state.couponCode || undefined }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Unable to calculate pricing.");
-        update({ breakdown: data.breakdown });
-        setCouponMessage(data.couponError || (data.couponApplied ? "Coupon applied!" : null));
+        const held = await fetch("/api/reservations/hold", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vehicleId: vehicle.id, draftId: state.draftId, revision: state.revision, pickupAt, returnAt, extraIds: state.selectedExtraIds, couponCode: state.couponCode || undefined }) });
+        const hold = await held.json();
+        if (!held.ok) throw new Error(hold.error || "Unable to update reservation");
+        if (cancelled) return;
+        update({ reservationId: hold.id, confirmationNumber: hold.confirmationNumber, holdExpiresAt: hold.expiresAt, bookingTimezone: hold.bookingTimezone ?? state.bookingTimezone, bookingFingerprint: hold.bookingFingerprint });
+        update({ breakdown: hold.breakdown });
+        setCouponMessage(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to calculate pricing.");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to calculate pricing.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     fetchQuote();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vehicle.id, state.pickupDate, state.pickupTime, state.returnDate, state.returnTime, state.selectedExtraIds, state.couponCode]);
 
-  const selectedExtras = extras.filter((e) => state.selectedExtraIds.includes(e.id));
+  const selectedExtras = state.breakdown?.extraLineItems.length ? state.breakdown.extraLineItems.map(e => ({ id: e.extraId, name: `${e.name} × ${e.quantity}` })) : extras.filter((e) => state.selectedExtraIds.includes(e.id));
 
   return (
     <div>
@@ -103,8 +105,8 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
           Promo Code
         </label>
         <div className="mt-1.5 flex gap-2">
-          <Input id="coupon" value={couponInput} onChange={(e) => setCouponInput(e.target.value.toUpperCase())} placeholder="Enter code" />
-          <Button type="button" variant="outline" onClick={() => update({ couponCode: couponInput })}>
+          <Input disabled={state.checkoutComplete} id="coupon" value={couponInput} onChange={(e) => setCouponInput(e.target.value.toUpperCase())} placeholder="Enter code" />
+          <Button type="button" variant="outline" disabled={state.checkoutComplete} onClick={() => update({ couponCode: couponInput })}>
             Apply
           </Button>
         </div>
@@ -152,10 +154,10 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
       </label>
 
       <div className="mt-8 flex gap-3">
-        <Button variant="outline" onClick={onBack}>
+        <Button variant="outline" onClick={onBack} disabled={state.checkoutComplete}>
           Back
         </Button>
-        <Button size="lg" disabled={!state.breakdown || !state.agreementAccepted || loading} onClick={onNext}>
+        <Button size="lg" disabled={!state.breakdown || !state.agreementAccepted || loading || Boolean(error)} onClick={onNext}>
           Continue to Payment
         </Button>
       </div>

@@ -14,7 +14,10 @@ async function requireAdmin() {
 export async function updateSettings(formData: FormData) {
   const session = await requireAdmin();
 
+  const bookingTimezone = String(formData.get("bookingTimezone") || "America/Chicago");
+  new Intl.DateTimeFormat("en", { timeZone: bookingTimezone }).format();
   const entries: Array<[string, unknown]> = [
+    ["bookingTimezone", bookingTimezone],
     ["businessName", String(formData.get("businessName"))],
     ["phone", String(formData.get("phone"))],
     ["email", String(formData.get("email"))],
@@ -23,6 +26,7 @@ export async function updateSettings(formData: FormData) {
     ["taxRatePercent", Number(formData.get("taxRatePercent"))],
     ["defaultDepositCents", Math.round(Number(formData.get("defaultDeposit")) * 100)],
     ["minimumAge", Number(formData.get("minimumAge"))],
+    ["checkInWindowHours", Number(formData.get("checkInWindowHours"))],
     ["mileagePolicySummary", String(formData.get("mileagePolicySummary"))],
     ["cancellationPolicySummary", String(formData.get("cancellationPolicySummary"))],
     [

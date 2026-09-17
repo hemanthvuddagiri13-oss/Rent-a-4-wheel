@@ -7,7 +7,6 @@
  * dashboard before going to production.
  */
 import { PrismaClient, VehicleCategory, Transmission, FuelType, ExtraChargeType, LegalDocumentType, Role } from "@prisma/client";
-import bcrypt from "bcryptjs";
 import { slugify } from "../src/lib/utils";
 
 const prisma = new PrismaClient();
@@ -122,10 +121,14 @@ const featureNames = [
 async function main() {
   console.log("Seeding Rent A 4Wheel demo data...");
 
-  // --- Users ---------------------------------------------------------------
+  // --- Users -------------------------------------------------------------
+  // Authentication is passwordless (six-digit email codes — see
+  // src/lib/auth-code.ts), so seeded accounts have no password: sign in at
+  // /sign-in with the email below and request a code. In development
+  // without RESEND_API_KEY configured, the code is echoed back in the API
+  // response instead of emailed (see the "Development Mode" note in the
+  // sign-in form).
   const adminEmail = process.env.SEED_ADMIN_EMAIL || "admin@renta4wheel.com";
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || "ChangeMe123!";
-  const adminHash = await bcrypt.hash(adminPassword, 12);
 
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },
@@ -134,12 +137,10 @@ async function main() {
       email: adminEmail,
       name: "Rent A 4Wheel Admin",
       role: Role.ADMIN,
-      passwordHash: adminHash,
       emailVerified: new Date(),
     },
   });
 
-  const demoCustomerHash = await bcrypt.hash("Demo1234!", 12);
   const demoCustomerUser = await prisma.user.upsert({
     where: { email: "demo.customer@example.com" },
     update: {},
@@ -148,7 +149,6 @@ async function main() {
       name: "Jordan Sample",
       role: Role.CUSTOMER,
       phone: "214-555-0100",
-      passwordHash: demoCustomerHash,
       emailVerified: new Date(),
       customer: {
         create: {
@@ -386,6 +386,7 @@ async function main() {
     { key: "taxRatePercent", value: 8.25 },
     { key: "defaultDepositCents", value: 35000 },
     { key: "minimumAge", value: 21 },
+    { key: "checkInWindowHours", value: 24 },
     { key: "mileagePolicySummary", value: "Daily mileage allowance varies by vehicle; see vehicle details." },
     { key: "cancellationPolicySummary", value: "PLACEHOLDER — pending attorney review." },
     { key: "socialLinks", value: { instagram: "", facebook: "", tiktok: "" } },
@@ -399,8 +400,8 @@ async function main() {
   }
 
   console.log("Seed complete.");
-  console.log(`  Admin login: ${adminEmail} / ${adminPassword}`);
-  console.log(`  Demo customer login: demo.customer@example.com / Demo1234!`);
+  console.log(`  Admin login (email-code, passwordless): ${adminEmail}`);
+  console.log(`  Demo customer login (email-code, passwordless): demo.customer@example.com`);
   console.log(admin.id, demoCustomerUser.id);
 }
 

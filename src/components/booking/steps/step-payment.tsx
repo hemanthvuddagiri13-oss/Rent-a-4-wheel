@@ -6,62 +6,67 @@ import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-
 import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCurrency } from "@/lib/utils";
-import type { BookingState, BookingVehicle, BookingExtra, DriverFormState, UpdateBookingState } from "@/components/booking/types";
+import type { BookingState, DriverFormState } from "@/components/booking/types";
 
 const stripePromise = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
   ? loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY)
   : null;
 
 interface Props {
-  vehicle: BookingVehicle;
-  extras: BookingExtra[];
   state: BookingState;
-  update: UpdateBookingState;
+  onCheckoutComplete: () => void;
   onSuccess: () => void;
   onBack: () => void;
 }
 
-async function createReservation(vehicle: BookingVehicle, state: BookingState) {
-  const res = await fetch("/api/reservations", {
+async function finalizeCheckout(reservationId: string, state: BookingState) {
+  const res = await fetch(`/api/reservations/${reservationId}/checkout`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      vehicleId: vehicle.id,
-      pickupAt: `${state.pickupDate}T${state.pickupTime}:00`,
-      returnAt: `${state.returnDate}T${state.returnTime}:00`,
-      extraIds: state.selectedExtraIds,
-      couponCode: state.couponCode || undefined,
       driver: state.driver satisfies DriverFormState,
       documentIds: state.documentIds,
       agreementAccepted: state.agreementAccepted,
+      bookingFingerprint: state.bookingFingerprint,
     }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Unable to create reservation.");
-  return data as { id: string; confirmationNumber: string };
+  if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "Unable to complete checkout.");
 }
 
-export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props) {
+export function StepPayment({ state, onCheckoutComplete, onSuccess, onBack }: Props) {
   const [initializing, setInitializing] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [devMode, setDevMode] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [outcome, setOutcome] = useState("processing");
 
   useEffect(() => {
     let cancelled = false;
     async function init() {
       try {
         setInitializing(true);
-        let reservationId = state.reservationId;
-        let confirmationNumber = state.confirmationNumber;
-
+        const reservationId = state.reservationId;
         if (!reservationId) {
-          const reservation = await createReservation(vehicle, state);
-          reservationId = reservation.id;
-          confirmationNumber = reservation.confirmationNumber;
-          if (!cancelled) update({ reservationId, confirmationNumber });
+          throw new Error("We couldn't find your held reservation. Please go back and try again.");
         }
+
+        const statusResponse = await fetch(`/api/reservations/${reservationId}/status`);
+        if (!statusResponse.ok) throw new Error("Unable to access this reservation.");
+        let checkoutComplete = state.checkoutComplete;
+        if (statusResponse.ok) {
+          const status = await statusResponse.json();
+          checkoutComplete = status.status !== "CHECKOUT_HOLD";
+          if (checkoutComplete) onCheckoutComplete();
+          if (status.outcome === "confirmed") { if (!cancelled) onSuccess(); return; }
+          if (status.paidCents > 0 || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(status.status)) {
+            if (!cancelled) { setRecovering(true); setOutcome(status.outcome); }
+            return;
+          }
+        }
+        if (!checkoutComplete) { await finalizeCheckout(reservationId, state); onCheckoutComplete(); }
 
         const res = await fetch(`/api/reservations/${reservationId}/payment-intent`, { method: "POST" });
         const data = await res.json();
@@ -70,8 +75,10 @@ export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props
         if (cancelled) return;
         if (data.devMode) {
           setDevMode(true);
-        } else {
+        } else if (data.clientSecret) {
           setClientSecret(data.clientSecret);
+        } else {
+          throw new Error("Payments are not available in this environment.");
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -85,6 +92,34 @@ export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function recoverDeposit() {
+    if (!state.reservationId) return;
+    setConfirming(true); setError(null);
+    try {
+      const response = await fetch(`/api/reservations/${state.reservationId}/retry-deposit`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      if (data.requiresAction && data.clientSecret) {
+        const client = await stripePromise;
+        if (!client) throw new Error("Payment service unavailable");
+        const result = await client.confirmCardPayment(data.clientSecret);
+        if (result.error) throw new Error(result.error.message);
+        await fetch(`/api/reservations/${state.reservationId}/retry-deposit`, { method: "POST" });
+      }
+      await refreshOutcome();
+    } catch (e) { setError(e instanceof Error ? e.message : "Recovery pending"); }
+    finally { setConfirming(false); }
+  }
+  async function refreshOutcome() {
+    if (!state.reservationId) return;
+    try {
+      const response = await fetch(`/api/reservations/${state.reservationId}/status`);
+      if (!response.ok) throw new Error("Unable to check reservation status");
+      const data = await response.json(); setOutcome(data.outcome);
+      if (data.outcome === "confirmed") onSuccess();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to check status"); }
+  }
 
   async function handleDevConfirm() {
     if (!state.reservationId) return;
@@ -117,6 +152,12 @@ export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props
 
       {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
 
+      {!initializing && recovering && <div className="mt-6 space-y-3">
+        <p>Reservation status: {outcome.replaceAll("_", " ")}. Your rental payment will not be submitted again.</p>
+        {["payment_failed", "deposit_action_required"].includes(outcome) && <Button onClick={recoverDeposit} disabled={confirming}>Retry or authenticate security deposit</Button>}
+        <Button variant="outline" onClick={refreshOutcome} disabled={confirming}>Check status</Button>
+        <p className="text-sm text-muted">If deposit recovery cannot finish before the recovery deadline, the rental payment is queued for refund. A refund is complete only when the status says refunded.</p>
+      </div>}
       {!initializing && devMode && (
         <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-5">
           <div className="flex items-center gap-2 text-amber-400">
@@ -136,9 +177,9 @@ export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props
         </div>
       )}
 
-      {!initializing && clientSecret && stripePromise && (
+      {!initializing && clientSecret && stripePromise && state.reservationId && (
         <Elements stripe={stripePromise} options={{ clientSecret, appearance: { theme: "night", variables: { colorPrimary: "#D4AF37" } } }}>
-          <StripeCheckoutForm onSuccess={onSuccess} />
+          <StripeCheckoutForm reservationId={state.reservationId} onSuccess={onSuccess} onPending={(value) => { setOutcome(value); setRecovering(true); setClientSecret(null); }} />
         </Elements>
       )}
 
@@ -153,10 +194,34 @@ export function StepPayment({ vehicle, state, update, onSuccess, onBack }: Props
   );
 }
 
-function StripeCheckoutForm({ onSuccess }: { onSuccess: () => void }) {
+const STATUS_POLL_INTERVAL_MS = 1500;
+const STATUS_POLL_TIMEOUT_MS = 45_000;
+
+type ReservationOutcome = "processing" | "confirmed" | "payment_failed" | "refunded" | "expired" | "cancelled";
+
+async function pollReservationOutcome(reservationId: string): Promise<ReservationOutcome> {
+  const deadline = Date.now() + STATUS_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const res = await fetch(`/api/reservations/${reservationId}/status`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.outcome !== "processing") return data.outcome as ReservationOutcome;
+    }
+    await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
+  }
+  return "processing";
+}
+
+function StripeCheckoutForm({ reservationId, onSuccess, onPending }: { reservationId: string; onSuccess: () => void; onPending: (value: string) => void }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
+  // Client-side confirmation only proves the PaymentIntent reached a
+  // confirmable state, not that the webhook has finished persisting the
+  // rental payment, authorizing the deposit, and confirming the
+  // reservation server-side. We must keep showing "Processing" — never
+  // "Confirmed" — until the server itself reports a terminal outcome.
+  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -165,14 +230,22 @@ function StripeCheckoutForm({ onSuccess }: { onSuccess: () => void }) {
     setSubmitting(true);
     setError(null);
 
-    const { error: confirmError } = await stripe.confirmPayment({ elements, redirect: "if_required" });
+    try {
+      const { error: confirmError } = await stripe.confirmPayment({ elements, redirect: "if_required", confirmParams: { return_url: window.location.href } });
+      if (confirmError) { setError(confirmError.message || "Payment failed"); return; }
+      setProcessing(true);
+      const outcome = await pollReservationOutcome(reservationId);
+      if (outcome === "confirmed") onSuccess(); else onPending(outcome);
+    } catch { onPending("processing"); }
+    finally { setSubmitting(false); setProcessing(false); }
+  }
 
-    setSubmitting(false);
-    if (confirmError) {
-      setError(confirmError.message || "Payment failed. Please try again.");
-      return;
-    }
-    onSuccess();
+  if (processing) {
+    return (
+      <div className="mt-6 flex items-center gap-2 text-muted">
+        <Loader2 className="h-5 w-5 animate-spin" /> Processing your payment — do not close this page…
+      </div>
+    );
   }
 
   return (

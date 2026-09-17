@@ -1,11 +1,19 @@
 import type { ReservationStatus } from "@prisma/client";
 
-const CUSTOMER_CANCELLABLE_STATUSES: ReservationStatus[] = ["PENDING", "CONFIRMED"];
+const CUSTOMER_CANCELLABLE_STATUSES: ReservationStatus[] = [
+  "CHECKOUT_HOLD",
+  "AWAITING_PAYMENT",
+  "PAYMENT_FAILED",
+  "CONFIRMED",
+  "DOCUMENTS_REQUIRED",
+  "READY_FOR_CHECK_IN",
+];
 
 /**
  * A customer may self-cancel a reservation only while it hasn't started
  * and hasn't already reached a terminal state. Anything else (already
- * active/completed/cancelled) must go through staff in /admin.
+ * checking in/active/completed/cancelled/disputed) must go through staff
+ * in /admin.
  */
 export function canCustomerCancel(
   reservation: { status: ReservationStatus; pickupAt: Date },
