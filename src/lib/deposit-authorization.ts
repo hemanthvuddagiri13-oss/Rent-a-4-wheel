@@ -133,6 +133,7 @@ export async function executeDepositReleaseOperation(operation: FinancialOperati
       const current = await client.paymentIntents.retrieve(intentId);
       if (current.status === "canceled") return current;
       if (current.status === "succeeded") throw new UncertainOutcomeError("Captured deposit requires manual resolution");
+      if (!await checkDepositReleaseOwnership(operation.id, reservationId)) throw new UncertainOutcomeError("Deposit release quarantined before cancellation");
       const canceled = await client.paymentIntents.cancel(intentId, {}, { idempotencyKey: operation.key });
       if (canceled.status !== "canceled") throw new Error("Deposit release unresolved");
       return canceled;
