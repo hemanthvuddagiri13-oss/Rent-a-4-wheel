@@ -10,6 +10,7 @@ import { prisma, createTestCustomer, createTestHost, createTestVehicle, createTe
 let child: ChildProcess, browser: Browser;
 let scanner: ScannerServer, scannerReply = "stream: scanner unavailable ERROR\0";
 let priorHostLegal: Awaited<ReturnType<typeof prisma.legalDocument.findUnique>>;
+let priorRentalLegal: Awaited<ReturnType<typeof prisma.legalDocument.findUnique>>;
 const base = "http://127.0.0.1:3201", secret = "marketplace-browser-only-secret";
 const users: string[] = [], hosts: string[] = [], vehicles: string[] = [];
 const captures = "test-artifacts/marketplace";
@@ -34,6 +35,7 @@ async function screenshot(page: Page, name: string, widths = [390, 1440]) {
 beforeAll(async () => {
   await mkdir(captures, { recursive: true });
   priorHostLegal = await prisma.legalDocument.findUnique({ where: { type: "HOST_AGREEMENT" } });
+  priorRentalLegal = await prisma.legalDocument.findUnique({ where: { type: "RENTAL_AGREEMENT" } });
   // Explicit provider-boundary fixture. The app's scanner client and all HTTP,
   // storage, authorization and database paths remain real. This is not a claim
   // that a deployed ClamAV engine or its signature database has been verified.
@@ -69,6 +71,8 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: { in: users } } });
   if (priorHostLegal) await prisma.legalDocument.update({ where: { type: "HOST_AGREEMENT" }, data: { content: priorHostLegal.content, version: priorHostLegal.version, needsAttorneyReview: priorHostLegal.needsAttorneyReview } });
   else await prisma.legalDocument.deleteMany({ where: { type: "HOST_AGREEMENT" } });
+  if (priorRentalLegal) await prisma.legalDocument.update({ where: { type: "RENTAL_AGREEMENT" }, data: { content: priorRentalLegal.content, version: priorRentalLegal.version, needsAttorneyReview: priorRentalLegal.needsAttorneyReview } });
+  else await prisma.legalDocument.deleteMany({ where: { type: "RENTAL_AGREEMENT" } });
   await prisma.$disconnect();
 });
 
@@ -199,6 +203,51 @@ it("completes real customer and host inspection, handoff, start and return journ
   const receipt = await cc.request.get(`${base}/api/reservations/${r.id}/receipt`); expect(receipt.status()).toBe(200); expect(receipt.headers()["content-type"]).toBe("application/pdf");
   expect((await oc.request.get(`${base}/api/reservations/${r.id}/receipt`)).status()).toBe(404);
   await hc.close(); await cc.close(); await oc.close();
+}, 180000);
+
+it("checks out and resumes one reservation through real Next HTTP, uploads and signed agreement storage", async () => {
+  const customer = await createTestCustomer(); users.push(customer.id);
+  const vehicle = await createTestVehicle({ securityDepositCents: 0 }); vehicles.push(vehicle.id);
+  scannerReply = "stream: OK\0";
+  await prisma.legalDocument.upsert({ where: { type: "RENTAL_AGREEMENT" }, create: { type: "RENTAL_AGREEMENT", title: "Synthetic rental terms", content: "Synthetic browser rental terms, not production legal language", version: "browser-rental", needsAttorneyReview: false }, update: { content: "Synthetic browser rental terms, not production legal language", version: "browser-rental", needsAttorneyReview: false } });
+  const context = await login(customer), page = await context.newPage();
+  await page.goto(`${base}/vehicles/${vehicle.slug}`);
+  await screenshot(page, "vehicle-details");
+  await page.getByRole("button", { name: "Continue", exact: false }).click();
+  await page.waitForURL(/\/book\//);
+  for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("heading", { name: "Driver Information" }).waitFor();
+  const fields = { "First Name": "Synthetic", "Last Name": "Driver", "Date of Birth": "1990-01-01", Email: customer.email, Phone: "5551234567", Address: "1 Synthetic Street", City: "Dallas", State: "TX", ZIP: "75001", Country: "US", "License Number": "SYNTHETIC_PRIVATE_LICENSE", "License State/Country": "TX", "License Expiration": "2038-01-01" };
+  for (const [label, value] of Object.entries(fields)) await page.getByLabel(label, { exact: true }).fill(value);
+  const buffer = await sharp({ create: { width: 32, height: 32, channels: 3, background: "silver" } }).png().toBuffer();
+  for (let i = 0; i < 3; i++) {
+    const uploaded = page.waitForResponse(r => r.url().endsWith("/api/documents/upload") && r.request().method() === "POST");
+    await page.locator('input[type="file"]').nth(i).setInputFiles({ name: "synthetic.png", mimeType: "image/png", buffer });
+    expect((await uploaded).status()).toBe(200);
+  }
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("heading", { name: "Review Your Booking" }).waitFor();
+  await page.getByRole("checkbox").check();
+  const checkout = page.waitForResponse(r => r.url().endsWith("/checkout") && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Continue to Payment" }).click();
+  const result = await checkout; expect(result.status(), await result.text()).toBe(200);
+  const id = new URL(page.url()).searchParams.get("reservationId")!;
+  const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+  expect(reservation.status).toBe("AWAITING_PAYMENT"); expect(reservation.checkoutFingerprint).toBeTruthy();
+  expect(await prisma.driverDocument.count({ where: { reservationId: id, malwareScanStatus: "CLEAN" } })).toBe(3);
+  const pdf = await context.request.get(`${base}/api/reservations/${id}/agreement`);
+  expect(pdf.status()).toBe(200); expect(pdf.headers()["content-type"]).toBe("application/pdf");
+  await page.getByText("Preparing secure checkout…").waitFor({ state: "hidden" });
+  await screenshot(page, "checkout-payment");
+  await page.reload(); await page.getByRole("heading", { name: "Payment", exact: true }).waitFor();
+  expect(new URL(page.url()).searchParams.get("reservationId")).toBe(id);
+  expect(await prisma.reservation.count({ where: { vehicleId: vehicle.id } })).toBe(1);
+  expect(await prisma.agreementAcceptance.count({ where: { reservationId: id } })).toBe(1);
+  expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain("SYNTHETIC_PRIVATE_LICENSE");
+  // Payment provider is deliberately absent: this proves real checkout and resume,
+  // not a Stripe charge. Financial provider behavior has its own failure-window tests.
+  expect(await prisma.payment.count({ where: { reservationId: id } })).toBe(0);
+  await context.close();
 }, 180000);
 
 it("renders discovery and account pages at all requested widths with labeled form controls", async () => {
