@@ -111,8 +111,12 @@ export async function releaseDeposits(reservationId: string, onlyIntentId?: stri
   if (!stripe) throw new Error("Stripe unavailable");
   const client = stripe;
   const attempts = await prisma.financialOperation.findMany({ where: { reservationId, kind: "DEPOSIT", providerId: onlyIntentId ?? { not: null } } });
-  for (const attempt of attempts) {
-    const intentId = attempt.providerId!;
+  const targets = new Set(attempts.map(a => a.providerId!));
+  const deposit = await prisma.securityDeposit.findUnique({ where: { reservationId } });
+  if (deposit?.stripePaymentIntentId && (!onlyIntentId || onlyIntentId === deposit.stripePaymentIntentId)) targets.add(deposit.stripePaymentIntentId);
+  for (const intentId of targets) {
+    const ownership = await prisma.providerObjectOwnership.findUnique({ where: { providerId: intentId } });
+    if (!ownership || ownership.kind !== "DEPOSIT" || ownership.reservationId !== reservationId) throw new UncertainOutcomeError("Deposit ownership requires review before release");
     const operation = await withReservationLock(reservationId, tx => prepareOperation(tx, {
       key: `deposit-release:${intentId}`, kind: "DEPOSIT_RELEASE", reservationId, payload: { intentId },
     }));

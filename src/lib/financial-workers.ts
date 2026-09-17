@@ -1,4 +1,5 @@
 import { safeLog } from "@/lib/safe-log";
+import type { FinancialOperation } from "@prisma/client";
 import { executeRentalOperation } from "@/lib/rental-payment";
 import { withReservationLock } from "@/lib/financial-locks";
 import { prepareOperation } from "@/lib/financial-operations";
@@ -27,6 +28,13 @@ export async function recoverStripeEvents() {
 }
 export function dueOperations(kind: string) {
   const now = new Date();
+  if (kind === "REFUND") return prisma.$queryRaw<FinancialOperation[]>`SELECT o.* FROM "FinancialOperation" o
+    JOIN "Refund" f ON f."idempotencyKey" = o."key" AND f."reservationId" = o."reservationId"
+    WHERE o."kind" = 'REFUND' AND o."state" IN ('READY','RETRY','POLL','RUNNING')
+      AND f."status" = 'PENDING' AND NOT f."legacyUncertain" AND o."consecutiveFailures" < 20
+      AND (o."nextAttemptAt" IS NULL OR o."nextAttemptAt" <= ${now})
+      AND (o."leaseExpiresAt" IS NULL OR o."leaseExpiresAt" <= ${now})
+    ORDER BY o."priority", o."nextAttemptAt" ASC NULLS FIRST, o."createdAt" LIMIT 25`;
   return prisma.financialOperation.findMany({ where: { kind, state: { in: ["READY", "RETRY", "POLL", "RUNNING"] }, consecutiveFailures: { lt: 20 }, AND: [{ OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }] }, { OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] }] }, orderBy: [{ priority: "asc" }, { nextAttemptAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }], take: 25 });
 }
 export async function recoverRefunds() {

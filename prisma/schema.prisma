@@ -482,6 +482,7 @@ model Reservation {
   // Terminal financial disposition is independent of captured payment status.
   financialDisposition String @default("OPEN")
   bookingFingerprint String?
+  bookingFingerprintVersion Int @default(2)
   checkoutFingerprint String?
   id                 String @id @default(cuid())
   confirmationNumber String @unique // e.g. RA4W-XXXXXX
@@ -690,6 +691,7 @@ model Refund {
 }
 
 model BookingDraft {
+  fingerprintVersion Int @default(2)
   id String @id
   customerId String
   vehicleId String
@@ -701,6 +703,7 @@ model BookingDraft {
 }
 
 model SecurityDeposit {
+  currency String @default("usd")
   capturableAmountCents Int @default(0)
   operation FinancialOperation? @relation(fields: [operationId], references: [id])
   legacyUncertain Boolean @default(false)
@@ -1498,6 +1501,16 @@ model SiteSetting {
 }
 
 // Durable operator queue. IDs/evidence are retained after resolution.
+model ProviderObjectOwnership {
+  providerId String @id
+  kind String
+  reservationId String
+  operationId String?
+  paymentId String?
+  depositId String?
+  refundId String?
+}
+
 model FinancialCase {
   paymentId String?
   id String @id @default(cuid())
@@ -1507,8 +1520,8 @@ model FinancialCase {
   operationId String?
   refundId String?
   kind String
-  amountCents Int
-  currency String @default("usd")
+  amountCents Int?
+  currency String? @default("usd")
   originalKey String?
   providerId String?
   reason String

@@ -1,5 +1,6 @@
 import type { Prisma, ReservationStatus } from "@prisma/client";
 import { lockReservation, assertFinancialTripStart } from "@/lib/financial-locks";
+import { planAllDepositReleases } from "@/lib/deposit-release-plan";
 
 /**
  * The complete booking lifecycle. Every legal transition is listed
@@ -151,4 +152,5 @@ export async function transitionReservation(
   if (result.count !== 1) {
     throw new StaleReservationStateError(id, from);
   }
+  if (["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(to)) await planAllDepositReleases(tx, id);
 }

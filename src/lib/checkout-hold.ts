@@ -1,4 +1,5 @@
 import { bookingDays } from "@/lib/booking-time";
+import { upgradeBookingFingerprint } from "@/lib/booking-fingerprint";
 import { fingerprint } from "@/lib/financial-operations";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { Reservation } from "@prisma/client";
@@ -44,8 +45,12 @@ export async function createOrRefreshHold(params: {
       async (tx) => {
         await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${vehicleId} FOR UPDATE`;
         if (params.draftId) {
-          const draft = await tx.bookingDraft.upsert({ where: { id: params.draftId }, update: {}, create: { id: params.draftId, customerId, vehicleId } });
+          let draft = await tx.bookingDraft.upsert({ where: { id: params.draftId }, update: {}, create: { id: params.draftId, customerId, vehicleId } });
           if (draft.customerId !== customerId || draft.vehicleId !== vehicleId) throw new HoldError("Booking draft unavailable", 403);
+          if (draft.reservationId) {
+            await upgradeBookingFingerprint(tx, draft.reservationId);
+            draft = await tx.bookingDraft.findUniqueOrThrow({ where: { id: draft.id } });
+          }
           if (!params.revision || params.revision < draft.revision || (params.revision === draft.revision && draft.fingerprint !== bookingFingerprint)) throw new HoldError("Obsolete booking revision", 409);
           if (draft.reservationId) {
             const prior = await tx.reservation.findUnique({ where: { id: draft.reservationId } });
@@ -54,7 +59,7 @@ export async function createOrRefreshHold(params: {
               throw new HoldError("Checkout is immutable; resume the existing reservation", 409);
             }
           }
-          await tx.bookingDraft.update({ where: { id: draft.id }, data: { revision: params.revision, fingerprint: bookingFingerprint } });
+          await tx.bookingDraft.update({ where: { id: draft.id }, data: { revision: params.revision, fingerprint: bookingFingerprint, fingerprintVersion: 2 } });
         }
         const now = new Date();
         const existingHold = await tx.reservation.findFirst({ where: { customerId, vehicleId, status: "CHECKOUT_HOLD" }, orderBy: { createdAt: "desc" }, include: { extras: true, coupon: true } });

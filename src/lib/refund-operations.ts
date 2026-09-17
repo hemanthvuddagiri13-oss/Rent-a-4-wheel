@@ -64,6 +64,14 @@ async function applyRefundObservationTx(tx: Prisma.TransactionClient, refundId: 
       await quarantineRefund(tx, current.id, "REFUND_SUCCESS_REVERSED_BY_PROVIDER");
     }
     const updated = await tx.refund.update({ where: { id: refundId }, data: { status, legacyUncertain: false, stripeRefundId: observed.id, lastError: observed.failure_reason ?? null } });
+    if (status !== "PENDING") {
+      // Authoritative observation supersedes any in-flight poll. Revoking its
+      // token in this commit fences both its result and its error handler.
+      await tx.financialOperation.updateMany({ where: { key: current.idempotencyKey, kind: "REFUND", reservationId: current.reservationId }, data: {
+        state: "OBSERVED", nextAttemptAt: null, leaseToken: null, leaseExpiresAt: null,
+        providerId: observed.id, result: JSON.parse(JSON.stringify(observed)), consecutiveFailures: 0,
+      } });
+    }
     const payment = await tx.payment.findUniqueOrThrow({ where: { id: current.paymentId } });
     const refunded = await tx.refund.aggregate({ where: { paymentId: payment.id, status: "SUCCEEDED" }, _sum: { amountCents: true } });
     const pending = await tx.refund.count({ where: { paymentId: payment.id, status: "PENDING" } });

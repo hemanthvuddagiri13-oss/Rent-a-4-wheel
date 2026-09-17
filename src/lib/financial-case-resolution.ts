@@ -45,18 +45,49 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
       evidence = json({ providerId: refund.id, status: refund.status, amount: refund.amount, paymentIntentId: intentId });
     }
     if (intent) {
-      if (intent.currency !== "usd" || intent.amount !== c.amountCents) throw new Error("Provider amount/currency mismatch");
+      if (intent.id !== providerId) throw new Error("Provider returned a different identity");
+      if ((current.currency !== null && intent.currency !== current.currency) || (current.amountCents !== null && intent.amount !== current.amountCents)) throw new Error("Provider amount/currency mismatch");
       const owner = await tx.user.findUniqueOrThrow({ where: { id: r.customerId } });
       const customer = typeof intent.customer === "string" ? intent.customer : intent.customer?.id;
       if (!owner.stripeCustomerId || customer !== owner.stripeCustomerId) throw new Error("Provider customer mismatch");
       if (intent.metadata.reservationId !== r.id) throw new Error("Provider reservation evidence missing");
       if (input.action === "CONFIRM_FAILURE" && intent.status !== "canceled") throw new Error("Only provider-confirmed cancellation proves no future charge");
       let op = c.operationId ? await tx.financialOperation.findUniqueOrThrow({ where: { id: c.operationId } }) : null;
+      if (op && (op.kind !== c.kind || op.reservationId !== r.id)) throw new Error("Operation kind or reservation mismatch");
+      if (op?.leaseExpiresAt && op.leaseExpiresAt > new Date()) throw new Error("Operation is actively leased; retry after observation");
       if (op?.providerId && op.providerId !== intent.id) throw new Error("Operation provider identity mismatch");
       if (!op && c.kind === "DEPOSIT") {
         const matches = await tx.financialOperation.findMany({ where: { reservationId: r.id, kind: "DEPOSIT", providerId: intent.id } });
         if (matches.length > 1) throw new Error("Conflicting provider mappings require escalation");
         if (matches.length === 1) op = matches[0];
+      }
+      const terms = op?.payload as { amount?: number; currency?: string; customer?: string; metadata?: Record<string, string> } | undefined;
+      if ((terms?.amount !== undefined && c.kind !== "DEPOSIT_RELEASE" && terms.amount !== intent.amount) || (terms?.currency && terms.currency !== intent.currency) || (terms?.customer && terms.customer !== customer)) throw new Error("Original operation terms mismatch");
+      if (terms?.metadata && Object.entries(terms.metadata).some(([key, value]) => intent!.metadata[key] !== value)) throw new Error("Original provider metadata mismatch");
+      if (current.amountCents === null || current.currency === null) {
+        // Missing records may be investigated using an already bound identity
+        // and exact original provider lineage; reservation metadata alone fails.
+        if (!op || op.providerId !== intent.id || intent.metadata.operationKey !== op.key || !Number.isSafeInteger(intent.amount) || intent.amount <= 0 || !/^[a-z]{3}$/.test(intent.currency)) throw new Error("Amount/currency evidence unknown; escalate for investigation");
+        if (c.kind === "DEPOSIT" && r.deposit?.stripePaymentIntentId === intent.id && (r.deposit.amountCents !== intent.amount || r.deposit.currency !== intent.currency)) throw new Error("Linked authorization terms mismatch");
+        await tx.financialCase.update({ where: { id: c.id }, data: { amountCents: intent.amount, currency: intent.currency } });
+      }
+      const expectedKind = c.kind === "DEPOSIT_RELEASE" ? "DEPOSIT" : c.kind;
+      const ownership = await tx.providerObjectOwnership.findUnique({ where: { providerId: intent.id } });
+      if (ownership && (ownership.kind !== expectedKind || ownership.reservationId !== r.id || (c.kind !== "DEPOSIT_RELEASE" && ownership.operationId && ownership.operationId !== op?.id))) throw new Error("Provider identity already belongs to another operation");
+      if (c.kind === "RENTAL") {
+        if (!["automatic", "automatic_async"].includes(intent.capture_method) || (intent.metadata.purpose && intent.metadata.purpose !== "rental")) throw new Error("Rental purpose/capture method mismatch");
+        const payment = r.payments.find(p => p.id === c.paymentId || (op && p.idempotencyKey === op.key));
+        if (!payment || payment.type !== "RENTAL" || payment.amountCents !== intent.amount || payment.currency !== intent.currency || (payment.stripePaymentIntentId && payment.stripePaymentIntentId !== intent.id) || (ownership?.paymentId && ownership.paymentId !== payment.id)) throw new Error("Original rental payment identity mismatch");
+        if (intent.metadata.paymentId && intent.metadata.paymentId !== payment.id) throw new Error("Provider payment metadata mismatch");
+        if (intent.metadata.operationKey && intent.metadata.operationKey !== (op?.key ?? payment.idempotencyKey)) throw new Error("Provider idempotency lineage mismatch");
+        if (payment.stripePaymentIntentId !== intent.id && intent.metadata.paymentId !== payment.id && (!op || intent.metadata.operationKey !== op.key)) throw new Error("Ambiguous legacy rental identity");
+      } else if (["DEPOSIT", "DEPOSIT_RELEASE"].includes(c.kind)) {
+        if (intent.capture_method !== "manual" || intent.metadata.purpose !== "security_deposit") throw new Error("Deposit purpose/capture method mismatch");
+        const original = c.kind === "DEPOSIT_RELEASE" ? await tx.financialOperation.findFirst({ where: { kind: "DEPOSIT", reservationId: r.id, providerId: intent.id } }) : op;
+        if (intent.metadata.paymentId) throw new Error("Rental payment metadata on deposit");
+        if (intent.metadata.operationKey && original?.key !== intent.metadata.operationKey) throw new Error("Provider idempotency lineage mismatch");
+        const linkedLegacy = c.kind === "DEPOSIT" && !original && r.deposit?.stripePaymentIntentId === intent.id && ownership?.depositId === r.deposit.id;
+        if (!linkedLegacy && (!original || (original.providerId !== intent.id && intent.metadata.operationKey !== original.key))) throw new Error("Ambiguous legacy deposit identity");
       }
       if (!op) op = await prepareOperation(tx, { key: "adopt:" + c.id, kind: c.kind, reservationId: r.id, payload: { legacy: true } });
       const superseded = c.kind === "DEPOSIT" && r.deposit?.operationId && r.deposit.operationId !== op.id && !r.deposit.legacyUncertain;

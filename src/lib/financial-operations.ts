@@ -45,7 +45,12 @@ export async function runOperation<T extends { id: string }>(operation: Financia
 }): Promise<T> {
   const token = randomUUID();
   const claimed = await prisma.$transaction(async tx => {
-    await assertEventFence(tx);
+    if (operation.reservationId) await lockReservation(tx, operation.reservationId);
+    else await assertEventFence(tx);
+    if (operation.kind === "REFUND") {
+      const refund = await tx.refund.findUnique({ where: { idempotencyKey: operation.key } });
+      if (refund && refund.status !== "PENDING" && !refund.legacyUncertain) throw new OperationPendingError("Refund already terminal");
+    }
     const now = new Date();
     const result = await tx.financialOperation.updateMany({
       where: { id: operation.id, state: { notIn: ["REVIEW", "DEAD_LETTER"] }, OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
