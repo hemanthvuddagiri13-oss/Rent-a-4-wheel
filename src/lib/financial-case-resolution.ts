@@ -86,7 +86,7 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
         }
       } else {
         const paid = r.payments.filter(p=>p.type==="RENTAL"&&p.status==="SUCCEEDED").reduce((n,p)=>n+p.amountCents,0);
-        const returned = r.refunds.filter(f=>f.status==="SUCCEEDED").reduce((n,f)=>n+f.amountCents,0);
+        const returned = r.refunds.filter(f=>f.status==="SUCCEEDED" && r.payments.some(p=>p.id===f.paymentId && p.type==="RENTAL" && p.status==="SUCCEEDED")).reduce((n,f)=>n+f.amountCents,0);
         if (!paid || returned < paid || r.refunds.some(f=>f.status==="PENDING")) throw new Error("Inventory release requires durable full refund");
         await tx.reservation.update({ where: { id: r.id }, data: { status: r.status.startsWith("CANCELLED") ? r.status : "EXPIRED", financialDisposition: "TERMINATED", expiresAt: null } });
         await planAllDepositReleases(tx,r.id);

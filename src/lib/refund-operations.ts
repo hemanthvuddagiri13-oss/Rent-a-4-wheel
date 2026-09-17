@@ -28,7 +28,9 @@ export async function reserveRefund(tx: Prisma.TransactionClient, params: Reques
   if (unfinishedTrip) throw new Error("Cannot refund an unfinished trip through this operation");
   if (["ACTIVE", "RETURN_IN_PROGRESS", "COMPLETED", "DISPUTED", "UNDER_CLAIM_REVIEW"].includes(reservation.status)) throw new Error("Operational or completed trips require a separate audited adjustment workflow");
   if (reservation.financialDisposition === "REVIEW") throw new Error("Resolve financial review before requesting a refund");
-  if (params.amountCents === remaining) {
+  const rentalPaid = await tx.payment.aggregate({ where: { reservationId: reservation.id, type: "RENTAL", status: "SUCCEEDED" }, _sum: { amountCents: true } });
+  const rentalHeld = await tx.refund.aggregate({ where: { reservationId: reservation.id, payment: { type: "RENTAL", status: "SUCCEEDED" }, OR: [{ status: { in: ["PENDING", "SUCCEEDED"] } }, { legacyUncertain: true }] }, _sum: { amountCents: true } });
+  if (params.amountCents + (rentalHeld._sum.amountCents ?? 0) >= (rentalPaid._sum.amountCents ?? 0)) {
     if (["ACTIVE", "RETURN_IN_PROGRESS"].includes(reservation.status)) throw new Error("Cannot fully refund an active trip through this operation");
     await tx.reservation.update({ where: { id: reservation.id }, data: { financialDisposition: "REFUND_REQUIRED" } });
   }
@@ -71,7 +73,7 @@ async function applyRefundObservationTx(tx: Prisma.TransactionClient, refundId: 
     if (status === "SUCCEEDED") {
       const reservation = await tx.reservation.findUniqueOrThrow({ where: { id: current.reservationId } });
       const captured = await tx.payment.aggregate({ where: { reservationId: reservation.id, type: "RENTAL", status: "SUCCEEDED" }, _sum: { amountCents: true } });
-      const totalRefunded = await tx.refund.aggregate({ where: { reservationId: reservation.id, status: "SUCCEEDED" }, _sum: { amountCents: true } });
+      const totalRefunded = await tx.refund.aggregate({ where: { reservationId: reservation.id, status: "SUCCEEDED", payment: { type: "RENTAL", status: "SUCCEEDED" } }, _sum: { amountCents: true } });
       const started = await tx.trip.count({ where: { reservationId: reservation.id, startedAt: { not: null } } });
       if (!started && reservation.financialDisposition === "REFUND_REQUIRED" && (totalRefunded._sum.amountCents ?? 0) >= (captured._sum.amountCents ?? 0) && [...PRE_TRIP_STATES, "PAYMENT_FAILED", "AWAITING_PAYMENT", "CHECKOUT_HOLD", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(reservation.status)) {
         await tx.reservation.update({ where: { id: reservation.id }, data: { status: reservation.status.startsWith("CANCELLED") ? reservation.status : "EXPIRED", financialDisposition: "TERMINATED", expiresAt: null } });

@@ -39,6 +39,11 @@ describe("Batch 1D durable boundaries",()=>{
   await handlePaymentIntentSucceeded({id:p.stripePaymentIntentId,metadata:{}} as never);
   if(amount===15000){expect((await prisma.reservation.findUniqueOrThrow({where:{id:r.id}})).financialDisposition).toBe("TERMINATED");expect((await hold()).id).not.toBe(r.id)}else await expect(hold()).rejects.toThrow();
  });
+ it("a refund exhausting one of multiple captures remains partial for reservation inventory",async()=>{
+  const {r,p}=await fixture();await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:1000,stripePaymentIntentId:"pi_second_"+r.id}});
+  const f=await getOrCreateRefundOperation({reservationId:r.id,paymentId:p.id,amountCents:15000,idempotencyKey:randomUUID()});provider.refunds.create.mockResolvedValue({id:"re_partial_multi_"+r.id,status:"succeeded"});await executeRefundOperation(f.id,p.stripePaymentIntentId);
+  const saved=await prisma.reservation.findUniqueOrThrow({where:{id:r.id}});expect(saved.status).toBe("CONFIRMED");expect(saved.financialDisposition).toBe("OPEN");
+ });
  it("commits a generation-specific release when provider discovery races cancellation, surviving a crash before dispatcher continuation",async()=>{
   const {r}=await fixture("CONFIRMED",30000),entered=barrier(),release=barrier();const intent=capture("pi_dep_"+r.id);
   provider.paymentIntents.create.mockImplementation(async()=>{entered.release();await release.wait;return intent});
