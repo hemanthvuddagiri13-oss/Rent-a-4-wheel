@@ -17,7 +17,7 @@ const REQUIRED_DOCUMENT_TYPES = ["LICENSE_FRONT", "LICENSE_BACK", "SELFIE_WITH_L
  * UI that wants to show a checklist call this same function, so the rule
  * can never drift between what's displayed and what's enforced.
  */
-export async function evaluateTripStartGate(reservationId: string, db: Prisma.TransactionClient = prisma): Promise<TripStartGateResult> {
+export async function evaluateTripStartGate(reservationId: string, db: Prisma.TransactionClient = prisma, stage: "START" | "KEY_RELEASE" = "START"): Promise<TripStartGateResult> {
   const reasons: string[] = [];
 
   const reservation = await db.reservation.findUnique({
@@ -88,6 +88,9 @@ export async function evaluateTripStartGate(reservationId: string, db: Prisma.Tr
   }
 
   const settings = await getSiteSettings();
+  if (stage === "START" && !await db.tripChecklist.findUnique({ where: { reservationId_phase_role_step: { reservationId, phase: "PICKUP", role: "HOST", step: "KEYS_RELEASED" } } })) {
+    reasons.push("Host has not released the keys.");
+  }
   const windowStart = new Date(reservation.pickupAt.getTime() - settings.checkInWindowHours * 60 * 60 * 1000);
   const now = new Date();
   if (now < windowStart) {

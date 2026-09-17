@@ -132,7 +132,8 @@ export function VehicleFilters({ makes }: { makes: string[] }) {
           <Input
             type="number"
             min={0}
-            placeholder="Min"
+              placeholder="Min"
+              aria-label="Minimum daily price in dollars"
             defaultValue={searchParams.get("priceMin") ?? ""}
             onChange={(e) => update({ priceMin: e.target.value || undefined })}
           />
@@ -140,7 +141,8 @@ export function VehicleFilters({ makes }: { makes: string[] }) {
           <Input
             type="number"
             min={0}
-            placeholder="Max"
+              placeholder="Max"
+              aria-label="Maximum daily price in dollars"
             defaultValue={searchParams.get("priceMax") ?? ""}
             onChange={(e) => update({ priceMax: e.target.value || undefined })}
           />

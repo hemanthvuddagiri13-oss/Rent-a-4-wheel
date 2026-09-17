@@ -55,6 +55,7 @@ export default async function AdminLegalPage() {
               <Label htmlFor={`review-${doc.id}`}>Still needs attorney review</Label>
             </div>
             <Button type="submit">Save {doc.title}</Button>
+            <div><Label htmlFor={`attorney-${doc.id}`}>Texas attorney approval reference (required to enable signing)</Label><Input id={`attorney-${doc.id}`} name="reviewReference" className="mt-2" placeholder="Counsel name and approval record/date" /></div>
           </form>
         ))}
       </div>

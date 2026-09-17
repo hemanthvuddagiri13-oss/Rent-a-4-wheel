@@ -25,6 +25,7 @@ enum Role {
 }
 
 model User {
+  marketplaceFiles MarketplaceFile[]
   id            String    @id @default(cuid())
   name          String?
   email         String    @unique
@@ -185,6 +186,8 @@ enum StripeConnectStatus {
 // and receives payouts. Distinct from `VehicleOwner`, which tracks a purely
 // financial/legal ownership arrangement for company-managed vehicles.
 model HostProfile {
+  files MarketplaceFile[]
+  vehicleOwners VehicleOwner[]
   id     String @id @default(cuid())
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -223,6 +226,8 @@ enum HostEmployeeRole {
 // Grants a user (who is not the host account owner) scoped access to a
 // single host's vehicles and bookings — never to any other host's data.
 model HostEmployee {
+  isActive Boolean @default(true)
+  expiresAt DateTime?
   id     String      @id @default(cuid())
   hostId String
   host   HostProfile @relation(fields: [hostId], references: [id], onDelete: Cascade)
@@ -275,6 +280,11 @@ enum OwnershipType {
 }
 
 model Vehicle {
+  marketplaceFiles MarketplaceFile[]
+  listingRevision Int @default(1)
+  listingApproval String @default("APPROVED")
+  location String @default("Dallas, TX")
+  rules String? @db.Text
   id   String @id @default(cuid())
   slug String @unique
 
@@ -396,6 +406,9 @@ model VehicleFeatureOnVehicle {
 // ---------------------------------------------------------------------------
 
 model VehicleOwner {
+  hostId String?
+  host HostProfile? @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([hostId])
   id    String  @id @default(cuid())
   name  String
   email String?
@@ -1034,6 +1047,7 @@ enum LegalDocumentType {
 // Creating one is refused server-side while the source LegalDocument is
 // still flagged `needsAttorneyReview` (see src/lib/agreements.ts).
 model AgreementAcceptance {
+  subjectSnapshot Json?
   id   String            @id @default(cuid())
   type LegalDocumentType
 
@@ -1523,6 +1537,29 @@ model ProviderObjectOwnership {
   paymentId String?
   depositId String?
   refundId String?
+}
+
+model MarketplaceFile {
+  id String @id @default(cuid())
+  hostId String
+  host HostProfile @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vehicleId String?
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  uploadedById String
+  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purpose String
+  storageKey String
+  mimeType String
+  sha256 String
+  scanStatus String
+  createdAt DateTime @default(now())
+  @@index([hostId, vehicleId])
+}
+
+model MarketplaceRateLimit {
+  key String @id
+  windowStart DateTime @default(now())
+  count Int @default(1)
 }
 
 model FinancialCase {

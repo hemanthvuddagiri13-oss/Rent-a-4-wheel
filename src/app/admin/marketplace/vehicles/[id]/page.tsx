@@ -1,0 +1,12 @@
+import { prisma } from "@/lib/prisma";
+import { notFound } from "next/navigation";
+import { Panel } from "@/components/marketplace/workspace";
+import { ActionForm } from "@/components/marketplace/action-form";
+import { formatCurrency } from "@/lib/utils";
+export default async function ReviewListing({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const vehicle = await prisma.vehicle.findUnique({ where: { id }, include: { host: true, agreementAcceptances: { where: { type: "HOST_AGREEMENT" }, orderBy: { signedAt: "desc" } } } });
+  if (!vehicle) notFound();
+  const files = await prisma.marketplaceFile.findMany({ where: { vehicleId: id }, orderBy: { createdAt: "desc" } });
+  return <div className="space-y-6"><h1 className="font-display text-3xl text-white">Review {vehicle.year} {vehicle.make} {vehicle.model}</h1><Panel title="Listing evidence"><dl className="grid gap-3 text-sm text-silver"><dt>Host</dt><dd>{vehicle.host?.legalName} · {vehicle.host?.onboardingStatus}</dd><dt>Vehicle identification</dt><dd>{vehicle.vin} · {vehicle.licensePlate}</dd><dt>Pricing</dt><dd>{formatCurrency(vehicle.dailyRateCents)} daily · {formatCurrency(vehicle.weeklyRateCents)} weekly · {formatCurrency(vehicle.monthlyRateCents)} monthly</dd><dt>Registration / insurance expiration</dt><dd>{vehicle.registrationExpiresAt?.toISOString().slice(0, 10)} / {vehicle.insuranceExpiresAt?.toISOString().slice(0, 10)}</dd><dt>Description and rules</dt><dd>{vehicle.description}<br />{vehicle.rules}</dd><dt>Listing revision</dt><dd>{vehicle.listingRevision}</dd></dl></Panel><Panel title="Private compliance files"><ul className="space-y-4 text-silver">{files.map(f => <li key={f.id}>{f.purpose} · {f.scanStatus} {f.scanStatus === "CLEAN" && <a target="_blank" rel="noreferrer" className="text-gold-bright underline" href={`/api/marketplace/files/${f.id}`}>Review file</a>}</li>)}</ul></Panel><Panel title="Signed listing agreements">{vehicle.agreementAcceptances.map(a => <p key={a.id} className="mb-3 text-silver">{a.documentVersion} · {a.signedAt.toISOString()} · {a.signerName} <a className="text-gold-bright underline" href={`/api/host/vehicles/${id}/agreement?acceptanceId=${a.id}`}>Signed PDF</a></p>)}</Panel><Panel title="Approval decision"><ActionForm endpoint="/api/admin/marketplace" action="vehicle" values={{ id }} label="Record listing decision" fields={[{ name: "status", label: "Decision", options: ["APPROVED", "REJECTED"] }, { name: "reason", label: "Evidence review and decision reason" }]} /></Panel></div>;
+}

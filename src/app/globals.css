@@ -1,4 +1,10 @@
 @import "tailwindcss";
+
+.workspace-input {
+  width: 100%; min-width: 0; min-height: 44px; border: 1px solid #ffffff30;
+  border-radius: .5rem; padding: .65rem .8rem; background: #17191c; color: #fff;
+}
+.workspace-input:focus-visible { outline: 2px solid #d6b66a; outline-offset: 3px; }
 @plugin "tailwindcss-animate";
 
 @custom-variant dark (&:is(.dark *));

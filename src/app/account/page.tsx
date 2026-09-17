@@ -19,7 +19,7 @@ export default async function AccountPage() {
   const [user, reservations] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.user.id }, include: { customer: true } }),
     prisma.reservation.findMany({
-      where: { customerId: session.user.id, status: { not: "CHECKOUT_HOLD" } },
+      where: { customerId: session.user.id },
       include: { vehicle: { include: { images: { take: 1, orderBy: { position: "asc" } } } } },
       orderBy: { pickupAt: "desc" },
     }),

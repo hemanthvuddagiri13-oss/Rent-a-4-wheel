@@ -1,6 +1,7 @@
 import type { Prisma, ReservationStatus } from "@prisma/client";
 import { lockReservation, assertFinancialTripStart } from "@/lib/financial-locks";
 import { planAllDepositReleases } from "@/lib/deposit-release-plan";
+import { assertReturnFinancialAuthority, assertNoUnresolvedFinancialReview } from "@/lib/return-financial-authority";
 
 /**
  * The complete booking lifecycle. Every legal transition is listed
@@ -130,11 +131,17 @@ export async function transitionReservation(
   const current = await lockReservation(tx, id);
   if (!force) assertTransitionAllowed(from, to);
   if (to === "ACTIVE") await assertFinancialTripStart(tx, id);
+  if (to === "COMPLETED") {
+    await assertReturnFinancialAuthority(tx, id);
+    // Completion (including emergency completion) cannot decide disposition.
+    data.financialDisposition = current.financialDisposition;
+  }
   if ((current.financialDisposition !== "OPEN" || ["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(current.status)) &&
       !["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST", "EXPIRED", "COMPLETED"].includes(to)) {
     throw new Error("Financially terminated reservation cannot reopen");
   }
   if (["CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(to)) {
+    await assertNoUnresolvedFinancialReview(tx, id);
     const allowed = ["CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START"];
     const trip = await tx.trip.findUnique({ where: { reservationId: id } });
     if (!allowed.includes(current.status) || trip?.startedAt) throw new Error("Started or operational reservations cannot be cancelled");

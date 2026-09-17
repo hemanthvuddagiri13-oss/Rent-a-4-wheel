@@ -13,8 +13,12 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { Logo } from "@/components/layout/logo";
+import { auth } from "@/auth";
+import { canAccessAdmin } from "@/lib/rbac";
+import { redirect } from "next/navigation";
 
 const links = [
+  { href: "/admin/marketplace", label: "Marketplace operations", icon: Users },
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/vehicles", label: "Vehicles", icon: Car },
   { href: "/admin/financial-cases", label: "Financial reconciliation", icon: ClipboardList },
@@ -29,10 +33,12 @@ const links = [
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
-export default function AdminLayout({ children }: LayoutProps<"/admin">) {
+export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
+  const session = await auth();
+  if (!session?.user || !canAccessAdmin(session.user.role)) redirect("/sign-in?callbackUrl=/admin");
   return (
-    <div className="mx-auto flex max-w-[1600px] flex-col lg:flex-row">
-      <aside className="shrink-0 border-b border-white/10 bg-surface/60 lg:w-64 lg:border-b-0 lg:border-r">
+    <div className="mx-auto flex w-full min-w-0 max-w-[1600px] flex-col lg:flex-row">
+      <aside className="min-w-0 shrink-0 border-b border-white/10 bg-surface/60 lg:w-64 lg:border-b-0 lg:border-r">
         <div className="p-5">
           <Logo />
           <p className="mt-1 text-xs uppercase tracking-wide text-gold-bright">Admin</p>
@@ -50,7 +56,7 @@ export default function AdminLayout({ children }: LayoutProps<"/admin">) {
           ))}
         </nav>
       </aside>
-      <div className="min-w-0 flex-1 p-5 sm:p-8">{children}</div>
+      <main id="main-content" className="min-w-0 flex-1 p-5 sm:p-8">{children}</main>
     </div>
   );
 }

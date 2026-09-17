@@ -15,6 +15,7 @@ export default async function FinancialCases() {
  const oldest=await prisma.financialOperation.findFirst({where:{state:{in:["READY","RETRY","POLL","RUNNING"]}},orderBy:{createdAt:"asc"}});
  return <main><h1>Financial reconciliation</h1><p>Quarantined/manual cases: {quarantined} · Failed refunds: {failedRefunds} · Dead-letter deliveries: {failedOutbox}</p><p>Operation counts: {counts.map(c=>c.state+": "+c._count).join(" · ")}</p><p>Oldest pending: {oldest?.createdAt.toISOString() ?? "None"}</p>
  <p>Adoption verifies Stripe identity and preserves review. Settlement requires a separate super administrator decision. Provider absence never proves failure.</p>
+ <p>For a trip in return review, AUTHORIZE_SETTLEMENT approves a no-additional-charge return only after all provider uncertainty is resolved. It preserves the inspection workflow: the host must retry completion, which rechecks current financial evidence before planning deposit release.</p>
  {cases.map(c=><article key={c.id} className="my-6 border p-4"><h2>{c.kind} · {c.status} · {c.amountCents ?? "Unknown amount"} {c.currency ?? "Unknown currency"}</h2>
  <p>Reservation {c.reservationId} · Customer {c.customerId} · Created {c.createdAt.toISOString()} · Owner {c.assignedToId ?? "Unassigned"}</p>
  <p>{c.reason} · Attempts {c.attempts} · Last error {c.lastError ?? "None"} · Resolution {c.resolution ?? "Pending"}</p><p>Original key {c.originalKey ?? "Unknown"} · Provider {c.providerId ?? "Unknown"}</p>

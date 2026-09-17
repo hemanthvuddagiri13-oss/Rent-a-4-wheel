@@ -54,12 +54,12 @@ const nextConfig: NextConfig = {
       },
       {
         // Customer check-in / condition-report photo capture.
-        source: "/account/trips/:path*",
+        source: "/account/reservations/:path*",
         headers: [{ key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" }],
       },
       {
         // Host pickup/return inspection photo capture.
-        source: "/host/bookings/:path*",
+        source: "/host/reservations/:path*",
         headers: [{ key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" }],
       },
     ];

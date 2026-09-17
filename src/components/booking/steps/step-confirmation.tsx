@@ -8,13 +8,15 @@ import { formatCurrency } from "@/lib/utils";
 
 export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; state: BookingState }) {
   const [outcome, setOutcome] = useState("processing");
+  const [paidCents, setPaidCents] = useState<number | null>(null);
   useEffect(() => {
     let stopped = false;
-    fetch(`/api/reservations/${state.reservationId}/status`).then(async response => {
+    const poll = () => fetch(`/api/reservations/${state.reservationId}/status`, { cache: "no-store" }).then(async response => {
       if (!response.ok) throw new Error("Status unavailable");
-      const data = await response.json(); if (!stopped) setOutcome(data.outcome);
+      const data = await response.json(); if (!stopped) { setOutcome(data.outcome); setPaidCents(data.paidCents); }
     }).catch(() => { if (!stopped) setOutcome("status_unavailable"); });
-    return () => { stopped = true; };
+    void poll(); const timer = setInterval(poll, 5000);
+    return () => { stopped = true; clearInterval(timer); };
   }, [state.reservationId]);
   return (
     <div className="flex flex-col items-center py-8 text-center">
@@ -29,7 +31,7 @@ export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; 
         <Row label="Vehicle" value={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} />
         <Row label="Pickup" value={`${state.pickupDate} at ${state.pickupTime}`} />
         <Row label="Return" value={`${state.returnDate} at ${state.returnTime}`} />
-        {state.breakdown && <Row label="Amount Paid" value={formatCurrency(state.breakdown.totalCents)} />}
+        {paidCents !== null && <Row label="Amount Paid" value={formatCurrency(paidCents)} />}
         {state.breakdown && state.breakdown.depositCents > 0 && (
           <Row label="Security Deposit" value={formatCurrency(state.breakdown.depositCents)} />
         )}
@@ -38,7 +40,7 @@ export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; 
 
       <div className="mt-8 flex flex-col gap-3 sm:flex-row">
         <Button asChild size="lg">
-          <Link href="/account">View Reservation</Link>
+          <Link href={`/account/reservations/${state.reservationId}`}>View Reservation</Link>
         </Button>
         {state.reservationId && (
           <Button asChild variant="outline" size="lg">

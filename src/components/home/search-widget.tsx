@@ -3,12 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
-import { MapPin, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 
-const LOCATIONS = ["Dallas Downtown", "DFW Airport", "Dallas Love Field", "Plano", "Irving"];
+const LOCATIONS = ["Dallas", "Plano", "Irving", "Fort Worth", "Arlington"];
 
 function defaultDate(daysFromNow: number) {
   const d = new Date();
@@ -44,19 +43,8 @@ export function SearchWidget() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="lg:col-span-1">
           <Label htmlFor="pickup-location">Pickup Location</Label>
-          <Select value={location} onValueChange={setLocation}>
-            <SelectTrigger id="pickup-location" className="mt-1.5">
-              <MapPin className="mr-1.5 h-4 w-4 text-gold" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {LOCATIONS.map((loc) => (
-                <SelectItem key={loc} value={loc}>
-                  {loc}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <input id="pickup-location" list="pickup-locations" value={location} onChange={e => setLocation(e.target.value)} maxLength={200} placeholder="City or area" className="workspace-input mt-1.5" />
+          <datalist id="pickup-locations">{LOCATIONS.map(loc => <option key={loc} value={loc} />)}</datalist>
         </div>
 
         <div>

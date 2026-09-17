@@ -12,6 +12,9 @@ import { CancelReservationButton } from "@/components/account/cancel-reservation
 import { formatCurrency } from "@/lib/utils";
 import { RESERVATION_STATUS_LABELS } from "@/lib/constants";
 import { canCustomerCancel } from "@/lib/reservation-rules";
+import { TripConsole } from "@/components/marketplace/trip-console";
+import { PaymentStatus } from "@/components/marketplace/payment-status";
+import { ActionForm } from "@/components/marketplace/action-form";
 
 export const metadata: Metadata = { title: "Reservation Details", robots: { index: false } };
 
@@ -53,8 +56,9 @@ export default async function ReservationDetailPage({ params }: { params: Promis
       </div>
 
       <div className="mt-6 rounded-xl border border-white/10 bg-card p-6">
-        <Row label="Pickup" value={reservation.pickupAt.toLocaleString("en-US")} />
-        <Row label="Return" value={reservation.returnAt.toLocaleString("en-US")} />
+        <Row label="Pickup" value={reservation.pickupAt.toLocaleString("en-US", { timeZone: reservation.bookingTimezone })} />
+        <Row label="Return" value={reservation.returnAt.toLocaleString("en-US", { timeZone: reservation.bookingTimezone })} />
+        <p className="mt-2 text-xs text-muted">Times: {reservation.bookingTimezone}</p>
         <Row label="Location" value={reservation.pickupLocation} />
         <Separator className="my-3" />
         <Row label="Rental Subtotal" value={formatCurrency(reservation.subtotalCents)} />
@@ -97,6 +101,10 @@ export default async function ReservationDetailPage({ params }: { params: Promis
           <Link href="/contact">Contact Support</Link>
         </Button>
       </div>
+      <div className="mt-8 space-y-6"><PaymentStatus id={reservation.id} />
+        {["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(reservation.status) && <Link href={`/book/${reservation.vehicleId}?reservationId=${reservation.id}`} className="block text-gold-bright underline">Resume checkout</Link>}
+        <details className="rounded-xl border border-white/10 p-5"><summary className="cursor-pointer text-white">Upload or replace an identity document</summary><div className="mt-5"><ActionForm endpoint="/api/documents/upload" multipart values={{ reservationId: reservation.id }} label="Upload identity document" fields={[{ name: "type", label: "Document", options: ["LICENSE_FRONT", "LICENSE_BACK", "SELFIE_WITH_LICENSE"] }, { name: "file", label: "Private image (maximum 8 MB)", type: "file" }]} /></div></details>
+        <TripConsole reservationId={reservation.id} /></div>
     </div>
   );
 }

@@ -114,6 +114,7 @@ export function BookingWizard({ vehicle, extras, bookingTimezone = DEFAULT_BOOKI
   if (resuming) return <p role="status">{resumeError ?? "Resuming reservation…"}</p>;
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+      <h1 className="mb-6 font-display text-3xl font-semibold text-white">Book your rental</h1>
       <ProgressSteps current={step} />
       <p className="text-sm text-muted">All booking times: {state.bookingTimezone}</p>
 

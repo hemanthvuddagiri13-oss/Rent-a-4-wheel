@@ -97,6 +97,7 @@ async function fullySetUpReservation(paid = true) {
     },
   });
 
+  await prisma.tripChecklist.create({ data: { reservationId: reservation.id, phase: "PICKUP", role: "HOST", step: "KEYS_RELEASED", completedById: hostUser.id } });
   return { vehicle, customer, hostUser, reservation, hostReport, customerReport };
 }
 
@@ -110,6 +111,12 @@ describe("evaluateTripStartGate — complete happy path", () => {
 });
 
 describe("evaluateTripStartGate — individually missing preconditions", () => {
+  it("requires key release for start but lets the host evaluate readiness before handing over keys", async () => {
+    const { reservation } = await fullySetUpReservation();
+    await prisma.tripChecklist.deleteMany({ where: { reservationId: reservation.id } });
+    expect((await evaluateTripStartGate(reservation.id)).reasons).toContain("Host has not released the keys.");
+    expect((await evaluateTripStartGate(reservation.id, prisma, "KEY_RELEASE")).canStart).toBe(true);
+  });
   it("blocks the trip when the selfie-holding-license document is missing", async () => {
     const { reservation } = await fullySetUpReservation();
     await prisma.driverDocument.deleteMany({ where: { reservationId: reservation.id, type: "SELFIE_WITH_LICENSE" } });

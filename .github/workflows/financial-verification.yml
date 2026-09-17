@@ -1,7 +1,7 @@
 name: Financial verification
 on:
   push:
-    branches: [claude/tender-goodall-6aobde]
+    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -9,7 +9,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:17
@@ -54,3 +54,15 @@ jobs:
           done
       - name: Production build
         run: npm run build
+      - name: Return financial-review concurrency and file revocation (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/return-financial-review.test.ts tests/business-file-revocation.test.ts || exit 1
+          done
+      - name: Marketplace screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marketplace-screenshots
+          path: test-artifacts/marketplace
+          if-no-files-found: warn

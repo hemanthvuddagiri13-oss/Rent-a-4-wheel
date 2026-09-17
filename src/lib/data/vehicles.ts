@@ -3,6 +3,8 @@ import type { Prisma } from "@prisma/client";
 import { getAvailableVehicleIds } from "@/lib/availability";
 import type { VehicleCardData } from "@/components/vehicles/vehicle-card";
 
+const publicInventory: Prisma.VehicleWhereInput = { status: "ACTIVE", isDemo: false, listingApproval: "APPROVED", OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] };
+
 type VehicleWithImages = {
   id: string;
   slug: string;
@@ -63,7 +65,7 @@ const cardSelect = {
 export async function getFeaturedVehicles(limit = 9): Promise<VehicleCardData[]> {
   try {
     const vehicles = await prisma.vehicle.findMany({
-      where: { status: "ACTIVE" },
+      where: publicInventory,
       select: cardSelect,
       orderBy: { createdAt: "desc" },
       take: limit,
@@ -75,6 +77,7 @@ export async function getFeaturedVehicles(limit = 9): Promise<VehicleCardData[]>
 }
 
 export interface VehicleSearchFilters {
+  location?: string;
   pickupAt?: Date;
   returnAt?: Date;
   category?: string;
@@ -88,8 +91,9 @@ export interface VehicleSearchFilters {
 
 export async function searchVehicles(filters: VehicleSearchFilters): Promise<VehicleCardData[]> {
   try {
-    const where: Prisma.VehicleWhereInput = { status: "ACTIVE" };
+    const where: Prisma.VehicleWhereInput = { ...publicInventory };
 
+    if (filters.location) where.location = { contains: filters.location, mode: "insensitive" };
     if (filters.category && filters.category !== "ALL") {
       where.category = filters.category as Prisma.EnumVehicleCategoryFilter["equals"];
     }
@@ -125,8 +129,8 @@ export async function searchVehicles(filters: VehicleSearchFilters): Promise<Veh
 }
 
 export async function getVehicleBySlug(slug: string) {
-  return prisma.vehicle.findUnique({
-    where: { slug, status: { not: "RETIRED" } },
+  return prisma.vehicle.findFirst({
+    where: { ...publicInventory, slug },
     include: {
       images: { orderBy: { position: "asc" } },
       features: { include: { feature: true } },
@@ -137,7 +141,7 @@ export async function getVehicleBySlug(slug: string) {
 export async function getDistinctMakes(): Promise<string[]> {
   try {
     const rows = await prisma.vehicle.findMany({
-      where: { status: "ACTIVE" },
+      where: publicInventory,
       select: { make: true },
       distinct: ["make"],
       orderBy: { make: "asc" },

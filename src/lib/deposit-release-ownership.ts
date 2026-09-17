@@ -1,9 +1,11 @@
 import { withReservationLock } from "@/lib/financial-locks";
 import { quarantineOperation } from "@/lib/financial-cases";
 import { json } from "@/lib/financial-operations";
+import { assertDepositReleaseReviewClear } from "@/lib/return-financial-authority";
 
 export async function checkDepositReleaseOwnership(operationId: string, reservationId: string) {
   return withReservationLock(reservationId, async tx => {
+    try { await assertDepositReleaseReviewClear(tx, reservationId); } catch { return false; }
     const op = await tx.financialOperation.findUniqueOrThrow({ where: { id: operationId } });
     if (op.kind !== "DEPOSIT_RELEASE" || op.reservationId !== reservationId) throw new Error("Release operation mismatch");
     const target = (op.payload as { intentId?: string }).intentId;
