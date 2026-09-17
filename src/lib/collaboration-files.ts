@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { MAX_DOCUMENT_SIZE_BYTES, validateAndSanitizeDocument, scanForMalware } from "@/lib/documents";
-import { storePrivateDocument, readPrivateDocument } from "@/lib/storage";
+import { storePrivateDocument, readPrivateDocument, planPrivateDocument } from "@/lib/storage";
+import { randomUUID } from "node:crypto";
 import { conversationAccess } from "@/lib/conversations";
 import { caseAccess } from "@/lib/service-cases";
 import { afterDays, audit, policy } from "@/lib/collaboration-access";
@@ -20,14 +21,28 @@ export async function uploadCollaborationFile(userId: string, scope: { conversat
   if ((await scanForMalware(clean.buffer)).status !== "CLEAN") throw new MarketplaceError("The security scan did not approve this file. Try again later.", 422);
   // Scanning is outside the transaction; repeat current authorization afterwards.
   // No driver-document IDs/storage keys are accepted in this API.
-  return prisma.$transaction(async tx => {
+  const stableId = randomUUID(), planned = planPrivateDocument(clean.mimeType, stableId);
+  const saved = await prisma.$transaction(async tx => {
     await scopeAccess(tx, userId, scope);
     const p = await policy(tx);
-    const stored = await storePrivateDocument(clean.buffer, clean.mimeType);
-    const saved = await tx.collaborationFile.create({ data: { ...scope, uploadedById: userId, purpose, storageKey: stored.storageKey, mimeType: clean.mimeType, sha256: clean.sha256, size: clean.buffer.length, scanStatus: "CLEAN", retainUntil: afterDays(p.retentionDays) } });
+    const saved = await tx.collaborationFile.create({ data: { ...scope, uploadedById: userId, purpose, storageKey: planned.storageKey, mimeType: clean.mimeType, sha256: clean.sha256, size: clean.buffer.length, scanStatus: "STORING", retainUntil: afterDays(p.attachmentDays) } });
     await audit(tx, userId, "collaboration.file.upload", "CollaborationFile", saved.id);
-    return { id: saved.id };
+    return saved;
   }, { timeout: 15000 });
+  // Intent and exact private key survive a crash or uncertain storage response.
+  // STORING is never readable; no orphan can become an untracked public upload.
+  try {
+    const stored = await storePrivateDocument(clean.buffer, clean.mimeType, stableId);
+    if (stored.storageKey !== planned.storageKey) throw new Error("PRIVATE_STORAGE_IDENTITY_MISMATCH");
+    return await prisma.$transaction(async tx => {
+      await scopeAccess(tx, userId, scope);
+      await tx.collaborationFile.update({ where: { id: saved.id }, data: { scanStatus: "CLEAN" } });
+      return { id: saved.id };
+    });
+  } catch {
+    await prisma.collaborationFile.updateMany({ where: { id: saved.id, scanStatus: "STORING" }, data: { scanStatus: "QUARANTINED" } });
+    throw new MarketplaceError("The upload could not be finalized. Its private copy remains quarantined for recovery.", 503);
+  }
 }
 export async function readCollaborationFile(userId: string, id: string) {
   const file = await prisma.$transaction(async tx => {

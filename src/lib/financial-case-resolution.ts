@@ -124,8 +124,9 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
       evidence = json({ providerId: intent.id, status: intent.status, amount: intent.amount, currency: intent.currency, customer, paymentId: c.paymentId, operationId: op.id, originalKey: op.key });
     }
     if (["AUTHORIZE_SETTLEMENT", "RELEASE_INVENTORY"].includes(input.action)) {
+      if (await tx.serviceCase.count({ where: { reservationId: r.id, kind: { in: ["CLAIM", "DISPUTE"] }, state: { not: "CLOSED" } } })) throw new Error("Resolve the outstanding operational claim or dispute first");
       if (current.status !== "VERIFIED") throw new Error("Verify provider evidence before authorizing settlement");
-      if (input.action === "AUTHORIZE_SETTLEMENT" && r.trip?.startedAt && ["RETURN_IN_PROGRESS", "DISPUTED", "UNDER_CLAIM_REVIEW"].includes(r.status)) {
+      if (input.action === "AUTHORIZE_SETTLEMENT" && r.trip?.startedAt && ["RETURN_IN_PROGRESS", "DISPUTED", "UNDER_CLAIM_REVIEW", "COMPLETED"].includes(r.status)) {
         // Existing super-admin case workflow may authorize a no-charge return
         // only after provider verification and all other uncertainty is gone.
         // It does not complete the trip or create a release; ordinary completion

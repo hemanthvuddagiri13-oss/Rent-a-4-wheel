@@ -1,4 +1,5 @@
 import { requestAuthCode } from "@/lib/auth-code";
+import { boundedBody } from "@/lib/bounded-request";
 import { requestSmsConsent } from "@/lib/notice-channels";
 import { communityAdmin } from "@/lib/community-admin";
 import { auth } from "@/auth";
@@ -13,17 +14,19 @@ import { safeLog } from "@/lib/safe-log";
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user) return Response.json({ error: "Sign in to continue." }, { status: 401 });
-  if (req.headers.get("origin") !== new URL(req.url).origin) return Response.json({ error: "Invalid request origin." }, { status: 403 });
+  const expectedOrigin = new URL(process.env.AUTH_URL ?? process.env.NEXTAUTH_URL ?? req.url).origin;
+  if (req.headers.get("origin") !== expectedOrigin) return Response.json({ error: "Invalid request origin." }, { status: 403 });
   try {
     const userId = session.user.id;
     await marketplaceActor(prisma, userId); await marketplaceLimit(userId);
     if (req.headers.get("content-type")?.includes("multipart/form-data")) {
       if (Number(req.headers.get("content-length") ?? 0) > 9 * 1024 * 1024) throw new MarketplaceError("File too large.", 413);
-      const form = await req.formData(), file = form.get("file");
+      const bytes = await boundedBody(req, 9 * 1024 * 1024);
+      const form = await new Response(new Uint8Array(bytes), { headers: { "Content-Type": req.headers.get("content-type")! } }).formData(), file = form.get("file");
       if (!(file instanceof File)) throw new MarketplaceError("Choose an image.");
       return Response.json(await uploadCollaborationFile(userId, { conversationId: String(form.get("conversationId") || "") || undefined, caseId: String(form.get("caseId") || "") || undefined }, file, String(form.get("purpose") || "MESSAGE")));
     }
-    const data = await req.json();
+    const data = JSON.parse((await boundedBody(req, 24000)).toString("utf8"));
     let result: unknown;
     switch (data.action) {
       case "stepUp": { const actor = await marketplaceActor(prisma, userId); if (actor.role !== "SUPER_ADMIN") throw new MarketplaceError("Forbidden.", 403); const issued = await requestAuthCode({ email: actor.email, ip: null, purpose: "EMERGENCY_OVERRIDE_STEP_UP" }); if (!issued.ok) throw new MarketplaceError("Wait before requesting another code.", 429); result = { success: true }; break; }

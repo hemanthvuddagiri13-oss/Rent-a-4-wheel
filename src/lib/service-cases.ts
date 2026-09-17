@@ -29,6 +29,13 @@ export async function caseAccess(tx: Prisma.TransactionClient, userId: string, i
 }
 export async function createServiceCase(userId: string, input: unknown, db: PrismaClient = prisma) {
   const data = createCaseSchema.parse(input);
+  const categories = {
+    CLAIM: ["DAMAGE"],
+    DISPUTE: ["DAMAGE", "MILEAGE", "FUEL", "LATE_RETURN", "CLEANING", "CANCELLATION", "REFUND", "UNAUTHORIZED_USE", "OTHER_CHARGES"],
+    INCIDENT: ["ACCIDENT", "BREAKDOWN", "FLAT_TIRE", "LOST_KEY", "TOWING", "UNSAFE_VEHICLE", "POLICE_REPORT", "INJURY", "THEFT"],
+    TICKET: ["GENERAL", "DAMAGE", "MILEAGE", "FUEL", "LATE_RETURN", "CLEANING", "CANCELLATION", "REFUND", "UNAUTHORIZED_USE", "OTHER_CHARGES"],
+  };
+  if (!categories[data.kind].includes(data.category)) throw new MarketplaceError("Choose a category that matches the request type.");
   return db.$transaction(async tx => {
     if (data.reservationId) await lockReservation(tx, data.reservationId);
     const r = data.reservationId ? await reservationScope(tx, data.reservationId) : null;
@@ -41,16 +48,21 @@ export async function createServiceCase(userId: string, input: unknown, db: Pris
       const linked = await caseAccess(tx, userId, data.linkedCaseId);
       if (linked.c.reservationId !== r?.id) throw new MarketplaceError("Related cases must concern the same reservation.");
     }
-    const photos = await tx.conditionPhoto.findMany({ where: { id: { in: data.originalPhotoIds }, conditionReport: { reservationId: r?.id ?? "" } }, select: { id: true } });
+    const photos = await tx.conditionPhoto.findMany({ where: { id: { in: data.originalPhotoIds }, conditionReport: { reservationId: r?.id ?? "", acceptedAt: { not: null } } }, select: { id: true } });
     if (photos.length !== new Set(data.originalPhotoIds).size) throw new MarketplaceError("Evidence must belong to this trip.", 404);
     const p = await policy(tx), body = safeText(data.body);
     const damageKey = data.kind === "CLAIM" && !data.linkedCaseId ? createHash("sha256").update(JSON.stringify([r!.id, data.category.toLowerCase().trim(), data.location?.toLowerCase().trim() ?? ""])).digest("hex") : null;
-    const safetyBlock = data.kind === "INCIDENT" && ["ACCIDENT", "BREAKDOWN", "UNSAFE_VEHICLE", "INJURY", "THEFT", "TOWING", "FLAT_TIRE"].includes(data.category);
-    const c = await tx.serviceCase.create({ data: { kind: data.kind, reservationId: r?.id, vehicleId: r?.vehicleId, openedById: userId, linkedCaseId: data.linkedCaseId, damageKey, category: data.category, title: safeText(data.title), details: { body, location: data.location ?? "", severity: data.severity ?? "MINOR", occurredAt: data.occurredAt ?? new Date().toISOString(), people: data.people ?? "", policeReport: data.policeReport ?? "", provider: data.provider ?? "", originalPhotoIds: photos.map(p => p.id) }, dueAt: new Date(Date.now() + p.responseHours * 3600000), retainUntil: afterDays(p.retentionDays), safetyBlock } });
+    const safetyBlock = data.kind === "INCIDENT" && (data.severity === "SEVERE" || ["ACCIDENT", "BREAKDOWN", "UNSAFE_VEHICLE", "INJURY", "THEFT", "TOWING", "FLAT_TIRE"].includes(data.category));
+    const c = await tx.serviceCase.create({ data: { kind: data.kind, reservationId: r?.id, vehicleId: r?.vehicleId, openedById: userId, linkedCaseId: data.linkedCaseId, damageKey, category: data.category, title: safeText(data.title), details: { body, location: data.location ?? "", severity: data.severity ?? "MINOR", occurredAt: data.occurredAt ?? new Date().toISOString(), people: data.people ?? "", policeReport: data.policeReport ?? "", provider: data.provider ?? "", originalPhotoIds: photos.map(p => p.id) }, dueAt: new Date(Date.now() + p.responseHours * 3600000), retainUntil: afterDays(data.kind === "CLAIM" ? p.claimDays : data.kind === "DISPUTE" ? p.disputeDays : data.kind === "INCIDENT" ? p.incidentDays : p.ticketDays), safetyBlock } });
     await tx.serviceCaseEvent.create({ data: { caseId: c.id, actorId: userId, action: "OPEN", fromState: "", toState: "REPORTED", body, version: 0 } });
     if (r && ["CLAIM", "DISPUTE"].includes(data.kind)) {
       // REVIEW is sticky: resolving this operational case cannot authorize money.
       await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "REVIEW" } });
+      const payment = await tx.payment.findFirst({ where: { reservationId: r.id, type: "RENTAL", status: "SUCCEEDED" }, orderBy: { createdAt: "asc" } });
+      if (payment) {
+        const operation = await tx.financialOperation.findFirst({ where: { reservationId: r.id, kind: "RENTAL", ...(payment.stripePaymentIntentId ? { providerId: payment.stripePaymentIntentId } : { key: payment.idempotencyKey ?? "" }) } });
+        await tx.financialCase.upsert({ where: { sourceKey: `collaboration-review:${r.id}` }, create: { sourceKey: `collaboration-review:${r.id}`, reservationId: r.id, customerId: r.customerId, kind: "RENTAL", paymentId: payment.id, operationId: operation?.id, providerId: payment.stripePaymentIntentId, originalKey: payment.idempotencyKey, amountCents: payment.amountCents, currency: payment.currency, reason: "Operational claim or dispute requires separate verified financial settlement" }, update: { status: "OPEN", resolvedAt: null, resolution: null, reason: "A new operational claim or dispute requires renewed financial review" } });
+      }
     }
     if (r && safetyBlock) {
       await tx.vehicle.update({ where: { id: r.vehicleId }, data: { status: "MAINTENANCE" } });
@@ -82,6 +94,7 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
     if (prior.reservationId) await lockReservation(tx, prior.reservationId);
     await tx.$queryRaw`SELECT "id" FROM "ServiceCase" WHERE "id"=${id} FOR UPDATE`;
     const { c, role, actor } = await caseAccess(tx, userId, id);
+    if (c.retainUntil < new Date() && c.state === "CLOSED") throw new MarketplaceError("This case is archived under the retention policy.", 409);
     if (c.version !== data.version) throw new MarketplaceError("This case changed. Refresh before submitting.", 409);
     const body = safeText(data.body), p = await policy(tx);
     let state = c.state;
@@ -93,7 +106,9 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
         const assignee = await marketplaceActor(tx, data.assigneeId ?? "");
         if (!isOperator(assignee.role, c.kind as ServiceKind) || assignee.id === c.openedById) throw new MarketplaceError("Choose an authorized agent without a party conflict.");
         const vehicle = c.vehicleId ? await tx.vehicle.findUnique({ where: { id: c.vehicleId }, include: { host: true } }) : null;
-        if (vehicle?.host?.userId === assignee.id) throw new MarketplaceError("A party cannot adjudicate their own case.");
+        const reservation = c.reservationId ? await tx.reservation.findUnique({ where: { id: c.reservationId } }) : null;
+        const affiliation = vehicle?.hostId ? await tx.hostEmployee.count({ where: { hostId: vehicle.hostId, userId: assignee.id } }) : 0;
+        if (vehicle?.host?.userId === assignee.id || reservation?.customerId === assignee.id || affiliation) throw new MarketplaceError("A party cannot adjudicate their own case.");
         update.assignedToId = assignee.id;
       } else { update.priority = "URGENT"; update.dueAt = new Date(); }
     }
@@ -114,7 +129,7 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
       if (role === "OPERATOR" && c.assignedToId !== userId) throw new MarketplaceError("Assign this case to yourself before deciding it.", 409);
       if (state === "EVIDENCE_SUBMITTED" && !await tx.collaborationFile.count({ where: { caseId: id, scanStatus: "CLEAN", deletedAt: null } }) && !(c.details as { originalPhotoIds?: string[] }).originalPhotoIds?.length) throw new MarketplaceError("Add evidence before submitting.");
       update.state = state; update.dueAt = new Date(Date.now() + p.responseHours * 3600000);
-      if (state === "CLOSED") update.closedAt = new Date();
+      if (state === "CLOSED") { update.closedAt = new Date(); update.retainUntil = afterDays(c.kind === "CLAIM" ? p.claimDays : c.kind === "DISPUTE" ? p.disputeDays : c.kind === "INCIDENT" ? p.incidentDays : p.ticketDays); }
       // Never clear financial REVIEW, release safety blocks, or dispatch money here.
     }
     if (data.action === "appeal") {
@@ -123,7 +138,10 @@ export async function caseCommand(userId: string, id: string, input: unknown, db
       state = c.kind === "DISPUTE" ? "UNDER_REVIEW" : "INITIAL_REVIEW";
       if (!["CLAIM", "DISPUTE"].includes(c.kind)) throw new MarketplaceError("This case does not support an appeal.");
       update.state = state; update.closedAt = null; update.assignedToId = null;
-      if (c.reservationId) await tx.reservation.update({ where: { id: c.reservationId }, data: { financialDisposition: "REVIEW" } });
+      if (c.reservationId) {
+        await tx.reservation.update({ where: { id: c.reservationId }, data: { financialDisposition: "REVIEW" } });
+        await tx.financialCase.updateMany({ where: { sourceKey: `collaboration-review:${c.reservationId}` }, data: { status: "OPEN", resolvedAt: null, resolution: null, reason: "An appeal requires renewed verified financial review" } });
+      }
     }
     if (data.action === "satisfaction") {
       if (c.kind !== "TICKET" || c.openedById !== userId || !["RESOLVED", "CLOSED"].includes(c.state) || !data.rating) throw new MarketplaceError("Feedback is available after your ticket is resolved.");

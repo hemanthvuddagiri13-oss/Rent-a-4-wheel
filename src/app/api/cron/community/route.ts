@@ -8,3 +8,5 @@ export async function POST(req: Request) {
  if(provided.length!==expected.length||!timingSafeEqual(provided,expected))return Response.json({error:"Unauthorized"},{status:401});
  try{return Response.json({notifications:await projectTransactionalNotices(),retention:await runCollaborationRetention(),channels:await deliverNoticeChannels()});}catch{return Response.json({error:"Retry required."},{status:503});}
 }
+
+export const GET = POST;

@@ -328,3 +328,37 @@ CREATE TABLE "ChannelDelivery" (
  "leaseToken" TEXT, "leaseUntil" TIMESTAMP(3), "providerId" TEXT, "errorCode" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "acceptedAt" TIMESTAMP(3)
 );
 CREATE UNIQUE INDEX "ChannelDelivery_noticeId_channel_key" ON "ChannelDelivery"("noticeId","channel");
+-- In-app projection is in the same transaction as its authoritative event.
+-- No provider request or financial operation is created by these triggers.
+CREATE FUNCTION community_reservation_notice(rid TEXT, event_key TEXT, title_text TEXT, category_text TEXT) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE recipient TEXT;
+BEGIN
+ FOR recipient IN SELECT r."customerId" FROM "Reservation" r WHERE r.id=rid UNION SELECT h."userId" FROM "Reservation" r JOIN "Vehicle" v ON v.id=r."vehicleId" JOIN "HostProfile" h ON h.id=v."hostId" WHERE r.id=rid LOOP
+  INSERT INTO "InboxNotice" (id,"eventKey","userId",category,"resourceType","resourceId",title,required)
+  VALUES ('notice_'||md5(event_key||':'||recipient),event_key,recipient,category_text,'RESERVATION',rid,title_text,true)
+  ON CONFLICT ("eventKey","userId") DO NOTHING;
+ END LOOP;
+END $$;
+CREATE FUNCTION community_trip_notice() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN PERFORM community_reservation_notice(NEW."reservationId",'trip-event:'||NEW.id,'Trip update: '||replace(NEW.type,'_',' '),'TRIP'); RETURN NEW; END $$;
+CREATE TRIGGER community_trip_notice AFTER INSERT ON "TripEvent" FOR EACH ROW EXECUTE FUNCTION community_trip_notice();
+CREATE FUNCTION community_document_notice() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW."reservationId" IS NOT NULL THEN
+  PERFORM community_reservation_notice(NEW."reservationId",'document:'||NEW.id||':'||NEW.status::text||':'||NEW."malwareScanStatus"::text,'Driver document status updated','DOCUMENT');
+ END IF; RETURN NEW;
+END $$;
+CREATE TRIGGER community_document_notice AFTER INSERT OR UPDATE OF status,"malwareScanStatus","reservationId" ON "DriverDocument" FOR EACH ROW EXECUTE FUNCTION community_document_notice();
+CREATE FUNCTION community_agreement_notice() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW."reservationId" IS NOT NULL THEN PERFORM community_reservation_notice(NEW."reservationId",'agreement:'||NEW.id,'Signed agreement available in your trip','AGREEMENT'); END IF; RETURN NEW;
+END $$;
+CREATE TRIGGER community_agreement_notice AFTER INSERT ON "AgreementAcceptance" FOR EACH ROW EXECUTE FUNCTION community_agreement_notice();
+CREATE FUNCTION community_money_notice() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ PERFORM community_reservation_notice(NEW."reservationId",TG_TABLE_NAME||':'||NEW.id||':'||NEW.status::text,'Payment account status updated','PAYMENT'); RETURN NEW;
+END $$;
+CREATE TRIGGER community_payment_notice AFTER INSERT OR UPDATE OF status ON "Payment" FOR EACH ROW EXECUTE FUNCTION community_money_notice();
+CREATE TRIGGER community_refund_notice AFTER INSERT OR UPDATE OF status ON "Refund" FOR EACH ROW EXECUTE FUNCTION community_money_notice();
+CREATE TRIGGER community_deposit_notice AFTER INSERT OR UPDATE OF status ON "SecurityDeposit" FOR EACH ROW EXECUTE FUNCTION community_money_notice();
+

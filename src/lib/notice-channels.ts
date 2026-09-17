@@ -7,7 +7,8 @@ export async function requestSmsConsent(userId: string, phone: string, consent: 
   if (!/^\+[1-9]\d{7,14}$/.test(phone) || !consent) throw new MarketplaceError("Enter an international phone number and explicitly consent to account texts.");
   // A request alone never authorizes outbound SMS. START from that handset,
   // authenticated by Twilio's webhook signature, confirms possession/consent.
-  await prisma.smsConsent.upsert({ where: { userId }, create: { userId, phone, consentAt: new Date(), source: "PENDING_HANDSET_CONFIRMATION" }, update: { phone, stoppedAt: null, consentAt: new Date(), source: "PENDING_HANDSET_CONFIRMATION" } });
+  const enrollment = "PENDING:" + randomUUID().replaceAll("-", "").toUpperCase();
+  await prisma.smsConsent.upsert({ where: { userId }, create: { userId, phone, consentAt: new Date(), source: enrollment }, update: { phone, stoppedAt: null, consentAt: new Date(), source: enrollment } });
   return { success: true };
 }
 export function verifyTwilioSignature(url: string, params: URLSearchParams, signature: string, token: string) {
@@ -16,11 +17,11 @@ export function verifyTwilioSignature(url: string, params: URLSearchParams, sign
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 export async function handleSmsConsent(params: URLSearchParams) {
-  const phone = params.get("From") ?? "", command = (params.get("OptOutType") ?? params.get("Body") ?? "").trim().toUpperCase();
+  const phone = params.get("From") ?? "", body = (params.get("Body") ?? "").trim().toUpperCase(), command = (params.get("OptOutType") ?? body).trim().toUpperCase();
   if (["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"].includes(command)) {
     await prisma.smsConsent.updateMany({ where: { phone }, data: { stoppedAt: new Date(), source: "HANDSET_STOP" } });
-  } else if (["START", "UNSTOP"].includes(command)) {
-    await prisma.smsConsent.updateMany({ where: { phone, source: "PENDING_HANDSET_CONFIRMATION", consentAt: { gt: new Date(Date.now() - 86400000) } }, data: { stoppedAt: null, consentAt: new Date(), source: "HANDSET_CONFIRMED" } });
+  } else if (/^START [A-F0-9]{32}$/.test(body)) {
+    await prisma.smsConsent.updateMany({ where: { phone, source: "PENDING:" + body.slice(6), consentAt: { gt: new Date(Date.now() - 86400000) } }, data: { stoppedAt: null, consentAt: new Date(), source: "HANDSET_CONFIRMED" } });
   }
 }
 export async function deliverNoticeChannels() {
@@ -28,13 +29,15 @@ export async function deliverNoticeChannels() {
   // Twilio's Messages create endpoint does not provide the email provider's
   // replay key guarantee. A lost response is quarantined, never blindly resent.
   await prisma.channelDelivery.updateMany({ where: { state: "DISPATCHING", leaseUntil: { lt: new Date() } }, data: { state: "REVIEW", errorCode: "PROVIDER_OUTCOME_UNKNOWN", leaseToken: null } });
-  const notices = await prisma.inboxNotice.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
+  const pending = await prisma.$queryRaw<Array<{id:string}>>`SELECT n.id FROM "InboxNotice" n JOIN "NoticePreference" p ON p."userId"=n."userId" AND p.category=n.category LEFT JOIN "ChannelDelivery" sms ON sms."noticeId"=n.id AND sms.channel='SMS' LEFT JOIN "ChannelDelivery" push ON push."noticeId"=n.id AND push.channel='PUSH' WHERE (p.sms AND sms.id IS NULL) OR (p.push AND push.id IS NULL) ORDER BY n."createdAt",n.id LIMIT 100`;
+  const notices = await prisma.inboxNotice.findMany({ where: { id: { in: pending.map(n=>n.id) } } });
   for (const n of notices) {
     const pref = await prisma.noticePreference.findUnique({ where: { userId_category: { userId: n.userId, category: n.category } } });
     for (const channel of ["SMS", "PUSH"]) if (channel === "SMS" ? pref?.sms : pref?.push) await prisma.channelDelivery.upsert({ where: { noticeId_channel: { noticeId: n.id, channel } }, update: {}, create: { noticeId: n.id, userId: n.userId, channel, state: channel === "PUSH" ? "CONFIGURATION_REQUIRED" : "READY" } });
   }
   if (!sid || !token || !from) return { accepted: 0, configured: false };
-  const jobs = await prisma.channelDelivery.findMany({ where: { state: "READY", channel: "SMS" }, take: 30 });
+  const ready = await prisma.$queryRaw<Array<{id:string}>>`SELECT d.id FROM "ChannelDelivery" d JOIN "SmsConsent" c ON c."userId"=d."userId" JOIN "User" u ON u.id=d."userId" WHERE d.state='READY' AND d.channel='SMS' AND c.source='HANDSET_CONFIRMED' AND c."stoppedAt" IS NULL AND u."isActive"=true ORDER BY d."createdAt",d.id LIMIT 30`;
+  const jobs = await prisma.channelDelivery.findMany({ where: { id: { in: ready.map(d=>d.id) } } });
   let accepted = 0;
   for (const job of jobs) {
     const lease = randomUUID();

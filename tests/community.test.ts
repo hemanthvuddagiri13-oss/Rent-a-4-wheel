@@ -1,3 +1,7 @@
+import { createHmac } from "node:crypto";
+import { readCollaborationFile } from "@/lib/collaboration-files";
+import { deliverNoticeChannels } from "@/lib/notice-channels";
+import { POST as smsWebhook } from "@/app/api/community/sms/route";
 import { afterAll, expect, it, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { prisma,createTestHost,createTestCustomer,createTestVehicle,createTestReservation,cleanupReservationsForVehicles } from "./helpers/factories";
@@ -8,6 +12,8 @@ import { saveTripReview,publicTripReviews } from "@/lib/trip-reviews";
 import { withReservationLock,assertFinancialTripStart } from "@/lib/financial-locks";
 import { assertNoUnresolvedFinancialReview } from "@/lib/return-financial-authority";
 import { fileHeld } from "@/lib/collaboration-retention";
+const privateRead=vi.hoisted(()=>vi.fn(async()=>({buffer:Buffer.from("private evidence")})));
+vi.mock("@/lib/storage",async original=>({...await original<typeof import("@/lib/storage")>(),readPrivateDocument:privateRead}));
 const session=vi.hoisted(()=>({id:""}));vi.mock("@/auth",()=>({auth:async()=>session.id ? {user:{id:session.id}} : null}));
 import { POST } from "@/app/api/community/route";
 import { POST as cron } from "@/app/api/cron/community/route";
@@ -23,6 +29,7 @@ afterAll(async()=>{
  await prisma.conversationMessage.deleteMany({where:{conversationId:{in:cids}}});await prisma.conversationRead.deleteMany({where:{conversationId:{in:cids}}});await prisma.conversation.deleteMany({where:{id:{in:cids}}});
  await prisma.serviceCaseEvent.deleteMany({where:{caseId:{in:ids}}});await prisma.serviceCase.updateMany({where:{id:{in:ids}},data:{linkedCaseId:null}});await prisma.serviceCase.deleteMany({where:{id:{in:ids}}});
  const reviews=await prisma.tripReview.findMany({where:{reviewerId:{in:users}}});await prisma.reviewHistory.deleteMany({where:{reviewId:{in:reviews.map(r=>r.id)}}});await prisma.tripReview.deleteMany({where:{id:{in:reviews.map(r=>r.id)}}});
+ await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.noticePreference.deleteMany({where:{userId:{in:users}}});await prisma.smsConsent.deleteMany({where:{userId:{in:users}}});
  await prisma.inboxNotice.deleteMany({where:{userId:{in:users}}});await prisma.communityReport.deleteMany({where:{actorId:{in:users}}});
  for(const userId of users)await prisma.outboxMessage.deleteMany({where:{payload:{path:["userId"],equals:userId}}});
  await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.user.deleteMany({where:{id:{in:users}}});await one.$disconnect();await two.$disconnect();await prisma.$disconnect();
@@ -68,7 +75,7 @@ it("automatically blocks an unsafe vehicle and keeps support tickets private",as
 });
 it("legal and financial evidence holds override expired attachment retention",async()=>{
  const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id});await prisma.conversation.update({where:{id:c.id},data:{retainUntil:new Date(0),legalHold:true}});
- const file=await prisma.collaborationFile.create({data:{conversationId:c.id,uploadedById:f.customer.id,purpose:"MESSAGE",storageKey:"local:"+c.id+".png",mimeType:"image/png",sha256:"test",size:4,scanStatus:"CLEAN",retainUntil:new Date(0)}});expect(await fileHeld(prisma,file.id)).toBe(true);await prisma.conversation.update({where:{id:c.id},data:{legalHold:false}});expect(await fileHeld(prisma,file.id)).toBe(false);
+ const file=await prisma.collaborationFile.create({data:{conversationId:c.id,uploadedById:f.customer.id,purpose:"MESSAGE",storageKey:"local:"+c.id+".png",mimeType:"image/png",sha256:"test",size:4,scanStatus:"CLEAN",retainUntil:new Date(0)}});expect(await fileHeld(prisma,file.id)).toBe(true);await prisma.conversation.update({where:{id:c.id},data:{legalHold:false,closedAt:new Date()}});expect(await fileHeld(prisma,file.id)).toBe(false);
  await prisma.payment.create({data:{reservationId:f.r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:100}});expect(await fileHeld(prisma,file.id)).toBe(true);
 });
 it.each(["CLAIM","DISPUTE"] as const)("serializes genuinely simultaneous %s commands on separate PostgreSQL sessions",async kind=>{
@@ -79,8 +86,27 @@ it.each(["CLAIM","DISPUTE"] as const)("serializes genuinely simultaneous %s comm
  const results=await settled;expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);expect(results.filter(r=>r.status==="rejected")).toHaveLength(1);expect(await prisma.serviceCase.findUnique({where:{id:c.id}})).toMatchObject({version:1});expect(await prisma.serviceCaseEvent.count({where:{caseId:c.id}})).toBe(2);
 });
 it("HTTP handlers reject anonymous, cross-origin, cross-tenant and unauthorized cron requests",async()=>{
+ process.env.AUTH_URL="http://localhost";
  const f=await fixture();const request=(data:unknown,origin="http://localhost")=>new Request("http://localhost/api/community",{method:"POST",headers:{origin,"content-type":"application/json"},body:JSON.stringify(data)});
  session.id="";expect((await POST(request({action:"conversation",reservationId:f.r.id}))).status).toBe(401);session.id=f.customer.id;expect((await POST(request({action:"conversation",reservationId:f.r.id},"https://evil.test"))).status).toBe(403);
  session.id=f.other.id;expect((await POST(request({action:"conversation",reservationId:f.r.id}))).status).toBe(404);session.id=f.customer.id;expect((await POST(request({action:"conversation",reservationId:f.r.id}))).status).toBe(200);
  process.env.CRON_SECRET="community-test-secret";expect((await cron(new Request("http://localhost/api/cron/community",{method:"POST"}))).status).toBe(401);
+});
+
+it("private attachment authorization precedes storage access, including revoked uploaders and quarantined files",async()=>{
+ const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id});await prisma.user.update({where:{id:f.other.id},data:{role:"HOST_EMPLOYEE"}});const employee=await prisma.hostEmployee.create({data:{hostId:f.h.hostProfile.id,userId:f.other.id,role:"STAFF"}});
+ const file=await prisma.collaborationFile.create({data:{conversationId:c.id,uploadedById:f.other.id,purpose:"MESSAGE",storageKey:"local:"+c.id+"-privacy.png",mimeType:"image/png",sha256:"test",size:4,scanStatus:"CLEAN",retainUntil:new Date(Date.now()+86400000)}});
+ privateRead.mockClear();await readCollaborationFile(f.customer.id,file.id);expect(privateRead).toHaveBeenCalledTimes(1);await prisma.hostEmployee.delete({where:{id:employee.id}});privateRead.mockClear();await expect(readCollaborationFile(f.other.id,file.id)).rejects.toThrow();expect(privateRead).not.toHaveBeenCalled();await prisma.collaborationFile.update({where:{id:file.id},data:{scanStatus:"QUARANTINED"}});await expect(readCollaborationFile(f.customer.id,file.id)).rejects.toThrow();expect(privateRead).not.toHaveBeenCalled();
+});
+it("signed handset STOP revokes SMS consent and rejects forged callbacks",async()=>{
+ const f=await fixture(),phone="+15550001111",url="https://example.test/api/community/sms",token="synthetic-token";process.env.TWILIO_AUTH_TOKEN=token;process.env.TWILIO_INBOUND_URL=url;
+ await prisma.smsConsent.create({data:{userId:f.customer.id,phone,consentAt:new Date(),source:"HANDSET_CONFIRMED"}});
+ const raw="Body=STOP&From=%2B15550001111",signature=createHmac("sha1",token).update(url+"BodySTOPFrom"+phone).digest("base64");const req=(sig:string)=>new Request(url,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","x-twilio-signature":sig},body:raw});
+ expect((await smsWebhook(req("forged"))).status).toBe(403);expect((await prisma.smsConsent.findUnique({where:{userId:f.customer.id}}))?.stoppedAt).toBeNull();expect((await smsWebhook(req(signature))).status).toBe(200);expect((await prisma.smsConsent.findUnique({where:{userId:f.customer.id}}))?.stoppedAt).not.toBeNull();
+});
+it.each(["accepted","uncertain"])("durable SMS %s outcome cannot create a duplicate send",async outcome=>{
+ const f=await fixture();process.env.TWILIO_ACCOUNT_SID="ACtest";process.env.TWILIO_AUTH_TOKEN="synthetic-token";process.env.TWILIO_FROM_NUMBER="+15550009999";
+ await prisma.smsConsent.create({data:{userId:f.customer.id,phone:"+15550001234",consentAt:new Date(),source:"HANDSET_CONFIRMED"}});await prisma.noticePreference.create({data:{userId:f.customer.id,category:"MESSAGE",sms:true}});const notice=await prisma.inboxNotice.create({data:{eventKey:"sms:"+f.r.id,userId:f.customer.id,category:"MESSAGE",resourceType:"RESERVATION",resourceId:f.r.id,title:"Account update"}});
+ const send=vi.fn(async()=>{if(outcome==="uncertain")throw new Error("Response lost after provider acceptance");return Response.json({sid:"SMsynthetic",status:"queued"});});vi.stubGlobal("fetch",send);
+ try{await deliverNoticeChannels();await deliverNoticeChannels();expect(send).toHaveBeenCalledTimes(1);expect(await prisma.channelDelivery.findUnique({where:{noticeId_channel:{noticeId:notice.id,channel:"SMS"}}})).toMatchObject({state:outcome==="accepted"?"ACCEPTED":"REVIEW",attempts:1});}finally{vi.unstubAllGlobals();}
 });

@@ -48,11 +48,17 @@ export interface StoredDocument {
  * the authenticated `/api/documents/[id]` route — never served from
  * `/public`.
  */
-export async function storePrivateDocument(buffer: Buffer, mimeType: string): Promise<StoredDocument> {
+export function planPrivateDocument(mimeType: string, stableId: string): StoredDocument {
+  if (!/^[a-zA-Z0-9-]+$/.test(stableId)) throw new Error("INVALID_PRIVATE_STORAGE_ID");
+  return { storageKey: cloudinaryConfigured ? `cloudinary:rent-a-4wheel/documents/${stableId}` : `local:${stableId}.${mimeType.split("/")[1] || "bin"}` };
+}
+
+export async function storePrivateDocument(buffer: Buffer, mimeType: string, stableId?: string): Promise<StoredDocument> {
+  if (stableId) planPrivateDocument(mimeType, stableId);
   if (cloudinaryConfigured) {
     const upload = await new Promise<{ public_id: string }>((resolve, reject) => {
       cloudinary.uploader
-        .upload_stream({ resource_type: "auto", type: "authenticated", folder: "rent-a-4wheel/documents" }, (err, result) => {
+        .upload_stream({ resource_type: "auto", type: "authenticated", folder: "rent-a-4wheel/documents", ...(stableId ? { public_id: stableId, overwrite: false } : {}) }, (err, result) => {
           if (err || !result) return reject(err);
           resolve(result);
         })
@@ -63,7 +69,7 @@ export async function storePrivateDocument(buffer: Buffer, mimeType: string): Pr
 
   await mkdir(LOCAL_STORAGE_ROOT, { recursive: true });
   const ext = mimeType.split("/")[1] || "bin";
-  const filename = `${randomUUID()}.${ext}`;
+  const filename = `${stableId ?? randomUUID()}.${ext}`;
   await writeFile(path.join(LOCAL_STORAGE_ROOT, filename), buffer);
   return { storageKey: `local:${filename}` };
 }

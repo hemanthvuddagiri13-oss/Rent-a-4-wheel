@@ -18,7 +18,7 @@ export async function openConversation(userId: string, input: { reservationId?: 
     const customerId = r?.customerId ?? userId;
     await participant(tx, userId, { customerId, vehicleId: vehicle.id }, "MESSAGE");
     const p = await policy(tx);
-    const data = { reservationId: r?.id, vehicleId: vehicle.id, customerId, retainUntil: afterDays(p.retentionDays) };
+    const data = { reservationId: r?.id, vehicleId: vehicle.id, customerId, retainUntil: afterDays(p.messageDays) };
     const conversation = r ? await tx.conversation.upsert({ where: { reservationId: r.id }, update: {}, create: data }) : await tx.conversation.create({ data });
     await audit(tx, userId, "conversation.open", "Conversation", conversation.id);
     return { id: conversation.id };
@@ -30,7 +30,7 @@ export async function messageCommand(userId: string, id: string, input: { action
     const { conversation } = await conversationAccess(tx, userId, id);
     const p = await policy(tx);
     if (input.action === "read") return tx.conversationRead.upsert({ where: { conversationId_userId: { conversationId: id, userId } }, create: { conversationId: id, userId }, update: { readAt: new Date() } });
-    if (conversation.retainUntil < new Date()) throw new MarketplaceError("This conversation is archived.", 409);
+    if ((!conversation.reservationId || conversation.closedAt) && conversation.retainUntil < new Date()) throw new MarketplaceError("This conversation is archived.", 409);
     if (input.action === "send") {
       const body = safeText(input.body ?? "");
       const recent = await tx.conversationMessage.count({ where: { senderId: userId, conversationId: id, createdAt: { gt: new Date(Date.now() - 60000) } } });

@@ -22,7 +22,7 @@ export async function saveTripReview(userId: string, input: unknown) {
     const prior = await tx.tripReview.findUnique({ where: { reservationId_reviewerId_subject: { reservationId: r.id, reviewerId: userId, subject: data.subject } } });
     const content = { rating: data.rating, body: safeText(data.body), categories: { cleanliness: data.cleanliness, communication: data.communication, accuracy: data.accuracy } };
     if (prior && (data.version !== prior.version || Date.now() > prior.createdAt.getTime() + p.editMinutes * 60000 || prior.publishAfter <= new Date())) throw new MarketplaceError("This review can no longer be edited.", 409);
-    const review = prior ? await tx.tripReview.update({ where: { id: prior.id }, data: { ...content, version: { increment: 1 } } }) : await tx.tripReview.create({ data: { ...content, reservationId: r.id, reviewerId: userId, subject: data.subject, subjectId, publishAfter: new Date(r.trip.endedAt.getTime() + p.blindDays * 86400000), retainUntil: afterDays(p.retentionDays) } });
+    const review = prior ? await tx.tripReview.update({ where: { id: prior.id }, data: { ...content, version: { increment: 1 } } }) : await tx.tripReview.create({ data: { ...content, reservationId: r.id, reviewerId: userId, subject: data.subject, subjectId, publishAfter: new Date(r.trip.endedAt.getTime() + p.blindDays * 86400000), retainUntil: afterDays(p.reviewRetentionDays) } });
     await tx.reviewHistory.create({ data: { reviewId: review.id, actorId: userId, action: prior ? "EDIT" : "CREATE", reason: "Author submission", snapshot: { ...content, version: review.version } } });
     // Keep the full blind period even when the other party posts: neither party
     // gains an edit advantage by watching publication timing.
@@ -40,6 +40,7 @@ export async function moderateTripReview(userId: string, id: string, action: "hi
       } else if (review.publishAfter > new Date() || review.hidden) throw new MarketplaceError("Not found.", 404);
       return tx.communityReport.upsert({ where: { actorId_entityType_entityId: { actorId: userId, entityType: "REVIEW", entityId: id } }, update: {}, create: { actorId: userId, entityType: "REVIEW", entityId: id, reason: safeText(reason) } });
     }
+    if (!review.body || review.retainUntil < new Date()) throw new MarketplaceError("This review is archived.", 409);
     if (!isOperator(actor.role, "REVIEW")) throw new MarketplaceError("Review moderation access required.", 403);
     await tx.reviewHistory.create({ data: { reviewId: id, actorId: userId, action: action.toUpperCase(), reason: safeText(reason), snapshot: { hidden: review.hidden, version: review.version } } });
     await tx.tripReview.update({ where: { id }, data: { hidden: action === "hide", version: { increment: 1 } } });

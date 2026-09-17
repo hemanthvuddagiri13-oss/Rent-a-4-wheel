@@ -1,0 +1,8 @@
+import {prisma} from "@/lib/prisma";
+import {policy} from "@/lib/collaboration-access";
+import {Panel} from "./workspace";
+import {ActionForm} from "./action-form";
+export async function ReviewWorkspace({userId}:{userId:string}){
+ const rows=await prisma.tripReview.findMany({where:{reviewerId:userId},orderBy:{createdAt:"desc"},take:30}),p=await policy(prisma);
+ return <Panel title="Your submitted reviews">{rows.length ? rows.map(r=><article key={r.id} className="mb-6 rounded-xl border border-white/10 p-4"><h3 className="font-semibold">{r.subject} · {r.rating}/5</h3><p className="my-3 whitespace-pre-wrap text-silver">{r.body || "Content removed under the retention policy."}</p><p className="mb-3 text-xs text-silver">{r.hidden ? "Hidden by moderation" : r.publishAfter>new Date() ? "Blind until "+r.publishAfter.toLocaleDateString("en-US") : "Published"}</p>{r.body && new Date().getTime()<r.createdAt.getTime()+p.editMinutes*60000 && r.publishAfter>new Date() ? <details><summary className="cursor-pointer text-gold">Edit within the allowed window</summary><ActionForm endpoint="/api/community" action="review" values={{reservationId:r.reservationId,subject:r.subject,version:r.version}} fields={[{name:"rating",label:"Overall rating",type:"number",value:r.rating,min:1,max:5},...["cleanliness","communication","accuracy"].map(name=>({name,label:name,type:"number",value:(r.categories as Record<string,number>)[name]??5,min:1,max:5})),{name:"body",label:"Updated feedback",type:"textarea",value:r.body}]} label="Save review edit"/></details> : <p className="text-xs text-silver">The editing window is closed.</p>}</article>) : <p className="text-silver">No reviews submitted yet.</p>}</Panel>;
+}
