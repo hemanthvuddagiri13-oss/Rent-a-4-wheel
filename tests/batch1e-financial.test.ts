@@ -16,10 +16,10 @@ const url = new URL(process.env.DATABASE_URL!); url.searchParams.set("connection
 const a = new PrismaClient({ datasources: { db: { url: url.toString() } } }), b = new PrismaClient({ datasources: { db: { url: url.toString() } } });
 afterEach(() => { for (const group of Object.values(provider)) for (const fn of Object.values(group)) fn.mockReset(); });
 afterAll(async () => { await cleanupReservationsForVehicles(vehicles); await prisma.auditLog.deleteMany({ where: { actorId: { in: users } } }); await prisma.vehicle.deleteMany({ where: { id: { in: vehicles } } }); await prisma.user.deleteMany({ where: { id: { in: users } } }); await Promise.all([a.$disconnect(), b.$disconnect(), prisma.$disconnect()]); });
-async function fixture() {
+async function fixture(bound = true) {
   const v = await createTestVehicle(), u = await createTestCustomer({ stripeCustomerId: "cus_" + randomUUID() }); vehicles.push(v.id); users.push(u.id);
   const r = await createTestReservation({ vehicleId: v.id, customerId: u.id, pickupAt: new Date("2038-01-01"), returnAt: new Date("2038-01-03"), status: "CONFIRMED", depositCents: 15000 });
-  const p = await prisma.payment.create({ data: { reservationId: r.id, type: "RENTAL", status: "SUCCEEDED", amountCents: 15000, stripePaymentIntentId: "pi_r_" + r.id, idempotencyKey: "rental-" + r.id } });
+  const p = await prisma.payment.create({ data: { reservationId: r.id, type: "RENTAL", status: "SUCCEEDED", amountCents: 15000, stripePaymentIntentId: bound ? "pi_r_" + r.id : null, idempotencyKey: "rental-" + r.id } });
   await prisma.securityDeposit.create({ data: { reservationId: r.id, amountCents: 15000 } });
   return { r, p, u };
 }
@@ -68,8 +68,7 @@ describe("Batch 1E financial boundaries", () => {
     expect((await prisma.refund.findUniqueOrThrow({ where: { id: f.id } })).status).toBe("SUCCEEDED");
   });
   it.each(["RENTAL", "DEPOSIT"])("rejects inverse %s adoption with identical amounts and preserves every financial record", async kind => {
-    const { r, p, u } = await fixture(), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);
-    if (kind === "RENTAL") await prisma.payment.update({ where: { id: p.id }, data: { stripePaymentIntentId: null } });
+    const { r, p, u } = await fixture(kind !== "RENTAL"), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);
     const op = await prisma.financialOperation.create({ data: { key: kind === "RENTAL" ? p.idempotencyKey! : randomUUID(), kind, reservationId: r.id, fingerprint: "test", payload: {}, state: "REVIEW" } });
     const c = await prisma.financialCase.create({ data: { sourceKey: randomUUID(), operationId: op.id, paymentId: kind === "RENTAL" ? p.id : null, reservationId: r.id, customerId: u.id, kind, amountCents: 15000, reason: "Uncertain legacy evidence" } });
     const snapshot = async () => Promise.all([prisma.payment.findMany({ where: { reservationId: r.id } }), prisma.securityDeposit.findUnique({ where: { reservationId: r.id } }), prisma.financialOperation.findMany({ where: { reservationId: r.id } }), prisma.financialCase.findUnique({ where: { id: c.id } })]);
@@ -84,8 +83,7 @@ describe("Batch 1E financial boundaries", () => {
     }
   });
   it("rejects ambiguous rental lineage and accepts the original payment/operation evidence", async () => {
-    const { r, p, u } = await fixture(), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);
-    await prisma.payment.update({ where: { id: p.id }, data: { stripePaymentIntentId: null } });
+    const { r, p, u } = await fixture(false), admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id);
     const op = await prisma.financialOperation.create({ data: { key: p.idempotencyKey!, kind: "RENTAL", reservationId: r.id, fingerprint: "test", payload: {}, state: "REVIEW" } });
     const c = await prisma.financialCase.create({ data: { sourceKey: randomUUID(), operationId: op.id, paymentId: p.id, reservationId: r.id, customerId: u.id, kind: "RENTAL", amountCents: 15000, reason: "Uncertain rental" } });
     const evidence = { id: "pi_verified_" + r.id, amount: 15000, currency: "usd", customer: u.stripeCustomerId, status: "succeeded", capture_method: "automatic", metadata: { reservationId: r.id } };
