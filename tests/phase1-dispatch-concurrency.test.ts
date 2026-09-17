@@ -9,15 +9,16 @@ import { executeDepositReleaseOperation, executeDepositOperation } from "@/lib/d
 import { recoverDeposits } from "@/lib/financial-workers";
 import { withReservationLock } from "@/lib/financial-locks";
 import { quarantineOperation } from "@/lib/financial-cases";
-import { prepareOperation, runOperation } from "@/lib/financial-operations";
+import { prepareOperation } from "@/lib/financial-operations";
 import { getOrCreateRefundOperation, executeRefundOperation } from "@/lib/refund-operations";
+import { prisma as workerDb } from "@/lib/prisma";
 import { POST } from "@/app/api/cron/financial/[worker]/route";
 const provider = vi.hoisted(() => ({ paymentIntents: { retrieve: vi.fn(), cancel: vi.fn(), create: vi.fn(), list: vi.fn() }, refunds: { create: vi.fn(), retrieve: vi.fn(), list: vi.fn() } }));
 vi.mock("@/lib/stripe", () => ({ stripe: provider }));
 const url = new URL(process.env.DATABASE_URL!); url.searchParams.set("connection_limit", "1");
 const other = new PrismaClient({ datasources: { db: { url: url.toString() } } });
 const vehicles: string[] = [], users: string[] = [];
-afterEach(() => { for (const group of Object.values(provider)) for (const mock of Object.values(group)) mock.mockReset(); vi.unstubAllEnvs(); });
+afterEach(() => { vi.restoreAllMocks(); for (const group of Object.values(provider)) for (const mock of Object.values(group)) mock.mockReset(); vi.unstubAllEnvs(); });
 afterAll(async () => { await cleanupReservationsForVehicles(vehicles); await prisma.vehicle.deleteMany({ where: { id: { in: vehicles } } }); await prisma.user.deleteMany({ where: { id: { in: users } } }); await other.$disconnect(); await prisma.$disconnect(); });
 async function fixture(terminated = true) {
   const v = await createTestVehicle(), u = await createTestCustomer(); vehicles.push(v.id); users.push(u.id);
@@ -162,20 +163,42 @@ describe("Phase 1 cross-instance dispatch guard", () => {
     expect(await prisma.financialDispatch.count({ where: { operationId: operation.id, phase: "SUCCEEDED" } })).toBe(1);
     expect((await prisma.financialCase.findFirstOrThrow({ where: { operationId: operation.id } })).evidence).toMatchObject({ dispatches: expect.arrayContaining([expect.objectContaining({ phase: "DISPATCHED" })]) });
   });
-  it.each(["REFUND", "DEPOSIT"])("%s stale retrieval cannot dispatch after token replacement", async kind => {
+
+  it.each(["REFUND", "DEPOSIT"].flatMap(kind => ["expired", "replaced", "quarantine", "authority"].map(mode => [kind, mode])))("%s/%s wins after real claim and before dispatch", async (kind, mode) => {
     const f = await fixture(false), entered = barrier(), resume = barrier();
-    let operation = f.original;
+    await prisma.financialOperation.delete({ where: { id: f.release.id } });
+    let operation = f.original, execute: () => Promise<unknown>, rentalId: string | undefined;
     if (kind === "REFUND") {
-      const payment = await prisma.payment.create({ data: { reservationId: f.r.id, type: "RENTAL", status: "SUCCEEDED", amountCents: 15000, stripePaymentIntentId: "pi_stale_" + f.r.id } });
+      rentalId = "pi_stale_" + f.r.id;
+      const payment = await prisma.payment.create({ data: { reservationId: f.r.id, type: "RENTAL", status: "SUCCEEDED", amountCents: 15000, stripePaymentIntentId: rentalId } });
       const refund = await getOrCreateRefundOperation({ reservationId: f.r.id, paymentId: payment.id, amountCents: 1000, idempotencyKey: "stale-refund:" + f.r.id });
       operation = await prisma.financialOperation.findUniqueOrThrow({ where: { key: refund.idempotencyKey } });
+      execute = () => executeRefundOperation(refund.id, payment.stripePaymentIntentId);
+    } else {
+      await prisma.providerObjectOwnership.delete({ where: { providerId: f.intentId } });
+      operation = await prisma.financialOperation.update({ where: { id: operation.id }, data: { providerId: null, state: "READY" } });
+      execute = () => executeDepositOperation(operation);
     }
-    const create = vi.fn().mockResolvedValue({ id: f.intentId });
-    const running = runOperation(operation, { readBeforeDispatch: async () => { entered.release(); await resume.wait; return { id: f.intentId }; }, requiresDispatch: () => true, create, retrieve: async id => ({ id }), discover: async () => null });
-    const rejected = expect(running).rejects.toThrow("lease lost"); await entered.wait;
-    await withReservationLock(f.r.id, tx => tx.financialOperation.update({ where: { id: operation.id }, data: { leaseToken: "successor-" + kind } }), other);
-    resume.release(); await rejected; expect(create).not.toHaveBeenCalled();
-    expect((await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } })).leaseToken).toBe("successor-" + kind);
+    // Pause a real DB read after the real claim commits. No financial service,
+    // claim, guard or provider-dispatch implementation is replaced.
+    const read = workerDb.reservation.findUniqueOrThrow.bind(workerDb.reservation);
+    vi.spyOn(workerDb.reservation, "findUniqueOrThrow").mockImplementationOnce((async (args: Parameters<typeof read>[0]) => {
+      const value = await read(args); entered.release(); await resume.wait; return value;
+    }) as never);
+    const running = execute(), rejected = expect(running).rejects.toThrow(); await entered.wait;
+    expect((await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } })).state).toBe("RUNNING");
+    if (mode === "quarantine") await quarantine(f.r.id, operation.id);
+    else await withReservationLock(f.r.id, async tx => {
+      if (mode === "authority") {
+        if (rentalId) await tx.providerObjectOwnership.update({ where: { providerId: rentalId }, data: { kind: "BLOCKED" } });
+        else await tx.securityDeposit.update({ where: { reservationId: f.r.id }, data: { generation: { increment: 1 } } });
+      } else await tx.financialOperation.update({ where: { id: operation.id }, data: mode === "expired" ? { leaseExpiresAt: new Date(0) } : { leaseToken: "successor", leaseExpiresAt: new Date(Date.now() + 120000) } });
+    }, other);
+    resume.release(); await rejected;
+    expect(provider.refunds.create).not.toHaveBeenCalled(); expect(provider.paymentIntents.create).not.toHaveBeenCalled();
+    const saved = await prisma.financialOperation.findUniqueOrThrow({ where: { id: operation.id } });
+    if (mode === "replaced") expect(saved.leaseToken).toBe("successor");
+    if (mode === "authority") { expect(saved.state).toBe("REVIEW"); expect(await prisma.financialCase.count({ where: { operationId: operation.id } })).toBe(1); }
   });
   it("retains acceptance evidence across a real projection transaction failure and recovers without a second cancellation", async () => {
     const f = await fixture(); const trigger = "test_release_crash_" + f.r.id;

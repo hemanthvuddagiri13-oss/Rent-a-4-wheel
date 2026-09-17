@@ -75,3 +75,10 @@ describe("host cross-tenant access controls", () => {
     expect(context).toBeNull();
   });
 });
+
+it.each(["role", "active"])("revokes host context when current %s authority changes", async field => {
+  const { user, hostProfile } = await createTestHost(); cleanupUserIds.push(user.id); cleanupHostIds.push(hostProfile.id);
+  expect(await getHostContext(user.id)).not.toBeNull();
+  await prisma.user.update({ where: { id: user.id }, data: field === "role" ? { role: "CUSTOMER" } : { isActive: false } });
+  expect(await getHostContext(user.id)).toBeNull();
+});
