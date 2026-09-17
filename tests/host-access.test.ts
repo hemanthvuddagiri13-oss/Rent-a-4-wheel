@@ -82,3 +82,15 @@ it.each(["role", "active"])("revokes host context when current %s authority chan
   await prisma.user.update({ where: { id: user.id }, data: field === "role" ? { role: "CUSTOMER" } : { isActive: false } });
   expect(await getHostContext(user.id)).toBeNull();
 });
+
+it("revokes owner and employee access when their host is suspended", async () => {
+  const { user, hostProfile } = await createTestHost();
+  const employee = await createTestCustomer({ role: "HOST_EMPLOYEE" });
+  cleanupUserIds.push(user.id, employee.id); cleanupHostIds.push(hostProfile.id);
+  await prisma.hostEmployee.create({ data: { hostId: hostProfile.id, userId: employee.id, role: "STAFF" } });
+  expect(await getHostContext(user.id)).not.toBeNull();
+  expect(await getHostContext(employee.id)).not.toBeNull();
+  await prisma.hostProfile.update({ where: { id: hostProfile.id }, data: { onboardingStatus: "SUSPENDED" } });
+  expect(await getHostContext(user.id)).toBeNull();
+  expect(await getHostContext(employee.id)).toBeNull();
+});

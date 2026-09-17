@@ -66,7 +66,7 @@ export async function tripExperience(userId: string, id: string) {
     tripChecklistEntries: { select: { step: true, completedAt: true } },
     tripEvents: { select: { id: true, type: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 30 },
   } });
-  return { id, role, status: r.status, confirmationNumber: r.confirmationNumber, vehicle: r.vehicle,
+  return { id, role, observedAt: new Date(), status: r.status, confirmationNumber: r.confirmationNumber, vehicle: r.vehicle,
     pickupAt: r.pickupAt, returnAt: r.returnAt, bookingTimezone: r.bookingTimezone, pickupLocation: r.pickupLocation,
     documents: r.documents, reports: r.conditionReports.map(report => ({ id: report.id, phase: report.phase, role: report.submittedByRole, own: report.submittedById === userId, acceptedAt: report.acceptedAt, mileage: report.mileage, fuelLevel: report.fuelLevel, damageNotes: report.damageNotes, photos: report.photos })),
     handoffVerified: Boolean(r.identityHandoff?.verifiedAt), keysReleased: r.tripChecklistEntries.some(s => s.step === "KEYS_RELEASED"),

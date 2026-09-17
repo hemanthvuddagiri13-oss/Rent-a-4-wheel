@@ -15,14 +15,14 @@ export interface HostContext {
 export async function getHostContext(userId: string): Promise<HostContext | null> {
   const actor = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, isActive: true } });
   if (!actor?.isActive || !["HOST", "HOST_EMPLOYEE"].includes(actor.role)) return null;
-  const hostProfile = await prisma.hostProfile.findUnique({ where: { userId }, select: { id: true } });
-  if (hostProfile) return { hostId: hostProfile.id, role: "OWNER" };
+  const hostProfile = await prisma.hostProfile.findUnique({ where: { userId }, select: { id: true, onboardingStatus: true } });
+  if (hostProfile) return hostProfile.onboardingStatus === "SUSPENDED" ? null : { hostId: hostProfile.id, role: "OWNER" };
 
   const employment = await prisma.hostEmployee.findFirst({
     where: { userId },
-    select: { hostId: true, role: true },
+    select: { hostId: true, role: true, host: { select: { onboardingStatus: true } } },
   });
-  if (employment) return { hostId: employment.hostId, role: employment.role };
+  if (employment && employment.host.onboardingStatus !== "SUSPENDED") return { hostId: employment.hostId, role: employment.role };
 
   return null;
 }

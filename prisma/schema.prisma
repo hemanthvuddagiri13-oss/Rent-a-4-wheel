@@ -25,6 +25,7 @@ enum Role {
 }
 
 model User {
+  marketplaceFiles MarketplaceFile[]
   id            String    @id @default(cuid())
   name          String?
   email         String    @unique
@@ -185,6 +186,8 @@ enum StripeConnectStatus {
 // and receives payouts. Distinct from `VehicleOwner`, which tracks a purely
 // financial/legal ownership arrangement for company-managed vehicles.
 model HostProfile {
+  files MarketplaceFile[]
+  vehicleOwners VehicleOwner[]
   id     String @id @default(cuid())
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -275,6 +278,7 @@ enum OwnershipType {
 }
 
 model Vehicle {
+  marketplaceFiles MarketplaceFile[]
   listingRevision Int @default(1)
   listingApproval String @default("APPROVED")
   location String @default("Dallas, TX")
@@ -401,6 +405,8 @@ model VehicleFeatureOnVehicle {
 
 model VehicleOwner {
   hostId String?
+  host HostProfile? @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([hostId])
   id    String  @id @default(cuid())
   name  String
   email String?
@@ -1534,8 +1540,11 @@ model ProviderObjectOwnership {
 model MarketplaceFile {
   id String @id @default(cuid())
   hostId String
+  host HostProfile @relation(fields: [hostId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vehicleId String?
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   uploadedById String
+  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   purpose String
   storageKey String
   mimeType String

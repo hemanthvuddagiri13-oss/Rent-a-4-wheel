@@ -93,8 +93,19 @@ describe("marketplace permissions and real PostgreSQL state", () => {
     await expect(tripCommand(f.customer.id, r.id, "complete")).rejects.toThrow("assigned host");
     await expect(tripCommand(f.user.id, r.id, "complete")).rejects.toThrow("Both parties");
     for (const [submittedById, submittedByRole] of [[f.customer.id, "CUSTOMER"], [f.user.id, "HOST"]] as const) await prisma.conditionReport.create({ data: { reservationId: r.id, phase: "POST_TRIP", submittedById, submittedByRole, mileage: 1100, fuelLevel: 90, acceptedAt: new Date(), photos: { create: [{ category: "EXTERIOR", storageKey: "local:synthetic" }, { category: "INTERIOR", storageKey: "local:synthetic" }] } } });
-    await tripCommand(f.user.id, r.id, "complete");
-    await tripCommand(f.user.id, r.id, "complete");
+    const separate = new PrismaClient();
+    let release!: () => void, arrived!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { arrived = resolve; });
+    const holder = separate.$transaction(async tx => { await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + f.vehicle.id})`; arrived(); await gate; }, { timeout: 15000 });
+    await ready;
+    const requests = [tripCommand(f.user.id, r.id, "complete"), tripCommand(f.user.id, r.id, "complete")];
+    let bothWaiting = false;
+    for (let i = 0; i < 100; i++) {
+      const waits = await separate.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%financial_guard_xact%'`;
+      if (Number(waits[0].n) >= 2) { bothWaiting = true; break; } await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    release(); await holder; await Promise.all(requests); await separate.$disconnect();
+    expect(bothWaiting).toBe(true);
     expect(await prisma.reservation.findUnique({ where: { id: r.id } })).toMatchObject({ status: "COMPLETED", financialDisposition: "TERMINATED" });
     expect(await prisma.tripEvent.count({ where: { reservationId: r.id, type: "RETURN_REVIEWED" } })).toBe(1);
   });
