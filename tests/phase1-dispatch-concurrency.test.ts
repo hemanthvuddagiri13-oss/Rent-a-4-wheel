@@ -53,7 +53,7 @@ async function quarantine(reservationId: string, id: string) {
 describe("Phase 1 cross-instance dispatch guard", () => {
   it("takes over during retrieval: stale worker calls zero times and successor calls exactly once", async () => {
     const f = await fixture(), entered = barrier(), resume = barrier();
-    provider.paymentIntents.retrieve.mockImplementationOnce(async () => { entered.release(); await resume.wait; return f.remote(); });
+    provider.paymentIntents.retrieve.mockImplementationOnce(async () => { const staleCapture = f.remote(); entered.release(); await resume.wait; return staleCapture; });
     const stale = executeDepositReleaseOperation(f.release); await entered.wait;
     await withReservationLock(f.r.id, tx => tx.financialOperation.update({ where: { id: f.release.id }, data: { leaseExpiresAt: new Date(0) } }), other);
     expect(await executeDepositReleaseOperation(f.release)).toMatchObject({ status: "processed" });
