@@ -1,3 +1,4 @@
+import { GET as openNotice } from "@/app/api/community/notices/[id]/route";
 import { runCollaborationRetention } from "@/lib/collaboration-retention";
 import { communityAdmin } from "@/lib/community-admin";
 import bcrypt from "bcryptjs";
@@ -171,4 +172,20 @@ it("does not let a full batch of held files starve a later eligible deletion",as
  expect(privateDelete).toHaveBeenCalledWith(eligible.storageKey);
  expect(await prisma.storageDeletionJob.findUnique({where:{fileId:eligible.id}})).toMatchObject({state:"DONE"});
  expect(await prisma.collaborationFile.count({where:{conversationId:c.id,legalHold:true,deletedAt:null}})).toBe(101);
+});
+
+it("a concurrent uncertain financial intent prevents deletion before any Payment projection exists",async()=>{
+ const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id});await prisma.conversation.update({where:{id:c.id},data:{closedAt:new Date(),retainUntil:new Date(0)}});
+ const file=await prisma.collaborationFile.create({data:{conversationId:c.id,uploadedById:f.customer.id,purpose:"MESSAGE",storageKey:"local:"+c.id+"-financial.png",mimeType:"image/png",sha256:"test",size:4,scanStatus:"CLEAN",retainUntil:new Date(0)}});
+ const locked=barrier(),release=barrier();privateDelete.mockReset();
+ const intent=withReservationLock(f.r.id,async tx=>{await tx.financialOperation.create({data:{reservationId:f.r.id,key:"retention-test:"+f.r.id,kind:"RENTAL",fingerprint:"immutable-test-fingerprint",payload:{},state:"UNKNOWN"}});locked.release();await release.wait;},one);
+ await locked.wait;const work=runCollaborationRetention();
+ try{let waiting=false;for(let i=0;i<200;i++){const rows=await prisma.$queryRaw<Array<{pid:number}>>`SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT financial_guard_xact%'`;if(rows.length){waiting=true;break;}await new Promise(r=>setTimeout(r,10));}expect(waiting).toBe(true);}finally{release.release();await intent;}
+ await work;expect(await prisma.payment.count({where:{reservationId:f.r.id}})).toBe(0);expect(await fileHeld(prisma,file.id)).toBe(true);expect(privateDelete).not.toHaveBeenCalled();expect(await prisma.collaborationFile.findUnique({where:{id:file.id}})).toMatchObject({deletedAt:null});
+});
+
+it("notification HTTP redirects preserve the browser origin and recheck current target access",async()=>{
+ const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id});await messageCommand(f.h.user.id,c.id,{action:"send",body:"A private update for your trip."});const n=await prisma.inboxNotice.findFirstOrThrow({where:{userId:f.customer.id,resourceId:c.id}});
+ session.id=f.customer.id;const response=await openNotice(new Request("http://internal-server/api/community/notices/"+n.id),{params:Promise.resolve({id:n.id})});expect(response.status).toBe(303);expect(response.headers.get("location")).toBe("/connect/conversations/"+c.id);expect(response.headers.get("cache-control")).toContain("no-store");
+ session.id=f.other.id;expect((await openNotice(new Request("http://internal-server/api/community/notices/"+n.id),{params:Promise.resolve({id:n.id})})).status).toBe(404);session.id="";
 });
