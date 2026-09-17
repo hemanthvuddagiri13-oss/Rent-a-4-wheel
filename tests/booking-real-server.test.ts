@@ -58,6 +58,8 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   const saved=await prisma.reservation.findUniqueOrThrow({where:{id},include:{extras:true}}),draft=await prisma.bookingDraft.findFirstOrThrow({where:{reservationId:id}});
   expect(saved.pickupAt.toISOString()).toBe("2030-03-09T16:00:00.000Z");expect(saved.returnAt.toISOString()).toBe("2030-03-12T15:00:00.000Z");expect(saved.bookingTimezone).toBe("America/Chicago");
   expect(saved.extras.map(e=>[e.extraId,e.quantity,e.amountCents])).toEqual([[extra.id,1,1200]]);expect(saved.units).toBe(3);expect(saved.couponId).toBe(coupon.id);expect(saved.discountCents).toBe(1000);expect(saved.taxCents).toBe(1254);expect(saved.totalCents).toBe(16454);expect(saved.bookingFingerprint).toBe(draft.fingerprint);expect(saved.checkoutFingerprint).toBeTruthy();
+  const historyCount=await prisma.reservation.count({where:{vehicleId:v.id}});expect(historyCount).toBe(2);
+  expect(await prisma.reservation.count({where:{vehicleId:v.id,status:"EXPIRED"}})).toBe(1);
   for(const action of ["back","reload","stripe"]){
    if(action==="reload")await page.reload();
    if(action==="stripe")await page.goto(base+"/book/"+v.id+"?reservationId="+id+"&payment_intent=pi_fixture&payment_intent_client_secret=synthetic_secret&redirect_status=succeeded");
@@ -67,7 +69,7 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
    expect(await page.getByText("Browser child seat × 1",{exact:true}).count()).toBe(1);expect(await page.getByText("All booking times: America/Chicago",{exact:true}).count()).toBe(1);
    expect(await page.getByLabel("Promo Code").inputValue()).toBe(coupon.code);expect(await page.getByText("$164.54",{exact:true}).count()).toBeGreaterThan(0);
    const resumed=await prisma.reservation.findUniqueOrThrow({where:{id}});expect([resumed.pickupAt,resumed.returnAt,resumed.bookingFingerprint,resumed.checkoutFingerprint]).toEqual([saved.pickupAt,saved.returnAt,saved.bookingFingerprint,saved.checkoutFingerprint]);
-   expect((await prisma.bookingDraft.findUniqueOrThrow({where:{id:draft.id}})).revision).toBe(draft.revision);expect(await prisma.reservation.count({where:{vehicleId:v.id}})).toBe(1);
+   expect((await prisma.bookingDraft.findUniqueOrThrow({where:{id:draft.id}})).revision).toBe(draft.revision);expect(await prisma.reservation.count({where:{vehicleId:v.id}})).toBe(historyCount);expect(await prisma.reservation.count({where:{vehicleId:v.id,status:{not:"EXPIRED"}}})).toBe(1);
    expect(bookingLocal(resumed.pickupAt,resumed.bookingTimezone)).toBe("2030-03-09T10:00");
    await page.getByRole("button",{name:"Continue to Payment"}).click();
   }
