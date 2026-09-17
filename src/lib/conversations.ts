@@ -29,7 +29,14 @@ export async function messageCommand(userId: string, id: string, input: { action
     await tx.$queryRaw`SELECT "id" FROM "Conversation" WHERE "id"=${id} FOR UPDATE`;
     const { conversation } = await conversationAccess(tx, userId, id);
     const p = await policy(tx);
-    if (input.action === "read") return tx.conversationRead.upsert({ where: { conversationId_userId: { conversationId: id, userId } }, create: { conversationId: id, userId }, update: { readAt: new Date() } });
+    if (input.action === "read") {
+      const latest = await tx.conversationMessage.findFirst({ where: { conversationId: id, ...(input.messageId ? { id: input.messageId } : {}) }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+      if (input.messageId && !latest) throw new MarketplaceError("Not found.", 404);
+      const readAt = latest?.createdAt ?? new Date();
+      await tx.conversationRead.upsert({ where: { conversationId_userId: { conversationId: id, userId } }, create: { conversationId: id, userId, readAt }, update: {} });
+      await tx.conversationRead.updateMany({ where: { conversationId: id, userId, readAt: { lt: readAt } }, data: { readAt } });
+      return { success: true };
+    }
     if ((!conversation.reservationId || conversation.closedAt) && conversation.retainUntil < new Date()) throw new MarketplaceError("This conversation is archived.", 409);
     if (input.action === "send") {
       const body = safeText(input.body ?? "");
@@ -60,8 +67,10 @@ export async function messageCommand(userId: string, id: string, input: { action
 }
 export async function readConversation(userId: string, id: string, before?: string) {
   return prisma.$transaction(async tx => {
-    await conversationAccess(tx, userId, id);
+    const { conversation, role } = await conversationAccess(tx, userId, id);
+    if (before && !await tx.conversationMessage.findFirst({ where: { id: before, conversationId: id } })) throw new MarketplaceError("Invalid conversation page.", 400);
     const messages = await tx.conversationMessage.findMany({ where: { conversationId: id }, ...(before ? { cursor: { id: before }, skip: 1 } : {}), orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30, select: { id: true, senderId: true, body: true, createdAt: true, editedAt: true, deletedAt: true, version: true } });
-    return { messages, reads: await tx.conversationRead.findMany({ where: { conversationId: id } }) };
+    const senders = await tx.user.findMany({ where: { id: { in: messages.map(m => m.senderId) } }, select: { id: true, name: true, role: true } });
+    return { messages: messages.map(m => { const sender = senders.find(s => s.id === m.senderId); return { ...m, senderLabel: sender?.name?.trim().split(/\s+/)[0] || (m.senderId === conversation.customerId ? "Customer" : sender && ["SUPPORT_AGENT", "ADMIN", "SUPER_ADMIN"].includes(sender.role) ? "Support team" : "Host team") }; }), history: role === "OPERATOR" ? await tx.messageRevision.findMany({ where: { message: { conversationId: id } }, orderBy: { createdAt: "desc" }, take: 100 }) : [], reads: await tx.conversationRead.findMany({ where: { conversationId: id } }) };
   });
 }

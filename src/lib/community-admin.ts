@@ -10,6 +10,8 @@ export async function communityAdmin(userId: string, input: unknown) {
     z.object({ command: z.literal("contacts"), roadside: z.string().max(1000), insurance: z.string().max(1000), template: z.string().max(3000) }),
     z.object({ command: z.literal("hold"), id: z.string(), entity: z.enum(["CASE", "CONVERSATION", "FILE", "REVIEW"]), held: z.enum(["yes", "no"]), reason: z.string().min(10).max(1000) }),
     z.object({ command: z.literal("report"), id: z.string(), reason: z.string().min(10).max(1000) }),
+    z.object({ command: z.literal("retryDeletion"), id: z.string(), reason: z.string().min(10).max(1000) }),
+    z.object({ command: z.literal("privacyReview"), id: z.string(), state: z.enum(["RETAINED_LEGAL_REVIEW", "SCHEDULED_RETENTION"]), reason: z.string().min(10).max(1000) }),
   ]).parse(input);
   return prisma.$transaction(async tx => {
     const actor = await marketplaceActor(tx, userId);
@@ -28,12 +30,23 @@ export async function communityAdmin(userId: string, input: unknown) {
       if (data.entity === "FILE") {
         await lockFileRetention(tx, data.id);
         const file = await tx.collaborationFile.findUniqueOrThrow({ where: { id: data.id } });
-        if (file.deletedAt) throw new MarketplaceError("This file has already passed its deletion deadline.", 409);
+        if (file.deletedAt) throw new MarketplaceError("The deletion is already committed and cannot be reversed by a new hold.", 409);
         await tx.collaborationFile.update({ where: { id: data.id }, data: { legalHold } });
       } else if (data.entity === "CASE") await tx.serviceCase.update({ where: { id: data.id }, data: { legalHold } });
       else if (data.entity === "CONVERSATION") await tx.conversation.update({ where: { id: data.id }, data: { legalHold } });
       else await tx.tripReview.update({ where: { id: data.id }, data: { legalHold } });
       await tx.auditLog.create({ data: { actorId: userId, action: "retention.hold", entityType: data.entity, entityId: data.id, metadata: { legalHold, reason: safeText(data.reason) } } });
+    } else if (data.command === "retryDeletion") {
+      if (actor.role !== "SUPER_ADMIN") throw new MarketplaceError("Super administrator required.", 403);
+      const changed = await tx.storageDeletionJob.updateMany({ where: { id: data.id, state: "DEAD_LETTER" }, data: { state: "PENDING", attempts: 0, nextAttemptAt: new Date(), leaseToken: null, leaseUntil: null } });
+      if (!changed.count) throw new MarketplaceError("Only a dead-letter deletion may be retried.", 409);
+      await tx.auditLog.create({ data: { actorId: userId, action: "retention.deletion.retry", entityType: "StorageDeletionJob", entityId: data.id, metadata: { reason: safeText(data.reason) } } });
+    } else if (data.command === "privacyReview") {
+      if (actor.role !== "SUPER_ADMIN") throw new MarketplaceError("Super administrator required.", 403);
+      await tx.privacyDeletion.update({ where: { id: data.id }, data: { state: data.state, reviewedAt: new Date() } });
+      await tx.auditLog.create({ data: { actorId: userId, action: "privacy.review", entityType: "PrivacyDeletion", entityId: data.id, metadata: { state: data.state, reason: safeText(data.reason) } } });
+      // A review never bypasses the retention worker's per-record legal,
+      // security, agreement, and financial holds or promises immediate erasure.
     } else {
       await tx.communityReport.update({ where: { id: data.id }, data: { status: "REVIEWED" } });
       await tx.auditLog.create({ data: { actorId: userId, action: "abuse.reviewed", entityType: "CommunityReport", entityId: data.id, metadata: { reason: safeText(data.reason) } } });

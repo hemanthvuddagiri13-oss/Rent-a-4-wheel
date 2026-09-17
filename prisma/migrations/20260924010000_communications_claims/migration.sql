@@ -362,3 +362,5 @@ CREATE TRIGGER community_payment_notice AFTER INSERT OR UPDATE OF status ON "Pay
 CREATE TRIGGER community_refund_notice AFTER INSERT OR UPDATE OF status ON "Refund" FOR EACH ROW EXECUTE FUNCTION community_money_notice();
 CREATE TRIGGER community_deposit_notice AFTER INSERT OR UPDATE OF status ON "SecurityDeposit" FOR EACH ROW EXECUTE FUNCTION community_money_notice();
 
+
+ALTER TABLE "ServiceCaseEvent" ADD COLUMN "deadlineAt" TIMESTAMP(3);

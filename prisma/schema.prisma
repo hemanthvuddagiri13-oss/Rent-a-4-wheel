@@ -1761,6 +1761,7 @@ model ServiceCase {
 }
 
 model ServiceCaseEvent {
+  deadlineAt DateTime?
   id        String      @id @default(cuid())
   caseId    String
   case      ServiceCase @relation(fields: [caseId], references: [id])

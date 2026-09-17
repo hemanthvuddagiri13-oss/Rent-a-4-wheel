@@ -1,3 +1,6 @@
+import { runCollaborationRetention } from "@/lib/collaboration-retention";
+import { communityAdmin } from "@/lib/community-admin";
+import bcrypt from "bcryptjs";
 import { createHmac } from "node:crypto";
 import { readCollaborationFile } from "@/lib/collaboration-files";
 import { deliverNoticeChannels } from "@/lib/notice-channels";
@@ -12,8 +15,9 @@ import { saveTripReview,publicTripReviews } from "@/lib/trip-reviews";
 import { withReservationLock,assertFinancialTripStart } from "@/lib/financial-locks";
 import { assertNoUnresolvedFinancialReview } from "@/lib/return-financial-authority";
 import { fileHeld } from "@/lib/collaboration-retention";
+const privateDelete=vi.hoisted(()=>vi.fn(async(key:string)=>{void key;}));
 const privateRead=vi.hoisted(()=>vi.fn(async()=>({buffer:Buffer.from("private evidence")})));
-vi.mock("@/lib/storage",async original=>({...await original<typeof import("@/lib/storage")>(),readPrivateDocument:privateRead}));
+vi.mock("@/lib/storage",async original=>({...await original<typeof import("@/lib/storage")>(),readPrivateDocument:privateRead,deletePrivateDocument:privateDelete}));
 const session=vi.hoisted(()=>({id:""}));vi.mock("@/auth",()=>({auth:async()=>session.id ? {user:{id:session.id}} : null}));
 import { POST } from "@/app/api/community/route";
 import { POST as cron } from "@/app/api/cron/community/route";
@@ -30,9 +34,10 @@ afterAll(async()=>{
  await prisma.serviceCaseEvent.deleteMany({where:{caseId:{in:ids}}});await prisma.serviceCase.updateMany({where:{id:{in:ids}},data:{linkedCaseId:null}});await prisma.serviceCase.deleteMany({where:{id:{in:ids}}});
  const reviews=await prisma.tripReview.findMany({where:{reviewerId:{in:users}}});await prisma.reviewHistory.deleteMany({where:{reviewId:{in:reviews.map(r=>r.id)}}});await prisma.tripReview.deleteMany({where:{id:{in:reviews.map(r=>r.id)}}});
  await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.noticePreference.deleteMany({where:{userId:{in:users}}});await prisma.smsConsent.deleteMany({where:{userId:{in:users}}});
+ await prisma.privacyDeletion.deleteMany({where:{userId:{in:users}}});
  await prisma.inboxNotice.deleteMany({where:{userId:{in:users}}});await prisma.communityReport.deleteMany({where:{actorId:{in:users}}});
  for(const userId of users)await prisma.outboxMessage.deleteMany({where:{payload:{path:["userId"],equals:userId}}});
- await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.user.deleteMany({where:{id:{in:users}}});await one.$disconnect();await two.$disconnect();await prisma.$disconnect();
+ await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.authCode.deleteMany({where:{email:{in:(await prisma.user.findMany({where:{id:{in:users}},select:{email:true}})).map(u=>u.email)}}});await prisma.user.deleteMany({where:{id:{in:users}}});await one.$disconnect();await two.$disconnect();await prisma.$disconnect();
 });
 async function fixture(status:"ACTIVE"|"COMPLETED"="ACTIVE"){
  const h=await createTestHost(),customer=await createTestCustomer(),other=await createTestCustomer(),agent=await createTestCustomer({role:"CLAIMS_AGENT"}),support=await createTestCustomer({role:"SUPPORT_AGENT"});users.push(h.user.id,customer.id,other.id,agent.id,support.id);hosts.push(h.hostProfile.id);
@@ -109,4 +114,49 @@ it.each(["accepted","uncertain"])("durable SMS %s outcome cannot create a duplic
  await prisma.smsConsent.create({data:{userId:f.customer.id,phone:"+15550001234",consentAt:new Date(),source:"HANDSET_CONFIRMED"}});await prisma.noticePreference.create({data:{userId:f.customer.id,category:"MESSAGE",sms:true}});const notice=await prisma.inboxNotice.create({data:{eventKey:"sms:"+f.r.id,userId:f.customer.id,category:"MESSAGE",resourceType:"RESERVATION",resourceId:f.r.id,title:"Account update"}});
  const send=vi.fn(async()=>{if(outcome==="uncertain")throw new Error("Response lost after provider acceptance");return Response.json({sid:"SMsynthetic",status:"queued"});});vi.stubGlobal("fetch",send);
  try{await deliverNoticeChannels();await deliverNoticeChannels();expect(send).toHaveBeenCalledTimes(1);expect(await prisma.channelDelivery.findUnique({where:{noticeId_channel:{noticeId:notice.id,channel:"SMS"}}})).toMatchObject({state:outcome==="accepted"?"ACCEPTED":"REVIEW",attempts:1});}finally{vi.unstubAllGlobals();}
+});
+
+it("case overrides require an isolated one-use step-up code and never clear financial review",async()=>{
+ const f=await fixture(),superAdmin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(superAdmin.id);const c=await createServiceCase(f.h.user.id,{kind:"CLAIM",reservationId:f.r.id,category:"DAMAGE",title:"Step-up case",body:"A documented exceptional case decision."});
+ const input={action:"override",version:0,body:"Exceptional decision after reviewing all available evidence",confirm:"yes",stepUpCode:"123456"};
+ await prisma.authCode.create({data:{email:superAdmin.email,codeHash:await bcrypt.hash("123456",4),purpose:"SIGN_IN",expiresAt:new Date(Date.now()+60000)}});await expect(caseCommand(superAdmin.id,c.id,input)).rejects.toThrow("step-up");await expect(caseCommand(f.agent.id,c.id,input)).rejects.toThrow("step-up");
+ await prisma.authCode.create({data:{email:superAdmin.email,codeHash:await bcrypt.hash("123456",4),purpose:"EMERGENCY_OVERRIDE_STEP_UP",expiresAt:new Date(Date.now()+60000)}});await caseCommand(superAdmin.id,c.id,input);expect(await prisma.serviceCase.findUnique({where:{id:c.id}})).toMatchObject({state:"RESOLVED"});expect(await prisma.reservation.findUnique({where:{id:f.r.id}})).toMatchObject({financialDisposition:"REVIEW"});await expect(caseCommand(superAdmin.id,c.id,{...input,version:1})).rejects.toThrow("step-up");expect(await prisma.auditLog.count({where:{actorId:superAdmin.id,action:"case.step_up_override"}})).toBe(1);
+});
+it("HTTP cron executes projections idempotently and never treats email acceptance as in-app authority",async()=>{
+ const f=await fixture();process.env.CRON_SECRET="community-route-test";process.env.TWILIO_ACCOUNT_SID="";process.env.TWILIO_AUTH_TOKEN="";process.env.TWILIO_FROM_NUMBER="";
+ const event=await prisma.tripEvent.create({data:{reservationId:f.r.id,actorId:f.h.user.id,type:"IDENTITY_HANDOFF_VERIFIED"}});const key="trip-event:"+event.id;expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
+ const request=()=>new Request("http://localhost/api/cron/community",{method:"POST",headers:{authorization:"Bearer community-route-test"}});expect((await cron(request())).status).toBe(200);expect((await cron(request())).status).toBe(200);expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
+});
+
+it("a lost private-delete response resumes the exact committed key without reviving the file",async()=>{
+ const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id}),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(admin.id);await prisma.conversation.update({where:{id:c.id},data:{closedAt:new Date(),retainUntil:new Date(0)}});
+ const file=await prisma.collaborationFile.create({data:{conversationId:c.id,uploadedById:f.customer.id,purpose:"MESSAGE",storageKey:"local:"+c.id+"-delete.png",mimeType:"image/png",sha256:"test",size:4,scanStatus:"CLEAN",retainUntil:new Date(0)}}),gone=new Set<string>();privateDelete.mockReset();privateDelete.mockImplementation(async key=>{if(!gone.has(key)){gone.add(key);throw new Error("Response lost after deletion");}});
+ await runCollaborationRetention();const job=await prisma.storageDeletionJob.findUniqueOrThrow({where:{fileId:file.id}});expect(job).toMatchObject({state:"PENDING",attempts:1});expect(await prisma.collaborationFile.findUnique({where:{id:file.id}})).toMatchObject({scanStatus:"DELETION_COMMITTED"});await expect(communityAdmin(admin.id,{command:"hold",entity:"FILE",id:file.id,held:"yes",reason:"A later hold cannot revive a committed deletion"})).rejects.toThrow("deletion");
+ await prisma.storageDeletionJob.update({where:{id:job.id},data:{nextAttemptAt:new Date(0)}});await runCollaborationRetention();expect(await prisma.storageDeletionJob.findUnique({where:{id:job.id}})).toMatchObject({state:"DONE",attempts:2});expect(gone.size).toBe(1);expect(privateDelete.mock.calls.map(c=>c[0])).toEqual([file.storageKey,file.storageKey]);privateDelete.mockReset();
+});
+it("a concurrent legal hold wins before storage deletion at a real PostgreSQL lock barrier",async()=>{
+ const f=await fixture(),c=await openConversation(f.customer.id,{reservationId:f.r.id});await prisma.conversation.update({where:{id:c.id},data:{closedAt:new Date(),retainUntil:new Date(0)}});const file=await prisma.collaborationFile.create({data:{conversationId:c.id,uploadedById:f.customer.id,purpose:"MESSAGE",storageKey:"local:"+c.id+"-held.png",mimeType:"image/png",sha256:"test",size:4,scanStatus:"CLEAN",retainUntil:new Date(0)}});
+ const locked=barrier(),release=barrier();privateDelete.mockReset();const hold=one.$transaction(async tx=>{await tx.$queryRaw`SELECT "id" FROM "Conversation" WHERE "id"=${c.id} FOR UPDATE`;await tx.conversation.update({where:{id:c.id},data:{legalHold:true}});locked.release();await release.wait;});await locked.wait;const work=runCollaborationRetention();
+ try{let waiting=false;for(let i=0;i<200;i++){const rows=await prisma.$queryRaw<Array<{pid:number}>>`SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT "id" FROM "Conversation"%'`;if(rows.length){waiting=true;break;}await new Promise(r=>setTimeout(r,10));}expect(waiting).toBe(true);}finally{release.release();await hold;}
+ await work;expect(privateDelete).not.toHaveBeenCalled();expect(await prisma.collaborationFile.findUnique({where:{id:file.id}})).toMatchObject({deletedAt:null,scanStatus:"CLEAN"});
+});
+
+it("references only accepted evidence from the same trip and leaves original photos immutable",async()=>{
+ const f=await fixture(),g=await fixture();
+ const report=await prisma.conditionReport.create({data:{reservationId:f.r.id,phase:"PRE_TRIP",submittedById:f.h.user.id,submittedByRole:"HOST",acceptedAt:new Date(),mileage:1000,fuelLevel:90,photos:{create:{category:"EXTERIOR",storageKey:"local:original-private-evidence"}}},include:{photos:true}});
+ const photo=report.photos[0],snapshot=JSON.stringify(photo);
+ await expect(createServiceCase(g.h.user.id,{kind:"CLAIM",reservationId:g.r.id,category:"DAMAGE",title:"Wrong trip evidence",body:"This evidence must not cross tenant boundaries.",originalPhotoIds:[photo.id]})).rejects.toThrow("Evidence must belong");
+ const c=await createServiceCase(f.h.user.id,{kind:"CLAIM",reservationId:f.r.id,category:"DAMAGE",title:"Original evidence claim",body:"Compare accepted immutable trip evidence.",originalPhotoIds:[photo.id]});
+ await caseCommand(f.h.user.id,c.id,{action:"transition",version:0,state:"EVIDENCE_SUBMITTED",body:"Submitted accepted original trip evidence."});
+ expect(JSON.stringify(await prisma.conditionPhoto.findUnique({where:{id:photo.id}}))).toBe(snapshot);
+ expect((await readServiceCase(f.customer.id,c.id)).originalPhotos.map(p=>p.id)).toContain(photo.id);
+ expect(await prisma.collaborationFile.count({where:{caseId:c.id}})).toBe(0);
+});
+it("restricts privacy decisions and deletion retries to super admins without clearing retention holds",async()=>{
+ const f=await fixture();const request=await prisma.privacyDeletion.create({data:{userId:f.customer.id}});
+ await expect(communityAdmin(f.support.id,{command:"privacyReview",id:request.id,state:"SCHEDULED_RETENTION",reason:"Reviewed the record retention requirements."})).rejects.toThrow();
+ await prisma.user.update({where:{id:f.agent.id},data:{role:"SUPER_ADMIN"}});
+ await communityAdmin(f.agent.id,{command:"privacyReview",id:request.id,state:"RETAINED_LEGAL_REVIEW",reason:"Financial and agreement retention requires review."});
+ expect(await prisma.privacyDeletion.findUnique({where:{id:request.id}})).toMatchObject({state:"RETAINED_LEGAL_REVIEW",reviewedAt:expect.any(Date)});
+ expect(await prisma.auditLog.count({where:{entityId:request.id,action:"privacy.review"}})).toBe(1);
 });
