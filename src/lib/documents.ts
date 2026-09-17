@@ -1,8 +1,9 @@
+import { withReservationLock } from "@/lib/financial-locks";
 import { createHash } from "crypto";
 import sharp from "sharp";
 import { prisma } from "@/lib/prisma";
 import { storePrivateDocument } from "@/lib/storage";
-import type { DocumentType } from "@prisma/client";
+import type { DocumentType, Prisma } from "@prisma/client";
 
 export const MAX_DOCUMENT_SIZE_BYTES = 8 * 1024 * 1024; // 8MB
 
@@ -133,7 +134,7 @@ export async function storeIdentityDocument(params: {
 
   const { storageKey } = await storePrivateDocument(sanitized.buffer, sanitized.mimeType);
 
-  return prisma.driverDocument.create({
+  const create = (tx: Prisma.TransactionClient) => tx.driverDocument.create({
     data: {
       userId: params.userId,
       reservationId: params.reservationId,
@@ -147,6 +148,11 @@ export async function storeIdentityDocument(params: {
       retentionExpiresAt: computeRetentionExpiresAt(),
     },
   });
+  return params.reservationId ? withReservationLock(params.reservationId, async tx => {
+    const reservation = await tx.reservation.findUniqueOrThrow({ where: { id: params.reservationId! } });
+    if (reservation.customerId !== params.userId) throw new InvalidDocumentError("Reservation ownership changed");
+    return create(tx);
+  }) : create(prisma);
 }
 
 /**

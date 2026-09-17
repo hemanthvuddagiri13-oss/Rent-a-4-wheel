@@ -1,3 +1,4 @@
+import { withReservationLock } from "@/lib/financial-locks";
 import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       storedPhotos.push({ category: photoCategories[i] as ConditionPhotoCategory, storageKey });
     }
 
-    const report = await prisma.conditionReport.create({
+    const report = await withReservationLock(reservationId, tx => tx.conditionReport.create({
       data: {
         reservationId,
         phase: phase as ConditionReportPhase,
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         damageNotes: typeof damageNotes === "string" && damageNotes ? damageNotes : null,
         photos: { create: storedPhotos },
       },
-    });
+    }));
 
     await prisma.tripEvent.create({
       data: {

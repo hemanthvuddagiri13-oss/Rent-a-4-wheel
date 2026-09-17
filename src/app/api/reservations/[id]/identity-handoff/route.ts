@@ -1,3 +1,4 @@
+import { withReservationLock } from "@/lib/financial-locks";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const allTrue =
     parsed.data.licenseMatchesUpload && parsed.data.physicalLicenseUnexpired && parsed.data.selfieMatchesCustomer;
 
-  const handoff = await prisma.identityHandoffVerification.upsert({
+  const handoff = await withReservationLock(reservationId, tx => tx.identityHandoffVerification.upsert({
     where: { reservationId },
     create: {
       reservationId,
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       notes: parsed.data.notes,
       verifiedAt: allTrue ? new Date() : null,
     },
-  });
+  }));
 
   await prisma.tripEvent.create({
     data: {

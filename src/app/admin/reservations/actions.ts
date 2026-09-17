@@ -19,10 +19,12 @@ async function requireAdmin() {
 
 export async function updateDocumentStatus(documentId: string, status: "APPROVED" | "REJECTED" | "NEEDS_INFORMATION") {
   const session = await requireAdmin();
-  const doc = await prisma.driverDocument.update({
+  const prior = await prisma.driverDocument.findUniqueOrThrow({ where: { id: documentId } });
+  const update = (tx: import("@prisma/client").Prisma.TransactionClient) => tx.driverDocument.update({
     where: { id: documentId },
     data: { status, reviewedById: session.user.id, reviewedAt: new Date() },
   });
+  const doc = prior.reservationId ? await withReservationLock(prior.reservationId, update) : await update(prisma);
   await prisma.auditLog.create({
     data: { actorId: session.user.id, action: "document.review", entityType: "DriverDocument", entityId: documentId, metadata: { status } },
   });

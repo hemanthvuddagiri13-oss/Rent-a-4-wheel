@@ -1,3 +1,4 @@
+import { withReservationLock } from "@/lib/financial-locks";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
@@ -26,7 +27,7 @@ export async function POST(
     return NextResponse.json({ success: true, alreadyAccepted: true });
   }
 
-  await prisma.conditionReport.update({ where: { id: reportId }, data: { acceptedAt: new Date() } });
+  await withReservationLock(reservationId, tx => tx.conditionReport.update({ where: { id: reportId }, data: { acceptedAt: new Date() } }));
   await prisma.tripEvent.create({
     data: {
       reservationId,

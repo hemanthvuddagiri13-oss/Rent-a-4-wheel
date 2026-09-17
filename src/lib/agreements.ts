@@ -1,3 +1,4 @@
+import { withReservationLock } from "@/lib/financial-locks";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { storePrivateDocument } from "@/lib/storage";
@@ -92,8 +93,8 @@ export async function generateAndStoreSignedAgreementPdf(reservationId: string) 
   const pdfBytes = await generateRentalAgreementPdf({ reservation, vehicle: reservation.vehicle, acceptance });
   const { storageKey } = await storePrivateDocument(Buffer.from(pdfBytes), "application/pdf");
 
-  await prisma.agreementAcceptance.update({
+  await withReservationLock(reservationId, tx => tx.agreementAcceptance.update({
     where: { id: acceptance.id },
     data: { signedPdfStorageKey: storageKey },
-  });
+  }));
 }

@@ -1,3 +1,4 @@
+import { withReservationLock } from "@/lib/financial-locks";
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
@@ -75,7 +76,7 @@ describe("financial routes over HTTP with the real database", () => {
     const v = await createTestVehicle({ securityDepositCents: 0 }), u = await createTestCustomer(); vehicles.push(v.id); users.push(u.id); mocks.session = { user: { id: u.id } };
     const holdResponse = await post("/hold", { vehicleId: v.id, draftId: crypto.randomUUID(), revision: 1, pickupAt: "2031-04-01T10:00:00Z", returnAt: "2031-04-03T10:00:00Z", extraIds: [] });
     expect(holdResponse.status).toBe(200); const held = await holdResponse.json();
-    const docs = await Promise.all((["LICENSE_FRONT","LICENSE_BACK","SELFIE_WITH_LICENSE"] as const).map(type => prisma.driverDocument.create({ data: { reservationId: held.id, userId: u.id, type, storageKey: `local:http-${type}`, mimeType: "image/jpeg", contentSha256: "test", fileSizeBytes: 10 } })));
+    const docs = await Promise.all((["LICENSE_FRONT","LICENSE_BACK","SELFIE_WITH_LICENSE"] as const).map(type => withReservationLock(held.id, tx => tx.driverDocument.create({ data: { reservationId: held.id, userId: u.id, type, storageKey: `local:http-${type}`, mimeType: "image/jpeg", contentSha256: "test", fileSizeBytes: 10 } }))));
     const oldLegal = await prisma.legalDocument.findUnique({ where: { type: "RENTAL_AGREEMENT" } });
     await prisma.legalDocument.upsert({ where: { type: "RENTAL_AGREEMENT" }, update: { needsAttorneyReview: false }, create: { type: "RENTAL_AGREEMENT", title: "Test terms", content: "Test agreement", needsAttorneyReview: false } });
     const body = { bookingFingerprint: held.bookingFingerprint, agreementAccepted: true, documentIds: { front: docs[0].id, back: docs[1].id, selfie: docs[2].id }, driver: { firstName: "Test", lastName: "Customer", dob: "1990-01-01", email: u.email, phone: "5551234567", address: "1 Test St", city: "Dallas", state: "TX", zip: "75001", country: "US", licenseNumber: "TEST123", licenseState: "TX", licenseExpiration: "2035-01-01" } };
