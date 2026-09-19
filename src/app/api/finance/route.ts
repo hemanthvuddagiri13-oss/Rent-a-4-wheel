@@ -5,7 +5,7 @@ import { boundedBody } from "@/lib/bounded-request";
 import { MarketplaceError,marketplaceLimit } from "@/lib/marketplace";
 import { financeAdmin,financeHost } from "@/lib/finance-access";
 import { saveFinanceRule } from "@/lib/finance-rules";
-import { connectOnboarding,synchronizeConnect,createPayoutBatch,planTransferReversal,retryBankPayout } from "@/lib/payout-operations";
+import { connectOnboarding,synchronizeConnect,createPayoutBatch,planTransferReversal,retryBankPayout,voidUndispatchedBatch } from "@/lib/payout-operations";
 import { proposeAdjustment,approveAdjustment,updatePayoutSchedule,grantFinance,resolveFinanceIssue } from "@/lib/finance-admin";
 import { issueFinanceDocument } from "@/lib/finance-documents";
 import { requestAuthCode } from "@/lib/auth-code";
@@ -26,6 +26,7 @@ export async function POST(req:Request){
   case "adjustment": result=await proposeAdjustment(userId,d);break;
   case "approveAdjustment": result=await approveAdjustment(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode));break;
   case "reversal": result=await planTransferReversal(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode));break;
+  case "voidBatch": result=await voidUndispatchedBatch(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode),z.string().parse(d.reason));break;
   case "retryPayout": result=await retryBankPayout(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode));break;
   case "resolve": result=await resolveFinanceIssue(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode),z.string().parse(d.reason));break;
   case "document": result=await issueFinanceDocument(userId,z.object({kind:z.string(),reservationId:z.string().optional(),batchId:z.string().optional(),period:z.string().optional(),newVersion:z.boolean().default(false)}).parse(d));break;

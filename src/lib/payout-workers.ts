@@ -1,3 +1,4 @@
+import type { Prisma,PrismaClient } from "@prisma/client";
 import { Temporal } from "@js-temporal/polyfill";
 import { prisma } from "@/lib/prisma";
 import { reconcileAccounting,financeIssue } from "@/lib/finance-ledger";
@@ -24,8 +25,8 @@ export async function recoverPayoutOperations(){
 export async function schedulePayouts(){
  const hosts=await prisma.connectAccount.findMany({where:{active:true,schedule:{not:"MANUAL"},nextRunAt:{lte:new Date()}},orderBy:{nextRunAt:"asc"},take:25});let planned=0;
  for(const a of hosts)try{
-  const claimed=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+a.hostId})`;const rule=await selectedRule(tx,"PAYOUT",[{scope:"HOST",scopeId:a.hostId},{scope:"DEFAULT",scopeId:"*"}]);if(!rule)return false;const p=payoutSchema.parse(rule.config);if(!p.allowedSchedules.includes(a.schedule as "MANUAL")||a.minimumCents<p.minimumCents)return false;const changed=await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:nextPayoutCutoff(a.schedule,a.timezone)}});return Boolean(changed.count);});
-  if(claimed){await synchronizeConnect(a.hostId);if((await createPayoutBatch(a.hostId)).id)planned++;}
+  const claimed=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+a.hostId})`;const rule=await selectedRule(tx,"PAYOUT",[{scope:"HOST",scopeId:a.hostId},{scope:"DEFAULT",scopeId:"*"}]);if(!rule)return false;const p=payoutSchema.parse(rule.config);if(!p.allowedSchedules.includes(a.schedule as "MANUAL")||a.minimumCents<p.minimumCents)return false;const changed=await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:nextPayoutCutoff(a.schedule,a.timezone)}});if(changed.count)await tx.outboxMessage.upsert({where:{deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`},create:{type:"finance_schedule",deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`,payload:{hostId:a.hostId,cutoff:new Date().toISOString()}},update:{}});return Boolean(changed.count);});
+  if(claimed)planned++;
  }catch{await financeIssue(prisma,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Scheduled payout remains pending; operator review required"});}
  return {planned};
 }
@@ -46,3 +47,5 @@ export async function auditFinanceHistory(){
  }}return {checked:rows.length};
 }
 export const payoutWorkers={accounting:reconcileAccounting,recovery:recoverPayoutOperations,schedule:schedulePayouts,reconciliation:reconcileFinance,"historical-audit":auditFinanceHistory};
+
+export async function executeScheduledPayout(id:string,token:string,payload:Prisma.JsonValue,db:PrismaClient=prisma){const p=payload as {hostId:string;cutoff:string};if(!p.hostId||!p.cutoff||!Number.isFinite(Date.parse(p.cutoff)))throw new Error("Invalid immutable payout schedule intent");await synchronizeConnect(p.hostId);return createPayoutBatch(p.hostId,db,{id,token,cutoff:new Date(p.cutoff)});}

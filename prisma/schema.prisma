@@ -1944,6 +1944,7 @@ model PayoutBatch {
  transferId String? @unique
  payoutId String? @unique
  transferredCents Int @default(0)
+ paidCents Int @default(0)
  reversedCents Int @default(0)
  reversalReservedCents Int @default(0)
  generation Int @default(1)

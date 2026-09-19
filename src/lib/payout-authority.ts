@@ -35,7 +35,8 @@ export async function payoutEligibility(tx:Prisma.TransactionClient,reservationI
  if(!availableAt||availableAt>now)reasons.push("Settlement delay has not elapsed");
  const amountCents=earning?Math.max(0,earning.netCents-earning.refundedCents+earning.adjustmentCents):0;
  if(amountCents<=0)reasons.push("No positive available earnings");
- return {eligible:reasons.length===0,reasons,amountCents,availableAt,earning,hostId:r.vehicle.hostId,account};
+ const minimumCents=Number((snapshot?.settlement as {minimumCents?:number}|undefined)?.minimumCents??Number.MAX_SAFE_INTEGER);
+ return {eligible:reasons.length===0,reasons,amountCents,minimumCents,availableAt,earning,hostId:r.vehicle.hostId,account};
 }
 export function requireFinanceSandbox(){if(process.env.FINANCE_SANDBOX_ENABLED!=="true"||!process.env.STRIPE_SECRET_KEY?.startsWith("sk_test_"))throw new OperationPendingError("Connect test mode must be explicitly enabled; live payouts are disabled");}
 export async function assertFinanceDispatch(tx:Prisma.TransactionClient,op:FinancialOperation){
@@ -53,15 +54,19 @@ export async function assertFinanceDispatch(tx:Prisma.TransactionClient,op:Finan
   if(reversal.batchId!==batch.id||reversal.operationId!==op.id||reversal.amountCents!==p.amount||batch.reversalReservedCents<reversal.amountCents)throw new Error("Reversal not atomically reserved");return;
  }
  if(!account.payoutsEnabled||account.verificationStatus!=="VERIFIED")throw new OperationPendingError("Stripe payouts disabled");
- if(p.amount!==batch.amountCents)throw new Error("Batch amount changed");
+ const payable=op.kind==="FINANCE_PAYOUT"?batch.transferredCents-batch.reversedCents:batch.amountCents;
+ if(p.amount!==payable)throw new Error("Immutable operation amount differs from unreversed batch funds");
  if(op.kind==="FINANCE_PAYOUT" && batch.transferredCents!==batch.amountCents)throw new OperationPendingError("Transfer has not been confirmed");
  const items=await tx.payoutItem.findMany({where:{batchId:batch.id,active:true}});
  if(!items.length||items.reduce((sum,item)=>sum+item.amountCents,0)!==batch.amountCents)throw new Error("Frozen batch items do not cover the immutable amount");
- if(batch.reversedCents||batch.reversalReservedCents)throw new OperationPendingError("Transfer recovery blocks new payout movement");
+ if(batch.reversalReservedCents)throw new OperationPendingError("Pending transfer recovery blocks new payout movement");
+ let eligibleTotal=0;
  for(const item of items){
   const result=await payoutEligibility(tx,item.reservationId,{ignoreBatch:batch.id});
-  if(!result.eligible||item.amountCents!==result.amountCents)throw new OperationPendingError("Payout eligibility changed: "+result.reasons.join("; "));
+  if(!result.eligible||(op.kind==="FINANCE_TRANSFER"?item.amountCents!==result.amountCents:item.amountCents<result.amountCents))throw new OperationPendingError("Payout eligibility changed: "+result.reasons.join("; "));
+  eligibleTotal+=result.amountCents;
  }
+ if(eligibleTotal!==payable)throw new OperationPendingError("Reconciled eligible earnings differ from the provider operation amount");
  const {verifyFinanceDestination}=await import("@/lib/finance-provider");
  await verifyFinanceDestination(op);
 }
