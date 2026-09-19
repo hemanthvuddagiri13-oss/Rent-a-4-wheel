@@ -53,6 +53,7 @@ export default async function ReservationDetailPage({ params }: { params: Promis
       </div>
 
       <TripConnections reservationId={id} />
+      <details className="my-5 rounded-xl border border-white/10 p-5"><summary className="cursor-pointer text-white">Private receipts & statements</summary><div className="mt-5"><ActionForm endpoint="/api/finance" action="document" values={{reservationId:id,newVersion:true}} fields={[{name:"kind",label:"Financial document",options:["PAYMENT_RECEIPT","REFUND_RECEIPT","RENTAL_INVOICE","FINAL_TRIP_STATEMENT"]}]} label="Issue private PDF" redirectTo="/api/finance/documents/:id"/></div></details>
       <div className="mt-6 relative aspect-[16/9] w-full overflow-hidden rounded-xl bg-surface">
         <Image src={reservation.vehicle.images[0]?.url || "/images/vehicles/sedan.svg"} alt="" fill className="object-cover" />
       </div>

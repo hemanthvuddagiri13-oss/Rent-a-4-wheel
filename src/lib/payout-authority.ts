@@ -62,4 +62,6 @@ export async function assertFinanceDispatch(tx:Prisma.TransactionClient,op:Finan
   const result=await payoutEligibility(tx,item.reservationId,{ignoreBatch:batch.id});
   if(!result.eligible||item.amountCents!==result.amountCents)throw new OperationPendingError("Payout eligibility changed: "+result.reasons.join("; "));
  }
+ const {verifyFinanceDestination}=await import("@/lib/finance-provider");
+ await verifyFinanceDestination(op);
 }

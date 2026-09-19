@@ -50,7 +50,7 @@ jobs:
       - name: Dispatch concurrency stability (five consecutive runs)
         run: |
           for run in 1 2 3 4 5; do
-            npm test -- tests/phase1-dispatch-concurrency.test.ts tests/batch1f-release-worker.test.ts tests/finance-ledger.test.ts || exit 1
+            npm test -- tests/phase1-dispatch-concurrency.test.ts tests/batch1f-release-worker.test.ts tests/finance-ledger.test.ts tests/payout-finance.test.ts || exit 1
           done
       - name: Production build
         run: npm run build
@@ -82,4 +82,12 @@ jobs:
         with:
           name: marketplace-screenshots
           path: test-artifacts/marketplace
+          if-no-files-found: warn
+
+      - name: Finance screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-screenshots
+          path: test-artifacts/finance
           if-no-files-found: warn

@@ -1,0 +1,60 @@
+import { afterAll,afterEach,expect,it,vi } from "vitest";
+import { PrismaClient } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { prisma,createTestHost,createTestCustomer,createTestVehicle,createTestReservation,cleanupReservationsForVehicles } from "./helpers/factories";
+import { barrier } from "./helpers/barrier";
+import { withReservationLock } from "@/lib/financial-locks";
+import { accountReservation } from "@/lib/finance-ledger";
+import { createPayoutBatch,executeFinanceOperation } from "@/lib/payout-operations";
+import { payoutEligibility } from "@/lib/payout-authority";
+import { financeHost } from "@/lib/finance-access";
+import { issueFinanceDocument,readFinanceDocument } from "@/lib/finance-documents";
+const remote=vi.hoisted(()=>({create:vi.fn(),retrieve:vi.fn(),discover:vi.fn()}));
+vi.mock("@/lib/finance-provider",async original=>({...await original<object>(),verifyFinanceDestination:async()=>{},createFinanceProviderObject:remote.create,retrieveFinanceProviderObject:remote.retrieve,discoverFinanceProviderObject:remote.discover}));
+const one=new PrismaClient(),two=new PrismaClient(),users:string[]=[],hosts:string[]=[],vehicles:string[]=[];
+afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();remote.create.mockReset();remote.retrieve.mockReset();remote.discover.mockReset();});
+afterAll(async()=>{
+ // Only the disposable test database may truncate immutable financial fixtures.
+ // No production service exposes this teardown capability.
+ const db=(await prisma.$queryRaw<Array<{name:string}>>`SELECT current_database() name`)[0].name;
+ if(!db.endsWith("_test"))throw new Error("Financial fixtures require an isolated _test database");
+ await prisma.$executeRawUnsafe('TRUNCATE "FinanceDocument","LedgerLine","LedgerJournal","PayoutItem","PayoutReversal","PayoutBatch","HostEarning","FinanceObject","FinanceIssue","FinanceAdjustment","ProviderDispute","ConnectAccount","FinanceGrant" CASCADE');
+ await prisma.financialOperation.deleteMany({where:{kind:{startsWith:"FINANCE_"},payload:{path:["hostId"],string_starts_with:""}}});
+ await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.user.deleteMany({where:{id:{in:users}}});await Promise.all([one.$disconnect(),two.$disconnect(),prisma.$disconnect()]);
+});
+async function fixture(){
+ const h=await createTestHost(),customer=await createTestCustomer();users.push(h.user.id,customer.id);hosts.push(h.hostProfile.id);const v=await createTestVehicle({hostId:h.hostProfile.id});vehicles.push(v.id);
+ const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date("2041-01-01"),returnAt:new Date("2041-01-04"),status:"COMPLETED"});
+ await prisma.trip.create({data:{reservationId:r.id,startedAt:new Date(Date.now()-86400000*4),endedAt:new Date(Date.now()-86400000*2)}});
+ await prisma.tripEvent.create({data:{reservationId:r.id,type:"RETURN_REVIEWED",actorId:h.user.id}});
+ for(const [submittedById,submittedByRole]of [[customer.id,"CUSTOMER"],[h.user.id,"HOST"]]as const)await prisma.conditionReport.create({data:{reservationId:r.id,phase:"POST_TRIP",submittedById,submittedByRole,acceptedAt:new Date(),mileage:500,fuelLevel:100,photos:{create:[{category:"EXTERIOR",storageKey:"local:finance-fixture"},{category:"INTERIOR",storageKey:"local:finance-fixture"}]}}});
+ const payment=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents}});
+ await prisma.financeQuote.create({data:{reservationId:r.id,terms:{commission:{version:1},tax:{version:1},settlement:{delayDays:1,minimumCents:1,loss:{refundHostBps:10000,chargebackHostBps:10000,reverseTransfers:true}},amounts:{grossCents:15000,hostDiscountCents:0,platformDiscountCents:0,commissionCents:1500,hostNetCents:13500,rentalTaxCents:0,feeTaxCents:0,feesCents:0,totalCents:15000},approved:true}}});
+ await withReservationLock(r.id,tx=>accountReservation(tx,r.id));
+ await prisma.connectAccount.create({data:{hostId:h.hostProfile.id,accountId:"acct_"+randomUUID(),detailsSubmitted:true,payoutsEnabled:true,verificationStatus:"VERIFIED",synchronizedAt:new Date(),minimumCents:1}});
+ return {h,customer,v,r,payment};
+}
+it("approves only settled completed returns and holds a new claim or suspended host",async()=>{
+ const f=await fixture();expect((await withReservationLock(f.r.id,tx=>payoutEligibility(tx,f.r.id))).eligible).toBe(true);
+ const c=await prisma.serviceCase.create({data:{kind:"CLAIM",reservationId:f.r.id,vehicleId:f.v.id,openedById:f.customer.id,category:"DAMAGE",title:"Claim fixture",details:{},dueAt:new Date(),retainUntil:new Date()}});
+ expect((await withReservationLock(f.r.id,tx=>payoutEligibility(tx,f.r.id))).eligible).toBe(false);await prisma.serviceCase.delete({where:{id:c.id}});
+ await prisma.user.update({where:{id:f.h.user.id},data:{isActive:false}});expect((await withReservationLock(f.r.id,tx=>payoutEligibility(tx,f.r.id))).eligible).toBe(false);
+});
+it("separate payout workers contend at the actual database barrier and reserve earnings once",async()=>{
+ const f=await fixture(),entered=barrier(),release=barrier();
+ const held=prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+f.v.id})`;entered.release();await release.wait;},{timeout:15000});await entered.wait;
+ const first=createPayoutBatch(f.h.hostProfile.id,one),second=createPayoutBatch(f.h.hostProfile.id,two);let pids:number[]=[];
+ try{for(let n=0;n<300;n++){const rows=await prisma.$queryRaw<Array<{pid:number}>>`SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT financial_guard_xact%'`;pids=[...new Set(rows.map(x=>x.pid))];if(pids.length>=2)break;await new Promise(r=>setTimeout(r,10));}expect(pids.length).toBeGreaterThanOrEqual(2);}finally{release.release();}
+ await held;const results=await Promise.all([first,second]);expect(results.filter(r=>r.id)).toHaveLength(1);expect(await prisma.payoutItem.count({where:{reservationId:f.r.id,active:true}})).toBe(1);
+});
+it("lost provider response is discovered without creating a second transfer",async()=>{
+ vi.stubEnv("FINANCE_SANDBOX_ENABLED","true");vi.stubEnv("STRIPE_SECRET_KEY","sk_test_fixture");const f=await fixture(),batch=await createPayoutBatch(f.h.hostProfile.id),op=await prisma.financialOperation.findUniqueOrThrow({where:{key:"transfer:"+batch.id}}),p=op.payload as {hostId:string;accountId:string;amount:number;currency:string};
+ const result={id:"tr_"+randomUUID(),operationKey:op.key,kind:op.kind,hostId:p.hostId,accountId:p.accountId,status:"transferred",amount:p.amount,currency:p.currency,amountReversed:0};const providerLedger=new Map<string,typeof result>();remote.create.mockImplementationOnce(async()=>{providerLedger.set(op.key,result);throw new Error("Lost response after provider accepted");});remote.discover.mockImplementation(async()=>providerLedger.get(op.key)??null);
+ await expect(executeFinanceOperation(op)).rejects.toThrow("Lost response");expect(await prisma.financialDispatch.count({where:{operationId:op.id,phase:"DISPATCHED"}})).toBe(1);await executeFinanceOperation(op);expect(remote.create).toHaveBeenCalledTimes(1);expect(remote.discover).toHaveBeenCalledTimes(1);expect(await prisma.payoutBatch.findUnique({where:{id:batch.id!}})).toMatchObject({transferId:result.id,transferredCents:13500});
+});
+it("undiscovered dispatched outcome enters review without blind replay",async()=>{
+ vi.stubEnv("FINANCE_SANDBOX_ENABLED","true");vi.stubEnv("STRIPE_SECRET_KEY","sk_test_fixture");const f=await fixture(),b=await createPayoutBatch(f.h.hostProfile.id),op=await prisma.financialOperation.findUniqueOrThrow({where:{key:"transfer:"+b.id}});await prisma.financialDispatch.create({data:{operationId:op.id,leaseToken:"lost-worker",phase:"DISPATCHED"}});remote.discover.mockResolvedValue(null);await expect(executeFinanceOperation(op)).rejects.toThrow("unknown");expect(remote.create).not.toHaveBeenCalled();expect(await prisma.financialOperation.findUnique({where:{id:op.id}})).toMatchObject({state:"REVIEW"});
+});
+it("refund accounting reduces pending earnings exactly once",async()=>{const f=await fixture();await prisma.refund.create({data:{reservationId:f.r.id,paymentId:f.payment.id,amountCents:5000,status:"SUCCEEDED",reason:"Fixture refund",idempotencyKey:randomUUID()}});await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));expect(await prisma.hostEarning.findUnique({where:{reservationId:f.r.id}})).toMatchObject({refundedCents:4500});expect((await withReservationLock(f.r.id,tx=>payoutEligibility(tx,f.r.id))).amountCents).toBe(9000);});
+it("employee access requires explicit finance permission and current membership",async()=>{const f=await fixture(),employee=await createTestCustomer({role:"HOST_EMPLOYEE"});users.push(employee.id);const membership=await prisma.hostEmployee.create({data:{hostId:f.h.hostProfile.id,userId:employee.id,role:"MANAGER"}});await expect(financeHost(prisma,employee.id)).rejects.toThrow("permission");await prisma.financeGrant.create({data:{hostId:f.h.hostProfile.id,userId:employee.id,manage:true,grantedById:f.h.user.id}});expect((await financeHost(prisma,employee.id,undefined,true)).host.id).toBe(f.h.hostProfile.id);await prisma.hostEmployee.update({where:{id:membership.id},data:{isActive:false}});await expect(financeHost(prisma,employee.id)).rejects.toThrow();});
+it("private statement denies another host and preserves the issued PDF",async()=>{const f=await fixture(),other=await createTestHost();users.push(other.user.id);hosts.push(other.hostProfile.id);const doc=await issueFinanceDocument(f.h.user.id,{kind:"EARNINGS_STATEMENT",reservationId:f.r.id});await expect(readFinanceDocument(other.user.id,doc.id)).rejects.toThrow();const own=await readFinanceDocument(f.h.user.id,doc.id);expect(Buffer.from(own.pdf).subarray(0,4).toString()).toBe("%PDF");await expect(prisma.financeDocument.update({where:{id:doc.id},data:{contentHash:"changed"}})).rejects.toThrow("Immutable");});

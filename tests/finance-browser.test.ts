@@ -1,0 +1,35 @@
+import { beforeAll,afterAll,it,expect } from "vitest";
+import { spawn,type ChildProcess } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import { chromium,type Browser,type Page } from "playwright";
+import { encode } from "next-auth/jwt";
+import { prisma,createTestHost,createTestCustomer,createTestVehicle,createTestReservation } from "./helpers/factories";
+let child:ChildProcess,browser:Browser;
+const base="http://127.0.0.1:3204",secret="finance-browser-only-secret",capture="test-artifacts/finance";
+beforeAll(async()=>{
+ await mkdir(capture,{recursive:true});
+ child=spawn(process.execPath,["tests/helpers/app-server.mjs"],{stdio:"inherit",env:{...process.env,BROWSER_TEST_PORT:"3204",NODE_ENV:"development",AUTH_SECRET:secret,AUTH_TRUST_HOST:"true",AUTH_URL:base,NEXTAUTH_URL:base,FINANCE_SANDBOX_ENABLED:"false",STRIPE_SECRET_KEY:"",NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:""}});
+ let ready=false;for(let i=0;i<240;i++){try{await fetch(base+"/api/auth/session");ready=true;break;}catch{await new Promise(r=>setTimeout(r,500));}}if(!ready)throw new Error("Next finance server unavailable");browser=await chromium.launch({headless:true});
+},150000);
+afterAll(async()=>{await browser?.close();if(child&&child.exitCode===null){const done=new Promise(r=>child.once("exit",r));child.kill();await Promise.race([done,new Promise(r=>setTimeout(r,3000))]);}await prisma.$disconnect();});
+async function login(user:{id:string;email:string;role:string}){const page=await browser.newPage();const token=await encode({token:{sub:user.id,id:user.id,email:user.email,role:user.role},secret,salt:"authjs.session-token"});await page.context().addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);return page;}
+async function visit(page:Page,path:string){const response=await page.goto(base+path);expect(response?.status()).toBe(200);await page.waitForLoadState("networkidle");}
+async function shots(page:Page,name:string){for(const width of [375,390,430,768,1024,1440]){await page.setViewportSize({width,height:1000});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:`${capture}/${name}-${width}.png`,fullPage:true});}}
+it("real host views private earnings, requires-action onboarding, failed configuration and all viewport widths",async()=>{
+ const h=await createTestHost(),customer=await createTestCustomer(),v=await createTestVehicle({hostId:h.hostProfile.id}),r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date("2045-01-01"),returnAt:new Date("2045-01-04"),status:"COMPLETED"});
+ await prisma.hostEarning.create({data:{reservationId:r.id,hostId:h.hostProfile.id,grossCents:15000,commissionCents:1500,hostDiscountCents:0,netCents:13500,holdReason:"Return inspection and settlement review required"}});
+ await prisma.connectAccount.create({data:{hostId:h.hostProfile.id,accountId:"acct_browser_"+h.hostProfile.id,verificationStatus:"REQUIRES_ACTION",taxStatus:"REQUIRES_ACTION",currentlyDue:["business_profile.url"],synchronizedAt:new Date()}});
+ const page=await login(h.user);await visit(page,"/finance");await page.getByText("Return inspection and settlement review required").waitFor();await shots(page,"earnings");await visit(page,"/finance/onboarding");await page.getByText("REQUIRES ACTION",{exact:true}).first().waitFor();await shots(page,"onboarding");await page.getByRole("button",{name:"Continue with Stripe"}).click();await page.getByRole("alert").waitFor();expect(await page.getByRole("alert").innerText()).toContain("configuration");
+ const outsider=await login(customer);await visit(outsider,"/finance");await outsider.getByRole("heading",{name:"Finance access required"}).waitFor();await shots(outsider,"restricted");
+},150000);
+it("real admin creates a draft commission and tax version and sees the reconciliation queue",async()=>{
+ const admin=await createTestCustomer({role:"ADMIN"}),page=await login(admin);await visit(page,"/finance/admin/rules");await page.getByText("NOT TAX-APPROVED — PROFESSIONAL REVIEW REQUIRED",{exact:true}).waitFor();
+ for(const title of ["Commission version","Jurisdiction tax version"]){const panel=page.locator("section").filter({has:page.getByRole("heading",{name:title,exact:true})});await panel.locator('form[data-hydrated="true"]').waitFor();if(title==="Commission version"){await panel.getByLabel("Scope",{exact:true}).selectOption("HOST");await panel.getByLabel("Scope ID (* for default)").fill("browser-policy-"+admin.id);}else await panel.getByLabel("Exact vehicle location / jurisdiction").fill("Browser jurisdiction "+admin.id);await panel.getByLabel("Effective from").fill("2045-01-01T09:00");await panel.getByRole("button",{name:"Create immutable rule version"}).click();await panel.getByRole("status").filter({hasText:"Saved successfully"}).waitFor();}
+ expect(await prisma.financeRule.count({where:{createdById:admin.id,approvedAt:null}})).toBe(2);await shots(page,"rules");await prisma.financeIssue.create({data:{key:"browser-difference-"+admin.id,kind:"PAYMENT_DIFFERENCE",reason:"Synthetic reconciliation difference awaits verified evidence"}});await visit(page,"/finance/admin/reconciliation");await page.getByText("Synthetic reconciliation difference awaits verified evidence",{exact:true}).waitFor();await shots(page,"reconciliation");
+},150000);
+it("real host issues a payout PDF and another host cannot download it",async()=>{
+ const h=await createTestHost(),other=await createTestHost(),customer=await createTestCustomer(),v=await createTestVehicle({hostId:h.hostProfile.id}),r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date("2045-02-01"),returnAt:new Date("2045-02-04"),status:"COMPLETED"});
+ const earning=await prisma.hostEarning.create({data:{reservationId:r.id,hostId:h.hostProfile.id,grossCents:15000,commissionCents:1500,hostDiscountCents:0,netCents:13500}});
+ const batch=await prisma.$transaction(async tx=>{const b=await tx.payoutBatch.create({data:{hostId:h.hostProfile.id,accountId:"acct_fixture",amountCents:13500,currency:"usd"}});await tx.payoutItem.create({data:{batchId:b.id,earningId:earning.id,reservationId:r.id,amountCents:13500}});return b;});
+ const page=await login(h.user);await visit(page,"/finance/payouts/"+batch.id);await shots(page,"payout");const responsePromise=page.waitForResponse(res=>res.url()===base+"/api/finance"&&res.request().method()==="POST");await page.getByRole("button",{name:"Issue private PDF"}).click();const response=await responsePromise;expect(response.status()).toBe(200);const issued=await response.json();const document=await page.request.get(base+"/api/finance/documents/"+issued.id);expect(document.status()).toBe(200);expect((await document.body()).subarray(0,4).toString()).toBe("%PDF");const denied=await login(other.user);expect((await denied.request.get(base+"/api/finance/documents/"+issued.id)).status()).toBe(404);await visit(page,"/finance/statements");await shots(page,"statements");
+},150000);

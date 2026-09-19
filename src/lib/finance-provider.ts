@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import type { FinancialOperation } from "@prisma/client";
 import { requireFinanceSandbox } from "@/lib/payout-authority";
+import { OperationPendingError } from "@/lib/financial-errors";
 
 export type FinanceProviderObject={id:string;operationKey:string;kind:string;hostId:string;accountId:string;status:string;amount:number;currency:string;amountReversed:number;detailsSubmitted?:boolean;chargesEnabled?:boolean;payoutsEnabled?:boolean;currentlyDue?:string[];eventuallyDue?:string[];disabledReason?:string|null};
 export type FinancePayload={hostId:string;batchId?:string;accountId?:string;amount?:number;currency?:string;transferId?:string;reversalId?:string;metadata?:Record<string,string>};
@@ -37,3 +38,14 @@ export async function discoverFinanceProviderObject(op:FinancialOperation){
 }
 export async function createOnboardingLink(accountId:string){const stripe=financeStripe(),base=process.env.AUTH_URL??process.env.NEXTAUTH_URL;if(!base)throw new Error("Canonical application URL required");return stripe.accountLinks.create({account:accountId,type:"account_onboarding",refresh_url:new URL("/finance/onboarding?refresh=1",base).toString(),return_url:new URL("/finance/onboarding?returned=1",base).toString()});}
 export async function retrieveConnectAccount(id:string){return accountProjection(await financeStripe().accounts.retrieve(id));}
+
+// Read under the existing pinned dispatch guard, before recording DISPATCHED.
+// A temporary balance/requirements failure therefore remains safely retryable.
+export async function verifyFinanceDestination(op:FinancialOperation){
+ const p=op.payload as FinancePayload,stripe=financeStripe();
+ if(!["FINANCE_TRANSFER","FINANCE_PAYOUT"].includes(op.kind))return;
+ const a=await stripe.accounts.retrieve(p.accountId!);
+ if(a.id!==p.accountId||a.metadata?.hostId!==p.hostId||!a.payouts_enabled||!a.details_submitted||a.requirements?.disabled_reason||a.settings?.payouts?.schedule?.interval!=="manual")throw new OperationPendingError("Stripe account ownership, manual payout control or verification requires action");
+ const balance=op.kind==="FINANCE_PAYOUT"?await stripe.balance.retrieve({},{stripeAccount:p.accountId}):await stripe.balance.retrieve();
+ if(!balance.available.some(b=>b.currency===p.currency&&b.amount>=(p.amount??0)))throw new OperationPendingError("Stripe available balance is below the immutable payout amount");
+}

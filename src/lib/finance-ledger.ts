@@ -31,8 +31,13 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
   if(await tx.ledgerJournal.findUnique({where:{key:"refund:"+f.id}}))continue;
   const paid=rentals.find(p=>p.id===f.paymentId);if(!paid){await financeIssue(tx,{key:"refund-unmatched:"+f.id,kind:"REFUND_DIFFERENCE",reservationId:id,reason:"Refund lacks succeeded rental evidence"});continue;}
   if(!allocation.success){await journal(tx,{key:"refund:"+f.id,kind:"REFUND",currency:paid.currency,reservationId:id,hostId:s.hostId,providerId:f.stripeRefundId,description:"Refund recorded pending approved loss allocation",lines:[{account:"REFUND_SUSPENSE",debitCents:f.amountCents},{account:"STRIPE_CLEARING",creditCents:f.amountCents}]});await financeIssue(tx,{key:"refund-allocation:"+f.id,kind:"ALLOCATION_REQUIRED",reservationId:id,hostId:s.hostId??undefined,reason:"Business-approved refund allocation required"});continue;}
-  const tax=Math.min(f.amountCents,Math.floor(f.amountCents*(a.rentalTaxCents+a.feeTaxCents)/paid.amountCents));
-  const host=Math.min(f.amountCents-tax,earning?Math.max(0,earning.netCents-earning.refundedCents):0,roundBps(Math.floor(f.amountCents*a.hostNetCents/paid.amountCents),allocation.data.refundHostBps));
+  const priorRefunds=await tx.ledgerJournal.findMany({where:{reservationId:id,kind:"REFUND"},include:{lines:true}});
+  const priorCash=priorRefunds.flatMap(j=>j.lines).filter(l=>l.account==="STRIPE_CLEARING").reduce((sum,l)=>sum+l.creditCents,0);
+  const priorTax=priorRefunds.flatMap(j=>j.lines).filter(l=>l.account==="TAX_PAYABLE").reduce((sum,l)=>sum+l.debitCents,0);
+  const cumulative=Math.min(paid.amountCents,priorCash+f.amountCents);
+  const prorate=(amount:number)=>Number(BigInt(cumulative)*BigInt(amount)/BigInt(paid.amountCents));
+  const tax=Math.min(f.amountCents,Math.max(0,prorate(a.rentalTaxCents+a.feeTaxCents)-priorTax));
+  const host=Math.min(f.amountCents-tax,earning?Math.max(0,earning.netCents-earning.refundedCents):0,Math.max(0,roundBps(prorate(a.hostNetCents),allocation.data.refundHostBps)-(earning?.refundedCents??0)));
   const batchItem=earning?await tx.payoutItem.findFirst({where:{earningId:earning.id,active:true}}):null;
   const batch=batchItem?await tx.payoutBatch.findUniqueOrThrow({where:{id:batchItem.batchId}}):null;
   const sent=Boolean(batch?.transferredCents);
