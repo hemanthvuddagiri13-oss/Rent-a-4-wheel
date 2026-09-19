@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 export async function quarantineOperation(tx: Prisma.TransactionClient, id: string, reason: string) {
   const op = await tx.financialOperation.findUniqueOrThrow({ where: { id } });
-  if(op.kind.startsWith("FINANCE_")) {const payload=op.payload as {hostId:string};await tx.financeIssue.upsert({where:{key:"operation:"+id},create:{key:"operation:"+id,kind:"PROVIDER_UNCERTAIN",operationId:id,hostId:payload.hostId,reason},update:{reason}});return;}
+  if(op.kind.startsWith("FINANCE_")) {const payload=op.payload as {hostId:string};await tx.financeIssue.upsert({where:{key:"operation:"+id},create:{key:"operation:"+id,kind:"PROVIDER_UNCERTAIN",operationId:id,hostId:payload.hostId,reason},update:{reason,status:"OPEN",resolution:null,resolvedById:null}});return;}
   if (!op.reservationId) return;
   const r = await tx.reservation.findUniqueOrThrow({ where: { id: op.reservationId } });
   const payload = op.payload as { amount?: number; currency?: string; intentId?: string };

@@ -26,11 +26,16 @@ export async function handleFinanceEvent(event:Stripe.Event){
   const payment=intentId?await prisma.payment.findUnique({where:{stripePaymentIntentId:intentId}}):null;
   if(!payment){await financeIssue(prisma,{key:"unmatched-dispute:"+d.id,kind:"UNMATCHED_PROVIDER_OBJECT",reason:"Stripe dispute has no owned internal payment",evidence:{providerId:d.id}});return;}
   await withReservationLock(payment.reservationId,async tx=>{
+   // Scope first, then retrieve again under the payout reservation guard.
+   // An earlier response cannot release a newer provider dispute hold.
+   const d=await provider.disputes.retrieve(object.id),currentCharge=typeof d.charge==="string"?d.charge:d.charge.id;
+   if(currentCharge!==chargeId||d.currency!==payment.currency||d.amount<=0||d.amount>payment.amountCents){await financeIssue(tx,{key:"dispute-difference:"+d.id,kind:"PROVIDER_DISPUTE_DIFFERENCE",reservationId:payment.reservationId,reason:"Dispute scope, amount or currency differs from retained payment evidence",evidence:{providerId:d.id}});return;}
+   const existing=await tx.providerDispute.findUnique({where:{id:d.id}});if(existing&&(existing.reservationId!==payment.reservationId||existing.chargeId!==chargeId||existing.currency!==d.currency||existing.amountCents!==d.amount))throw new Error("Immutable dispute ownership mismatch");
    const active=!["won","lost","warning_closed"].includes(d.status);
    await tx.providerDispute.upsert({where:{id:d.id},create:{id:d.id,reservationId:payment.reservationId,chargeId,currency:d.currency,amountCents:d.amount,status:d.status,active},update:{status:d.status,active,checkedAt:new Date()}});
    if(d.status==="lost"){
     await journal(tx,{key:"chargeback:"+d.id,kind:"CHARGEBACK",currency:d.currency,reservationId:payment.reservationId,providerId:d.id,description:"Lost Stripe dispute pending approved loss allocation",lines:[{account:"CHARGEBACK_SUSPENSE",debitCents:d.amount},{account:"STRIPE_CLEARING",creditCents:d.amount}]});
-    await financeIssue(tx,{key:"chargeback-allocation:"+d.id,kind:"CHARGEBACK_ALLOCATION",reservationId:payment.reservationId,reason:"Loss allocation requires approved policy and independent financial authorization",evidence:{providerId:d.id,amountCents:d.amount,currency:d.currency}});
+    if(!await tx.ledgerJournal.findUnique({where:{key:"chargeback-allocation:"+d.id}}))await financeIssue(tx,{key:"chargeback-allocation:"+d.id,kind:"CHARGEBACK_ALLOCATION",reservationId:payment.reservationId,reason:"Loss allocation requires approved policy and independent financial authorization",evidence:{providerId:d.id,amountCents:d.amount,currency:d.currency}});
    }
    await tx.auditLog.create({data:{action:"finance.dispute.synchronized",entityType:"ProviderDispute",entityId:d.id,metadata:{status:d.status,active}}});
   });return;

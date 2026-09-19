@@ -26,8 +26,10 @@ export async function payoutEligibility(tx:Prisma.TransactionClient,reservationI
  if(!reports.some(x=>x.submittedByRole==="CUSTOMER"&&x.submittedById===r.customerId)||!reports.some(x=>x.submittedByRole==="HOST")||reports.some(x=>!["EXTERIOR","INTERIOR"].every(category=>x.photos.some(p=>p.category===category))))reasons.push("Accepted return evidence required");
  try{await assertReturnFinancialAuthority(tx,reservationId);}catch{reasons.push("Financial or return review unresolved");}
  if(await tx.providerDispute.count({where:{reservationId,active:true}}))reasons.push("Stripe chargeback or dispute active");
- if(await tx.financeIssue.count({where:{OR:[{reservationId},...(r.vehicle.hostId?[{hostId:r.vehicle.hostId,reservationId:null}]:[])],status:{not:"RESOLVED"}}}))reasons.push("Financial reconciliation unresolved");
+ if(await tx.financeIssue.count({where:{OR:[{reservationId},{hostId:null,reservationId:null,kind:{in:["LEDGER_IMBALANCE","UNMATCHED_PROVIDER_OBJECT"]}},...(r.vehicle.hostId?[{hostId:r.vehicle.hostId,reservationId:null}]:[])],status:{not:"RESOLVED"}}}))reasons.push("Financial reconciliation unresolved");
  if(await tx.serviceCase.count({where:{reservationId,OR:[{state:{not:"CLOSED"}},{legalHold:true},{securityHold:true}]}})||await tx.tripReview.count({where:{reservationId,legalHold:true}})||await tx.conversation.count({where:{reservationId,legalHold:true}})||await tx.privacyDeletion.count({where:{userId:{in:[r.customerId,r.vehicle.host?.userId??""]},state:"RETAINED_LEGAL_REVIEW"}}))reasons.push("Case, legal or security hold");
+ const heldFiles=await tx.$queryRaw<Array<{id:string}>>`SELECT f.id FROM "CollaborationFile" f LEFT JOIN "Conversation" c ON c.id=f."conversationId" LEFT JOIN "ServiceCase" s ON s.id=f."caseId" WHERE f."legalHold"=true AND (c."reservationId"=${reservationId} OR s."reservationId"=${reservationId}) LIMIT 1`;
+ if(heldFiles.length)reasons.push("Financial evidence legal hold");
  if(earning&&await tx.payoutItem.count({where:{earningId:earning.id,active:true,...(options.ignoreBatch?{batchId:{not:options.ignoreBatch}}:{})}}))reasons.push("Earnings already reserved in a payout batch");
  const account=r.vehicle.hostId?await tx.connectAccount.findUnique({where:{hostId:r.vehicle.hostId}}):null;
  if(!account?.active||!account.accountId||!account.payoutsEnabled||!account.detailsSubmitted||account.verificationStatus!=="VERIFIED"||!account.synchronizedAt||account.synchronizedAt<new Date(now.getTime()-3600000))reasons.push("Stripe account requires action or synchronization");
@@ -40,18 +42,18 @@ export async function payoutEligibility(tx:Prisma.TransactionClient,reservationI
 }
 export function requireFinanceSandbox(){if(process.env.FINANCE_SANDBOX_ENABLED!=="true"||!process.env.STRIPE_SECRET_KEY?.startsWith("sk_test_"))throw new OperationPendingError("Connect test mode must be explicitly enabled; live payouts are disabled");}
 export async function assertFinanceDispatch(tx:Prisma.TransactionClient,op:FinancialOperation){
- requireFinanceSandbox();const p=op.payload as {hostId:string;batchId?:string;accountId?:string;amount?:number;reversalId?:string};
+ requireFinanceSandbox();const p=op.payload as {hostId:string;batchId?:string;accountId?:string;amount?:number;reversalId?:string;transferId?:string;currency?:string};
  const host=await tx.hostProfile.findUniqueOrThrow({where:{id:p.hostId},include:{user:true}});
- if(host.onboardingStatus!=="APPROVED"||!host.user.isActive)throw new OperationPendingError("Host is not eligible for new money movement");
+ if(op.kind!=="FINANCE_REVERSAL"&&(host.onboardingStatus!=="APPROVED"||!host.user.isActive))throw new OperationPendingError("Host is not eligible for new money movement");
  const account=await tx.connectAccount.findUniqueOrThrow({where:{hostId:p.hostId}});
- if(!account.active)throw new OperationPendingError("Connect account deactivated");
+ if(op.kind!=="FINANCE_REVERSAL"&&!account.active)throw new OperationPendingError("Connect account deactivated");
  if(op.kind==="FINANCE_CONNECT")return;
  if(!p.batchId||p.accountId!==account.accountId)throw new Error("Immutable destination mismatch");
  const batch=await tx.payoutBatch.findUniqueOrThrow({where:{id:p.batchId}});
- if(batch.hostId!==p.hostId||batch.accountId!==p.accountId)throw new Error("Batch ownership mismatch");
+ if(batch.hostId!==p.hostId||batch.accountId!==p.accountId||batch.currency!==p.currency)throw new Error("Batch ownership mismatch");
  if(op.kind==="FINANCE_REVERSAL"){
   const reversal=await tx.payoutReversal.findUniqueOrThrow({where:{id:p.reversalId}});
-  if(reversal.batchId!==batch.id||reversal.operationId!==op.id||reversal.amountCents!==p.amount||batch.reversalReservedCents<reversal.amountCents)throw new Error("Reversal not atomically reserved");return;
+  if(!batch.transferId||p.transferId!==batch.transferId||reversal.batchId!==batch.id||reversal.operationId!==op.id||reversal.amountCents!==p.amount||batch.reversalReservedCents<reversal.amountCents)throw new Error("Reversal not atomically reserved");return;
  }
  if(!account.payoutsEnabled||account.verificationStatus!=="VERIFIED")throw new OperationPendingError("Stripe payouts disabled");
  const payable=op.kind==="FINANCE_PAYOUT"?batch.transferredCents-batch.reversedCents:batch.amountCents;

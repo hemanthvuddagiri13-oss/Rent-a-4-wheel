@@ -25,8 +25,8 @@ afterAll(async()=>{
  await prisma.financialOperation.deleteMany({where:{kind:{startsWith:"FINANCE_"},payload:{path:["hostId"],string_starts_with:""}}});
  await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.user.deleteMany({where:{id:{in:users}}});await Promise.all([one.$disconnect(),two.$disconnect(),prisma.$disconnect()]);
 });
-async function fixture(){
- const h=await createTestHost(),customer=await createTestCustomer();users.push(h.user.id,customer.id);hosts.push(h.hostProfile.id);const v=await createTestVehicle({hostId:h.hostProfile.id});vehicles.push(v.id);
+async function fixture(reuse?:{h:Awaited<ReturnType<typeof createTestHost>>;customer:Awaited<ReturnType<typeof createTestCustomer>>;v:Awaited<ReturnType<typeof createTestVehicle>>}){
+ const h=reuse?.h??await createTestHost(),customer=reuse?.customer??await createTestCustomer();const v=reuse?.v??await createTestVehicle({hostId:h.hostProfile.id});if(!reuse){users.push(h.user.id,customer.id);hosts.push(h.hostProfile.id);vehicles.push(v.id);}
  const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date("2041-01-01"),returnAt:new Date("2041-01-04"),status:"COMPLETED"});
  await prisma.trip.create({data:{reservationId:r.id,startedAt:new Date(Date.now()-86400000*4),endedAt:new Date(Date.now()-86400000*2)}});
  await prisma.tripEvent.create({data:{reservationId:r.id,type:"RETURN_REVIEWED",actorId:h.user.id}});
@@ -34,7 +34,7 @@ async function fixture(){
  const payment=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents}});
  await prisma.financeQuote.create({data:{reservationId:r.id,terms:{commission:{version:1},tax:{version:1},settlement:{delayDays:1,minimumCents:1,loss:{refundHostBps:10000,chargebackHostBps:10000,reverseTransfers:true}},amounts:{grossCents:15000,hostDiscountCents:0,platformDiscountCents:0,commissionCents:1500,hostNetCents:13500,rentalTaxCents:0,feeTaxCents:0,feesCents:0,totalCents:15000},approved:true}}});
  await withReservationLock(r.id,tx=>accountReservation(tx,r.id));
- await prisma.connectAccount.create({data:{hostId:h.hostProfile.id,accountId:"acct_"+randomUUID(),detailsSubmitted:true,payoutsEnabled:true,verificationStatus:"VERIFIED",synchronizedAt:new Date(),minimumCents:1}});
+ if(!reuse)await prisma.connectAccount.create({data:{hostId:h.hostProfile.id,accountId:"acct_"+randomUUID(),detailsSubmitted:true,payoutsEnabled:true,verificationStatus:"VERIFIED",synchronizedAt:new Date(),minimumCents:1}});
  return {h,customer,v,r,payment};
 }
 it("approves only settled completed returns and holds a new claim or suspended host",async()=>{
@@ -92,4 +92,20 @@ it("approved partial refund recovery reserves once, reverses once and pays only 
  expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({reversalReservedCents:4500});remote.create.mockResolvedValueOnce({...observed,id:"trr_"+randomUUID(),kind:op.kind,operationKey:op.key,amount:4500,status:"reversed",amountReversed:4500});await executeFinanceOperation(op);expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({reversedCents:4500,reversalReservedCents:0});expect(await prisma.financeIssue.findUnique({where:{id:issue.id}})).toMatchObject({status:"RESOLVED"});
  const bank=await planBankPayout(b.id!);expect(bank.payload).toMatchObject({amount:9000});remote.create.mockResolvedValueOnce({...observed,id:"po_"+randomUUID(),kind:bank.kind,operationKey:bank.key,amount:9000,status:"paid"});await executeFinanceOperation(bank);expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({state:"PAID",paidCents:9000,transferredCents:13500,reversedCents:4500});
  await prisma.authCode.deleteMany({where:{email:admin.email}});
+});
+
+it("a minimum spread across more than fifty reservations accumulates without starvation",async()=>{
+ const f=await fixture();for(let n=0;n<50;n++)await fixture(f);
+ await prisma.connectAccount.update({where:{hostId:f.h.hostProfile.id},data:{minimumCents:51*13500}});
+ const first=await createPayoutBatch(f.h.hostProfile.id);expect(first.id).toBeNull();
+ const second=await createPayoutBatch(f.h.hostProfile.id);expect(second.id).toBeTruthy();
+ expect(await prisma.payoutItem.count({where:{batchId:second.id!}})).toBe(51);
+ expect(await prisma.payoutBatch.findUnique({where:{id:second.id!}})).toMatchObject({amountCents:51*13500});
+},90000);
+it("an authorized employee cannot manage finance after the host owner is suspended",async()=>{
+ const f=await fixture(),employee=await createTestCustomer({role:"HOST_EMPLOYEE"});users.push(employee.id);
+ await prisma.hostEmployee.create({data:{hostId:f.h.hostProfile.id,userId:employee.id,role:"MANAGER"}});
+ await prisma.financeGrant.create({data:{hostId:f.h.hostProfile.id,userId:employee.id,manage:true,grantedById:f.h.user.id}});
+ await prisma.user.update({where:{id:f.h.user.id},data:{isActive:false}});
+ await expect(financeHost(prisma,employee.id,undefined,true)).rejects.toThrow("active host");
 });

@@ -15,7 +15,7 @@ export async function financeHost(tx:Prisma.TransactionClient,userId:string,host
  const host=own??membership?.host;
  if(!host || hostId && host.id!==hostId) throw new MarketplaceError("Host finance unavailable.",404);
  if(!own){const grant=await tx.financeGrant.findUnique({where:{hostId_userId:{hostId:host.id,userId}}});if(!grant || manage && (!grant.manage || membership?.role!=="MANAGER")) throw new MarketplaceError("Explicit host finance permission is required.",403);}
- if(manage && host.onboardingStatus!=="APPROVED") throw new MarketplaceError("Approved active host required.",403);
+ if(manage && (host.onboardingStatus!=="APPROVED" || !await tx.user.count({where:{id:host.userId,isActive:true}}))) throw new MarketplaceError("Approved active host required.",403);
  return {actor,host,owner:Boolean(own)};
 }
 export async function financeStepUp(tx:Prisma.TransactionClient,userId:string,code:string) {

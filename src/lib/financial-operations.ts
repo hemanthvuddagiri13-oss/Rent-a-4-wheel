@@ -73,7 +73,7 @@ export async function runOperation<T extends { id: string }>(operation: Financia
       observed = await provider.readBeforeDispatch();
       dispatch = provider.requiresDispatch?.(observed) ?? false;
     } else if (claimed.providerId) observed = await provider.retrieve(claimed.providerId);
-    else if (claimed.firstAttemptAt && Date.now() - claimed.firstAttemptAt.getTime() > 23 * 3600000) {
+    else if (claimed.firstAttemptAt && Date.now() - claimed.firstAttemptAt.getTime() > 23 * 3600000 && (!claimed.kind.startsWith("FINANCE_") || await prisma.financialDispatch.count({where:{operationId:claimed.id,phase:"DISPATCHED"}}))) {
       const found = await provider.discover();
       if (!found) throw new UncertainOutcomeError("Provider outcome unknown beyond safe replay window; reconciliation required");
       observed = found;
