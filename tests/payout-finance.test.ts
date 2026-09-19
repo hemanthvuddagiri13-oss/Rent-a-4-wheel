@@ -1,3 +1,4 @@
+import { hostYearToDate } from "@/lib/finance-reporting";
 import type Stripe from "stripe";
 import * as financeProvider from "@/lib/finance-provider";
 import { handleFinanceEvent } from "@/lib/finance-webhooks";
@@ -101,7 +102,7 @@ it("approved partial refund recovery reserves once, reverses once and pays only 
  await held;const [planned,replayed]=await Promise.all([first,second]);expect(replayed).toEqual(planned);const reversal=await prisma.payoutReversal.findUniqueOrThrow({where:{id:planned.id}}),op=await prisma.financialOperation.findUniqueOrThrow({where:{id:reversal.operationId!}});
  expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({reversalReservedCents:4500});remote.create.mockResolvedValueOnce({...observed,id:"trr_"+randomUUID(),kind:op.kind,operationKey:op.key,amount:4500,status:"reversed",amountReversed:4500});await executeFinanceOperation(op);expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({reversedCents:4500,reversalReservedCents:0});expect(await prisma.financeIssue.findUnique({where:{id:issue.id}})).toMatchObject({status:"RESOLVED"});
  const bank=await planBankPayout(b.id!);expect(bank.payload).toMatchObject({amount:9000});remote.create.mockResolvedValueOnce({...observed,id:"po_"+randomUUID(),kind:bank.kind,operationKey:bank.key,amount:9000,status:"paid"});await executeFinanceOperation(bank);expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({state:"PAID",paidCents:9000,transferredCents:13500,reversedCents:4500});
- const memo=await prisma.$queryRaw<Array<{balance:bigint}>>`SELECT COALESCE(sum(l."debitCents"-l."creditCents"),0)::bigint balance FROM "LedgerLine" l JOIN "LedgerJournal" j ON j.id=l."journalId" WHERE j."hostId"=${f.h.hostProfile.id} AND l.account='MEMO_CONNECT_FUNDS'`;expect(Number(memo[0].balance)).toBe(0);
+ const memo=await prisma.$queryRaw<Array<{balance:bigint}>>`SELECT COALESCE(sum(l."debitCents"-l."creditCents"),0)::bigint balance FROM "LedgerLine" l JOIN "LedgerJournal" j ON j.id=l."journalId" WHERE j."hostId"=${f.h.hostProfile.id} AND l.account='MEMO_CONNECT_FUNDS'`;expect(Number(memo[0].balance)).toBe(0);expect((await hostYearToDate(f.h.hostProfile.id)).rows).toEqual([{currency:"usd",grossCents:15000,paidCents:9000}]);
  expect(await planTransferReversal(admin.id,issue.id,"123456")).toEqual(planned);
  await prisma.authCode.deleteMany({where:{email:admin.email}});
 });
@@ -171,3 +172,5 @@ it("deposit generations retain authorization and release evidence independently"
  await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));
  expect(await prisma.ledgerJournal.count({where:{reservationId:f.r.id,kind:"DEPOSIT_AUTHORIZATION"}})).toBe(2);expect(await prisma.ledgerJournal.count({where:{key:"deposit-release:"+first}})).toBe(1);expect(await prisma.ledgerJournal.count({where:{key:"deposit-release:"+second}})).toBe(0);
 });
+
+it("raw earning updates cannot rewrite the frozen allocation or overdraw its adjusted balance",async()=>{const f=await fixture();await expect(prisma.hostEarning.update({where:{reservationId:f.r.id},data:{netCents:999999}})).rejects.toThrow("Immutable earning origin");await expect(prisma.hostEarning.update({where:{reservationId:f.r.id},data:{adjustmentCents:-13501}})).rejects.toThrow("earning_amounts_nonnegative");expect(await prisma.hostEarning.findUnique({where:{reservationId:f.r.id}})).toMatchObject({netCents:13500,adjustmentCents:0});});
