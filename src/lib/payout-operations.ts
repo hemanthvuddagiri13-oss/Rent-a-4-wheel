@@ -52,8 +52,8 @@ export async function connectOnboarding(userId:string){
 }
 export async function synchronizeConnect(hostId:string){
  const account=await prisma.connectAccount.findUniqueOrThrow({where:{hostId}});if(!account.accountId||!account.operationId)return;
- const result=await retrieveConnectAccount(account.accountId),op=await prisma.financialOperation.findUniqueOrThrow({where:{id:account.operationId}});
- await prisma.$transaction(async tx=>{await lockFinanceOperation(tx,op);await applyFinanceObject(tx,op,result);});
+ const op=await prisma.financialOperation.findUniqueOrThrow({where:{id:account.operationId}});
+ await prisma.$transaction(async tx=>{await lockFinanceOperation(tx,op);const result=await retrieveConnectAccount(account.accountId!);await applyFinanceObject(tx,op,result);},{timeout:15000});
 }
 export async function createPayoutBatch(hostId:string,db:PrismaClient=prisma,work?:{id:string;token:string;cutoff:Date}){
  // Select before locking; re-read every candidate after guards. Rotating checkedAt
@@ -85,14 +85,15 @@ export async function createPayoutBatch(hostId:string,db:PrismaClient=prisma,wor
  },{maxWait:15000,timeout:15000});
 }
 export async function planBankPayout(batchId:string){return prisma.$transaction(async tx=>{const b=await tx.payoutBatch.findUniqueOrThrow({where:{id:batchId}}),items=await tx.payoutItem.findMany({where:{batchId}});await lockPayoutReservations(tx,items.map(i=>i.reservationId),b.hostId);const current=await tx.payoutBatch.findUniqueOrThrow({where:{id:batchId}});if(current.state!=="TRANSFERRED"||current.transferredCents<=current.reversedCents||current.reversalReservedCents)throw new MarketplaceError("Batch is not ready for bank payout.",409);return prepareOperation(tx,{key:`payout:${batchId}:${current.generation}`,kind:"FINANCE_PAYOUT",payload:json({hostId:b.hostId,batchId,accountId:b.accountId,amount:current.transferredCents-current.reversedCents,currency:b.currency})});});}
-export async function planTransferReversal(userId:string,issueId:string,code:string){return prisma.$transaction(async tx=>{
- await financeAdmin(tx,userId,true);const issue=await tx.financeIssue.findUniqueOrThrow({where:{id:issueId}});if(!["POST_PAYOUT_REFUND","POST_PAYOUT_LOSS"].includes(issue.kind)||issue.status==="RESOLVED")throw new MarketplaceError("An unresolved approved refund recovery is required.",409);
+export async function planTransferReversal(userId:string,issueId:string,code:string,db:PrismaClient=prisma){return db.$transaction(async tx=>{
+ await financeAdmin(tx,userId,true);const issue=await tx.financeIssue.findUniqueOrThrow({where:{id:issueId}});if(!["POST_PAYOUT_REFUND","POST_PAYOUT_LOSS"].includes(issue.kind))throw new MarketplaceError("An unresolved approved refund recovery is required.",409);
  const evidence=issue.evidence as {batchId:string;refundId:string;hostCents:number;reverseTransfers:boolean};if(!evidence.reverseTransfers)throw new MarketplaceError("Frozen business policy does not authorize transfer reversal.",409);
  const b=await tx.payoutBatch.findUniqueOrThrow({where:{id:evidence.batchId}}),items=await tx.payoutItem.findMany({where:{batchId:b.id}});await lockPayoutReservations(tx,items.map(i=>i.reservationId),b.hostId);
  const locked=await tx.payoutBatch.findUniqueOrThrow({where:{id:b.id}});
  if(locked.state==="PAYOUT_PENDING")throw new MarketplaceError("Reconcile the pending bank payout before reserving transfer recovery.",409);
  for(const item of items){const r=await tx.reservation.findUniqueOrThrow({where:{id:item.reservationId}});await independentCaseActor(tx,{id:issueId,kind:"CLAIM",reservationId:r.id,vehicleId:r.vehicleId,openedById:r.customerId},userId);}
  const prior=await tx.payoutReversal.findUnique({where:{key:"refund-recovery:"+evidence.refundId}});if(prior)return{id:prior.id};
+ if(issue.status==="RESOLVED")throw new MarketplaceError("Recovery already resolved.",409);
  await financeStepUp(tx,userId,code);
  const bank=await tx.financialOperation.findUnique({where:{key:`payout:${b.id}:${locked.generation}`}});
  if(bank&&!await tx.financialDispatch.count({where:{operationId:bank.id,phase:"DISPATCHED"}})){

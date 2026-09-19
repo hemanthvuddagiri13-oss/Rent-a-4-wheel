@@ -1,3 +1,9 @@
+import type Stripe from "stripe";
+import * as financeProvider from "@/lib/finance-provider";
+import { handleFinanceEvent } from "@/lib/finance-webhooks";
+import { allocateChargeback,proposeAdjustment,approveAdjustment } from "@/lib/finance-admin";
+import { financeQuote,freezeFinance } from "@/lib/finance-rules";
+import { calculatePricing } from "@/lib/pricing";
 import { afterAll,afterEach,expect,it,vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -8,7 +14,7 @@ import { withReservationLock } from "@/lib/financial-locks";
 import { accountReservation } from "@/lib/finance-ledger";
 import { createPayoutBatch,executeFinanceOperation,applyFinanceObject,planTransferReversal,planBankPayout } from "@/lib/payout-operations";
 import { payoutEligibility,lockFinanceOperation } from "@/lib/payout-authority";
-import { runOperation } from "@/lib/financial-operations";
+import { runOperation,prepareOperation } from "@/lib/financial-operations";
 import { processOutboxOnce } from "@/lib/outbox";
 import { financeHost } from "@/lib/finance-access";
 import { issueFinanceDocument,readFinanceDocument } from "@/lib/finance-documents";
@@ -27,7 +33,8 @@ afterAll(async()=>{
 });
 async function fixture(reuse?:{h:Awaited<ReturnType<typeof createTestHost>>;customer:Awaited<ReturnType<typeof createTestCustomer>>;v:Awaited<ReturnType<typeof createTestVehicle>>}){
  const h=reuse?.h??await createTestHost(),customer=reuse?.customer??await createTestCustomer();const v=reuse?.v??await createTestVehicle({hostId:h.hostProfile.id});if(!reuse){users.push(h.user.id,customer.id);hosts.push(h.hostProfile.id);vehicles.push(v.id);}
- const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date("2041-01-01"),returnAt:new Date("2041-01-04"),status:"COMPLETED"});
+ const offset=reuse?await prisma.reservation.count({where:{vehicleId:v.id}}):0;
+ const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date(Date.UTC(2041,0,1+offset*4)),returnAt:new Date(Date.UTC(2041,0,4+offset*4)),status:"COMPLETED"});
  await prisma.trip.create({data:{reservationId:r.id,startedAt:new Date(Date.now()-86400000*4),endedAt:new Date(Date.now()-86400000*2)}});
  await prisma.tripEvent.create({data:{reservationId:r.id,type:"RETURN_REVIEWED",actorId:h.user.id}});
  for(const [submittedById,submittedByRole]of [[customer.id,"CUSTOMER"],[h.user.id,"HOST"]]as const)await prisma.conditionReport.create({data:{reservationId:r.id,phase:"POST_TRIP",submittedById,submittedByRole,acceptedAt:new Date(),mileage:500,fuelLevel:100,photos:{create:[{category:"EXTERIOR",storageKey:"local:finance-fixture"},{category:"INTERIOR",storageKey:"local:finance-fixture"}]}}});
@@ -88,9 +95,14 @@ it("approved partial refund recovery reserves once, reverses once and pays only 
  await prisma.refund.create({data:{reservationId:f.r.id,paymentId:f.payment.id,amountCents:5000,status:"SUCCEEDED",reason:"Post-transfer refund",idempotencyKey:randomUUID()}});await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));const issue=await prisma.financeIssue.findFirstOrThrow({where:{reservationId:f.r.id,kind:"POST_PAYOUT_REFUND"}});
  await expect(planTransferReversal(admin.id,issue.id,"000000")).rejects.toThrow("step-up");
  await prisma.authCode.create({data:{email:admin.email,purpose:"FINANCE_STEP_UP",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});
- const planned=await planTransferReversal(admin.id,issue.id,"123456");expect(await planTransferReversal(admin.id,issue.id,"123456")).toEqual(planned);const reversal=await prisma.payoutReversal.findUniqueOrThrow({where:{id:planned.id}}),op=await prisma.financialOperation.findUniqueOrThrow({where:{id:reversal.operationId!}});
+ const entered=barrier(),release=barrier();const held=prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+f.v.id})`;entered.release();await release.wait;},{timeout:15000});await entered.wait;
+ const first=planTransferReversal(admin.id,issue.id,"123456",one),second=planTransferReversal(admin.id,issue.id,"123456",two);
+ try{let blocked=0;for(let n=0;n<300;n++){const rows=await prisma.$queryRaw<Array<{pid:number}>>`SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT financial_guard_xact%'`;blocked=new Set(rows.map(r=>r.pid)).size;if(blocked>=2)break;await new Promise(r=>setTimeout(r,10));}expect(blocked).toBeGreaterThanOrEqual(2);}finally{release.release();}
+ await held;const [planned,replayed]=await Promise.all([first,second]);expect(replayed).toEqual(planned);const reversal=await prisma.payoutReversal.findUniqueOrThrow({where:{id:planned.id}}),op=await prisma.financialOperation.findUniqueOrThrow({where:{id:reversal.operationId!}});
  expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({reversalReservedCents:4500});remote.create.mockResolvedValueOnce({...observed,id:"trr_"+randomUUID(),kind:op.kind,operationKey:op.key,amount:4500,status:"reversed",amountReversed:4500});await executeFinanceOperation(op);expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({reversedCents:4500,reversalReservedCents:0});expect(await prisma.financeIssue.findUnique({where:{id:issue.id}})).toMatchObject({status:"RESOLVED"});
  const bank=await planBankPayout(b.id!);expect(bank.payload).toMatchObject({amount:9000});remote.create.mockResolvedValueOnce({...observed,id:"po_"+randomUUID(),kind:bank.kind,operationKey:bank.key,amount:9000,status:"paid"});await executeFinanceOperation(bank);expect(await prisma.payoutBatch.findUnique({where:{id:b.id!}})).toMatchObject({state:"PAID",paidCents:9000,transferredCents:13500,reversedCents:4500});
+ const memo=await prisma.$queryRaw<Array<{balance:bigint}>>`SELECT COALESCE(sum(l."debitCents"-l."creditCents"),0)::bigint balance FROM "LedgerLine" l JOIN "LedgerJournal" j ON j.id=l."journalId" WHERE j."hostId"=${f.h.hostProfile.id} AND l.account='MEMO_CONNECT_FUNDS'`;expect(Number(memo[0].balance)).toBe(0);
+ expect(await planTransferReversal(admin.id,issue.id,"123456")).toEqual(planned);
  await prisma.authCode.deleteMany({where:{email:admin.email}});
 });
 
@@ -108,4 +120,54 @@ it("an authorized employee cannot manage finance after the host owner is suspend
  await prisma.financeGrant.create({data:{hostId:f.h.hostProfile.id,userId:employee.id,manage:true,grantedById:f.h.user.id}});
  await prisma.user.update({where:{id:f.h.user.id},data:{isActive:false}});
  await expect(financeHost(prisma,employee.id,undefined,true)).rejects.toThrow("active host");
+});
+
+it("new commission and jurisdiction tax versions cannot rewrite committed checkout snapshots",async()=>{
+ const f=await fixture(),before=await prisma.financeSnapshot.findUniqueOrThrow({where:{reservationId:f.r.id}}),location="Tax fixture "+randomUUID();
+ await prisma.vehicle.update({where:{id:f.v.id},data:{location}});
+ await prisma.financeRule.create({data:{kind:"COMMISSION",scope:"HOST",scopeId:f.h.hostProfile.id,version:2,config:{basisPoints:2500,fixedCents:100,minimumCents:0,maximumCents:100000,hostDiscountBps:0},effectiveAt:new Date(0),approvedAt:new Date(),approvedById:f.h.user.id,createdById:f.h.user.id}});
+ await prisma.financeRule.create({data:{kind:"TAX",scope:"JURISDICTION",scopeId:location,version:2,config:{jurisdiction:location,rentalBps:875,feeBps:500,extrasTaxable:true,exemptionsAllowed:false,provider:"CONFIGURED"},effectiveAt:new Date(0),approvedAt:new Date(),approvedById:f.h.user.id,createdById:f.h.user.id}});
+ const vehicle=await prisma.vehicle.findUniqueOrThrow({where:{id:f.v.id}}),base=calculatePricing({vehicle,pickupAt:f.r.pickupAt,returnAt:f.r.returnAt});
+ const next=await prisma.$transaction(tx=>financeQuote(tx,vehicle,base,f.customer.id));expect(next.terms.commission.version).toBe(2);expect(next.terms.tax.version).toBe(2);expect(next.breakdown.taxCents).toBeGreaterThan(0);
+ expect(await withReservationLock(f.r.id,tx=>freezeFinance(tx,f.r.id))).toEqual(before);
+ await expect(prisma.financeSnapshot.update({where:{reservationId:f.r.id},data:{tax:{version:2}}})).rejects.toThrow("Immutable");
+});
+it("additional collection is a liability until an approved allocation, never automatic host income",async()=>{
+ const f=await fixture(),before=await prisma.hostEarning.findUniqueOrThrow({where:{reservationId:f.r.id}}),payment=await prisma.payment.create({data:{reservationId:f.r.id,type:"ADDITIONAL_CHARGE",status:"SUCCEEDED",amountCents:2500}});
+ await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));
+ const posted=await prisma.ledgerJournal.findUniqueOrThrow({where:{key:"payment:"+payment.id},include:{lines:true}});expect(posted.lines).toEqual(expect.arrayContaining([expect.objectContaining({account:"ADDITIONAL_CHARGE_LIABILITY",creditCents:2500})]));expect(await prisma.hostEarning.findUniqueOrThrow({where:{reservationId:f.r.id}})).toEqual(before);
+});
+
+it("provider disputes hold earnings and lost disputes require independent step-up allocation",async()=>{
+ const f=await fixture(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(admin.id);const intentId="pi_"+randomUUID(),id="dp_"+randomUUID(),chargeId="ch_"+randomUUID();
+ await prisma.payment.update({where:{id:f.payment.id},data:{stripePaymentIntentId:intentId}});
+ let status="needs_response";const provider={disputes:{retrieve:vi.fn(async()=>({id,charge:chargeId,currency:"usd",amount:5000,status}))},charges:{retrieve:vi.fn(async()=>({id:chargeId,payment_intent:intentId}))}};
+ vi.spyOn(financeProvider,"financeStripe").mockReturnValue(provider as unknown as Stripe);
+ const event={id:"evt_"+randomUUID(),type:"charge.dispute.updated",data:{object:{id}}} as Stripe.Event;
+ await handleFinanceEvent(event);expect((await withReservationLock(f.r.id,tx=>payoutEligibility(tx,f.r.id))).reasons).toContain("Stripe chargeback or dispute active");
+ status="lost";await handleFinanceEvent(event);const issue=await prisma.financeIssue.findUniqueOrThrow({where:{key:"chargeback-allocation:"+id}});
+ await expect(allocateChargeback(admin.id,issue.id,"000000")).rejects.toThrow("step-up");expect(await prisma.ledgerJournal.count({where:{key:"chargeback-allocation:"+id}})).toBe(0);
+ await prisma.authCode.create({data:{email:admin.email,purpose:"FINANCE_STEP_UP",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});
+ await allocateChargeback(admin.id,issue.id,"123456");await handleFinanceEvent(event);
+ expect(await prisma.financeIssue.findUnique({where:{id:issue.id}})).toMatchObject({status:"RESOLVED"});expect(await prisma.hostEarning.findUnique({where:{reservationId:f.r.id}})).toMatchObject({adjustmentCents:-5000});
+ await prisma.authCode.deleteMany({where:{email:admin.email}});
+});
+it("manual adjustment needs independent approval, a fresh code and remaining amount-specific evidence",async()=>{
+ const f=await fixture(),proposer=await createTestCustomer({role:"SUPER_ADMIN"}),approver=await createTestCustomer({role:"SUPER_ADMIN"});users.push(proposer.id,approver.id);
+ const evidence=await prisma.financialCase.create({data:{sourceKey:randomUUID(),reservationId:f.r.id,customerId:f.customer.id,kind:"SETTLEMENT",amountCents:1000,currency:"usd",reason:"Approved settlement fixture",status:"RESOLVED",resolution:"Approved evidence"}});
+ const input={reservationId:f.r.id,kind:"HOST_CREDIT",amountCents:750,reason:"Approved service credit adjustment",evidenceId:evidence.id};const a=await proposeAdjustment(proposer.id,input);
+ await expect(approveAdjustment(proposer.id,a.id,"123456")).rejects.toThrow("independent second");await expect(approveAdjustment(approver.id,a.id,"000000")).rejects.toThrow("step-up");expect(await prisma.ledgerJournal.count({where:{key:"adjustment:"+a.id}})).toBe(0);
+ await prisma.authCode.create({data:{email:approver.email,purpose:"FINANCE_STEP_UP",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});await approveAdjustment(approver.id,a.id,"123456");
+ const excess=await proposeAdjustment(proposer.id,input);await expect(approveAdjustment(approver.id,excess.id,"123456")).rejects.toThrow("remaining approved");expect(await prisma.hostEarning.findUnique({where:{reservationId:f.r.id}})).toMatchObject({adjustmentCents:750});await prisma.authCode.deleteMany({where:{email:approver.email}});
+});
+
+it("deposit generations retain authorization and release evidence independently",async()=>{
+ const f=await fixture(),first="pi_"+randomUUID(),second="pi_"+randomUUID();
+ await withReservationLock(f.r.id,async tx=>{
+  for(const id of [first,second]){const op=await prepareOperation(tx,{key:"deposit-fixture:"+id,kind:"DEPOSIT",reservationId:f.r.id,payload:{amount:5000,currency:"usd"}});await tx.financialOperation.update({where:{id:op.id},data:{providerId:id,state:"OBSERVED",result:{id,status:"requires_capture"}}});}
+  await accountReservation(tx,f.r.id);
+  const release=await prepareOperation(tx,{key:"release-fixture:"+first,kind:"DEPOSIT_RELEASE",reservationId:f.r.id,payload:{intentId:first}});await tx.financialOperation.update({where:{id:release.id},data:{providerId:first,state:"OBSERVED",result:{id:first,status:"canceled"}}});await accountReservation(tx,f.r.id);
+ });
+ await withReservationLock(f.r.id,tx=>accountReservation(tx,f.r.id));
+ expect(await prisma.ledgerJournal.count({where:{reservationId:f.r.id,kind:"DEPOSIT_AUTHORIZATION"}})).toBe(2);expect(await prisma.ledgerJournal.count({where:{key:"deposit-release:"+first}})).toBe(1);expect(await prisma.ledgerJournal.count({where:{key:"deposit-release:"+second}})).toBe(0);
 });

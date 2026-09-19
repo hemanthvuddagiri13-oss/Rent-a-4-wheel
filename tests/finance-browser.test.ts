@@ -9,7 +9,7 @@ const base="http://127.0.0.1:3204",secret="finance-browser-only-secret",capture=
 beforeAll(async()=>{
  await mkdir(capture,{recursive:true});
  child=spawn(process.execPath,["tests/helpers/app-server.mjs"],{stdio:"inherit",env:{...process.env,BROWSER_TEST_PORT:"3204",NODE_ENV:"development",AUTH_SECRET:secret,AUTH_TRUST_HOST:"true",AUTH_URL:base,NEXTAUTH_URL:base,FINANCE_SANDBOX_ENABLED:"false",STRIPE_SECRET_KEY:"",NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:""}});
- let ready=false;for(let i=0;i<240;i++){try{await fetch(base+"/api/auth/session");ready=true;break;}catch{await new Promise(r=>setTimeout(r,500));}}if(!ready)throw new Error("Next finance server unavailable");browser=await chromium.launch({headless:true});
+ let ready=false;for(let i=0;i<240;i++){try{const response=await fetch(base+"/api/auth/session");if(response.ok&&response.headers.get("content-type")?.includes("application/json")){ready=true;break;}await new Promise(r=>setTimeout(r,500));}catch{await new Promise(r=>setTimeout(r,500));}}if(!ready)throw new Error("Next finance server unavailable");browser=await chromium.launch({headless:true});
 },150000);
 afterAll(async()=>{await browser?.close();if(child&&child.exitCode===null){const done=new Promise(r=>child.once("exit",r));child.kill();await Promise.race([done,new Promise(r=>setTimeout(r,3000))]);}await prisma.$disconnect();});
 async function login(user:{id:string;email:string;role:string}){const page=await browser.newPage();const token=await encode({token:{sub:user.id,id:user.id,email:user.email,role:user.role},secret,salt:"authjs.session-token"});await page.context().addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);return page;}

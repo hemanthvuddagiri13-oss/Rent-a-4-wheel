@@ -40,7 +40,7 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
   const cumulative=Math.min(paid.amountCents,priorCash+f.amountCents);
   const prorate=(amount:number)=>Number(BigInt(cumulative)*BigInt(amount)/BigInt(paid.amountCents));
   const tax=Math.min(f.amountCents,Math.max(0,prorate(a.rentalTaxCents+a.feeTaxCents)-priorTax));
-  const host=Math.min(f.amountCents-tax,earning?Math.max(0,earning.netCents-earning.refundedCents):0,Math.max(0,roundBps(prorate(a.hostNetCents),allocation.data.refundHostBps)-(earning?.refundedCents??0)));
+  const host=Math.min(f.amountCents-tax,earning?Math.max(0,earning.netCents-earning.refundedCents+earning.adjustmentCents):0,Math.max(0,roundBps(prorate(a.hostNetCents),allocation.data.refundHostBps)-(earning?.refundedCents??0)));
   const batchItem=earning?await tx.payoutItem.findFirst({where:{earningId:earning.id,active:true}}):null;
   const batch=batchItem?await tx.payoutBatch.findUniqueOrThrow({where:{id:batchItem.batchId}}):null;
   const sent=Boolean(batch?.transferredCents);

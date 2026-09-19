@@ -25,7 +25,7 @@ export async function recoverPayoutOperations(){
 export async function schedulePayouts(){
  const hosts=await prisma.connectAccount.findMany({where:{active:true,schedule:{not:"MANUAL"},nextRunAt:{lte:new Date()}},orderBy:{nextRunAt:"asc"},take:25});let planned=0;
  for(const a of hosts)try{
-  const claimed=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+a.hostId})`;const rule=await selectedRule(tx,"PAYOUT",[{scope:"HOST",scopeId:a.hostId},{scope:"DEFAULT",scopeId:"*"}]);if(!rule)return false;const p=payoutSchema.parse(rule.config);if(!p.allowedSchedules.includes(a.schedule as "MANUAL")||a.minimumCents<p.minimumCents)return false;const changed=await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:nextPayoutCutoff(a.schedule,a.timezone)}});if(changed.count)await tx.outboxMessage.upsert({where:{deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`},create:{type:"finance_schedule",deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`,payload:{hostId:a.hostId,cutoff:new Date().toISOString()}},update:{}});return Boolean(changed.count);});
+  const claimed=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+a.hostId})`;const rule=await selectedRule(tx,"PAYOUT",[{scope:"HOST",scopeId:a.hostId},{scope:"DEFAULT",scopeId:"*"}]);const defer=async()=>{await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:new Date(Date.now()+15*60000)}});await financeIssue(tx,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Schedule or threshold needs current business approval; work deferred without moving money"});return false;};if(!rule)return defer();const p=payoutSchema.parse(rule.config);if(!p.allowedSchedules.includes(a.schedule as "MANUAL")||a.minimumCents<p.minimumCents)return defer();await tx.financeIssue.updateMany({where:{key:"schedule:"+a.hostId,status:{not:"RESOLVED"}},data:{status:"RESOLVED",resolution:"Current immutable business rule confirms the selected schedule and threshold"}});const changed=await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:nextPayoutCutoff(a.schedule,a.timezone)}});if(changed.count)await tx.outboxMessage.upsert({where:{deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`},create:{type:"finance_schedule",deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`,payload:{hostId:a.hostId,cutoff:new Date().toISOString()}},update:{}});return Boolean(changed.count);});
   if(claimed)planned++;
  }catch{await financeIssue(prisma,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Scheduled payout remains pending; operator review required"});}
  return {planned};
@@ -40,13 +40,18 @@ export async function reconcileFinance(){
  return {...accounting,checked,imbalances:mismatches.length,metrics};
 }
 export async function auditFinanceHistory(){
- const stripe=financeStripe(),rows=await prisma.reservation.findMany({where:{payments:{some:{status:"SUCCEEDED",stripePaymentIntentId:{not:null}}}},orderBy:[{financialCheckedAt:{sort:"asc",nulls:"first"}},{id:"asc"}],take:10,include:{payments:true}});
+ const stripe=financeStripe(),rows=await prisma.reservation.findMany({where:{payments:{some:{status:"SUCCEEDED",stripePaymentIntentId:{not:null}}}},orderBy:[{financialCheckedAt:{sort:"asc",nulls:"first"}},{id:"asc"}],take:10,include:{payments:true,refunds:true}});
  for(const r of rows){await prisma.reservation.update({where:{id:r.id},data:{financialCheckedAt:new Date()}});for(const p of r.payments.filter(p=>p.stripePaymentIntentId)){
   const intent=await stripe.paymentIntents.retrieve(p.stripePaymentIntentId!,{expand:["latest_charge.balance_transaction"]});
-  if(intent.amount!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&intent.status!=="succeeded")await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});
+  if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded"))await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});
   const charge=typeof intent.latest_charge==="object"?intent.latest_charge:null,balance=charge&&typeof charge.balance_transaction==="object"?charge.balance_transaction:null;
   if(balance&&balance.fee>0){const {journal}=await import("@/lib/finance-ledger");await withReservationLock(r.id,tx=>journal(tx,{key:"stripe-fee:"+balance.id,kind:"STRIPE_FEE",currency:balance.currency,reservationId:r.id,providerId:balance.id,description:"Provider-reported processing fee",lines:[{account:"STRIPE_FEE_EXPENSE",debitCents:balance.fee},{account:"STRIPE_CLEARING",creditCents:balance.fee}]}));}
- }}return {checked:rows.length};
+ }
+ for(const refund of r.refunds.filter(f=>f.stripeRefundId)){
+  const actual=await stripe.refunds.retrieve(refund.stripeRefundId!);
+  if(actual.amount!==refund.amountCents||actual.currency!==(r.payments.find(p=>p.id===refund.paymentId)?.currency??"usd")||refund.status==="SUCCEEDED"&&actual.status!=="succeeded")await financeIssue(prisma,{key:"provider-refund:"+refund.id,kind:"PROVIDER_REFUND_DIFFERENCE",reservationId:r.id,reason:"Provider refund differs from retained amount, currency or terminal status",evidence:{refundId:refund.id,providerId:actual.id}});
+ }
+ }const payouts=await auditPayoutHistory();return {checked:rows.length,payouts};
 }
 export const payoutWorkers={accounting:reconcileAccounting,recovery:recoverPayoutOperations,schedule:schedulePayouts,reconciliation:reconcileFinance,"historical-audit":auditFinanceHistory};
 
@@ -75,4 +80,13 @@ export async function financeBacklogAlerts(){
    await tx.auditLog.create({data:{action:"finance.backlog.cleared",entityType:"FinanceIssue",entityId:prior.id}});
   }
  });return metrics;
+}
+
+export async function auditPayoutHistory(){
+ // Separate bounded historical work; urgent recovery never waits behind it.
+ const rows=await prisma.financialOperation.findMany({where:{kind:{in:["FINANCE_TRANSFER","FINANCE_PAYOUT","FINANCE_REVERSAL"]},state:"OBSERVED",providerId:{not:null}},orderBy:[{updatedAt:"asc"},{id:"asc"}],take:10});
+ for(const op of rows)try{await executeFinanceOperation(op);}catch{
+  await financeIssue(prisma,{key:"historical-operation:"+op.id,kind:"FINANCE_PROVIDER_DIFFERENCE",operationId:op.id,hostId:(op.payload as {hostId:string}).hostId,reason:"Historical provider object differs or cannot be reconciled; preserve the financial hold"});
+ }
+ return {checked:rows.length};
 }
