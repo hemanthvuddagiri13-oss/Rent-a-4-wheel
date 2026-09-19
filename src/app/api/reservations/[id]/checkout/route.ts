@@ -1,3 +1,4 @@
+import { freezeFinance } from "@/lib/finance-rules";
 import { safeLog } from "@/lib/safe-log";
 import { withReservationLock } from "@/lib/financial-locks";
 import { fingerprint } from "@/lib/financial-operations";
@@ -131,6 +132,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       });
 
+      await freezeFinance(tx,id);
       // Freeze the finalized driver details, not the earlier empty checkout hold.
       // Legal rejection still rolls back this entire transaction.
       await recordAgreementAcceptance(tx, {

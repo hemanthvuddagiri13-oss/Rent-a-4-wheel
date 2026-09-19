@@ -27,6 +27,26 @@
     {
       "path": "/api/cron/community",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/payouts/accounting",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/payouts/recovery",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/payouts/schedule",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/payouts/reconciliation",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/payouts/historical-audit",
+      "schedule": "15 * * * *"
     }
   ]
 }

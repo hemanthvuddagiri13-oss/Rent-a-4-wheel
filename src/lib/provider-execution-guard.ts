@@ -1,3 +1,4 @@
+import { financeOperationScopes, assertFinanceDispatch } from "@/lib/payout-authority";
 import { type PrismaClient, type FinancialOperation, type Prisma } from "@prisma/client";
 import { prisma, createSafePrismaClient } from "@/lib/prisma";
 import { eventFence } from "@/lib/financial-locks";
@@ -14,7 +15,7 @@ export async function withOperationGuard<T>(operation: FinancialOperation, token
   const reservation = operation.reservationId ? await prisma.reservation.findUniqueOrThrow({ where: { id: operation.reservationId } }) : null;
   const scope = reservation ? "vehicle:" + reservation.vehicleId : "operation:" + operation.id;
   const fence = eventFence.getStore();
-  const scopes = [...(fence ? ["event:" + fence.id] : []), scope];
+  const scopes = [...(fence ? ["event:" + fence.id] : []), ...(operation.kind.startsWith("FINANCE_") ? await financeOperationScopes(prisma,operation) : [scope])];
   const url = new URL(process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL!);
   if (url.searchParams.get("pgbouncer") === "true") throw new Error("Dispatch requires a direct PostgreSQL session");
   url.searchParams.set("connection_limit", "1"); url.searchParams.set("pool_timeout", "15");
@@ -44,6 +45,7 @@ export async function assertCurrentLease(db: PrismaClient, operation: FinancialO
 }
 
 async function assertDispatchAuthority(db: PrismaClient, op: FinancialOperation) {
+  if (op.kind.startsWith("FINANCE_")) { await assertFinanceDispatch(db,op); return; }
   if (!op.reservationId) { if (op.kind !== "CUSTOMER") throw new UncertainOutcomeError("Provider operation has no release authority"); return; }
   const r = await db.reservation.findUniqueOrThrow({ where: { id: op.reservationId }, include: { deposit: true, trip: true } });
   const payload = op.payload as { intentId?: string; amount?: number; currency?: string; refundId?: string; paymentIntentId?: string };
@@ -87,8 +89,10 @@ export async function dispatchProviderCall<T extends { id: string }>(db: PrismaC
     if (!renewedEvent.length) throw new OperationPendingError("Stripe event lease expired during authorization");
   }
   const scope = op.reservationId ? "vehicle:" + (await db.reservation.findUniqueOrThrow({ where: { id: op.reservationId } })).vehicleId : "operation:" + op.id;
-  const locked = await db.$queryRaw<Array<{ held: boolean }>>`SELECT count(*)=2 AS held FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND granted AND ((classid::bigint<<32) | objid::bigint) IN (SELECT * FROM financial_guard_keys(${scope}))`;
+  for (const guardScope of op.kind.startsWith("FINANCE_") ? await financeOperationScopes(db,op) : [scope]) {
+  const locked = await db.$queryRaw<Array<{ held: boolean }>>`SELECT count(*)=2 AS held FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND granted AND ((classid::bigint<<32) | objid::bigint) IN (SELECT * FROM financial_guard_keys(${guardScope}))`;
   if (!locked[0]?.held) throw new OperationPendingError("Dedicated PostgreSQL session lost its guard");
+  }
   await db.financialDispatch.create({ data: { operationId: op.id, leaseToken: token, phase: "DISPATCHED", providerId: op.providerId } });
   try {
     const result = await call();

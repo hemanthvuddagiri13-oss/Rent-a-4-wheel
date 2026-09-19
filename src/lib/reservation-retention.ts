@@ -6,6 +6,10 @@ import { Prisma } from "@prisma/client";
 export function reservationHeldSql(id: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`EXISTS (SELECT 1 FROM "Reservation" r WHERE r.id=${id} AND (
     r."financialDisposition"='REVIEW'
+    OR EXISTS (SELECT 1 FROM "LedgerJournal" x WHERE x."reservationId"=r.id)
+    OR EXISTS (SELECT 1 FROM "FinanceDocument" x WHERE x."reservationId"=r.id)
+    OR EXISTS (SELECT 1 FROM "FinanceIssue" x WHERE x."reservationId"=r.id AND x.status<>'RESOLVED')
+    OR EXISTS (SELECT 1 FROM "ProviderDispute" x WHERE x."reservationId"=r.id AND x.active)
     OR EXISTS (SELECT 1 FROM "FinancialOperation" x WHERE x."reservationId"=r.id)
     OR EXISTS (SELECT 1 FROM "FinancialCase" x WHERE x."reservationId"=r.id AND x.status<>'RESOLVED')
     OR EXISTS (SELECT 1 FROM "PaymentReconciliation" x WHERE x."reservationId"=r.id AND x.status IN ('OPEN','NEEDS_MANUAL_REVIEW'))

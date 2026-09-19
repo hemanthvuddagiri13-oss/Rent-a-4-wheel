@@ -1,3 +1,4 @@
+import { financeQuote } from "@/lib/finance-rules";
 import { bookingInstant, bookingDays } from "@/lib/booking-time";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -54,14 +55,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   if (couponError) return NextResponse.json({ error: couponError }, { status: 400 });
 
-  const breakdown = calculatePricing({
+  const basePrice = calculatePricing({
     vehicle,
     pickupAt,
     returnAt,
     extras: extras.map((extra) => ({ extra, quantity: 1 })),
     coupon,
-    taxRatePercent: settings.taxRatePercent, bookingTimezone: settings.bookingTimezone,
+    taxRatePercent: vehicle.location === settings.address ? settings.taxRatePercent : 0, bookingTimezone: settings.bookingTimezone,
   });
 
-  return NextResponse.json({ breakdown, couponError, couponApplied: Boolean(coupon) });
+  const {breakdown,terms}=await financeQuote(prisma,vehicle,basePrice);
+  return NextResponse.json({ taxWarning: terms.approved ? null : "NOT TAX-APPROVED — PROFESSIONAL REVIEW REQUIRED", breakdown, couponError, couponApplied: Boolean(coupon) });
 }

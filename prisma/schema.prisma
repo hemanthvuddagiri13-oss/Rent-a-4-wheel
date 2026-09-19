@@ -16,6 +16,7 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 enum Role {
+  FINANCE_AGENT
   CUSTOMER
   HOST
   HOST_EMPLOYEE
@@ -70,6 +71,7 @@ model User {
 // ---------------------------------------------------------------------------
 
 enum AuthCodePurpose {
+  FINANCE_STEP_UP
   SIGN_IN
   EMERGENCY_OVERRIDE_STEP_UP
 }
@@ -1829,4 +1831,228 @@ model ChannelDelivery {
   createdAt DateTime @default(now())
   acceptedAt DateTime?
   @@unique([noticeId, channel])
+}
+
+// Phase 4 scalar tenant references have explicit restrictive SQL foreign keys.
+model FinanceRule {
+ id String @id @default(cuid())
+ kind String
+ scope String
+ scopeId String @default("*")
+ version Int
+ config Json
+ effectiveAt DateTime
+ endsAt DateTime?
+ approvedAt DateTime?
+ approvedById String?
+ createdById String
+ createdAt DateTime @default(now())
+ @@unique([kind,scope,scopeId,version])
+ @@index([kind,approvedAt,effectiveAt])
+}
+model FinanceSnapshot {
+ reservationId String @id
+ hostId String?
+ currency String @default("usd")
+ commission Json
+ tax Json
+ settlement Json
+ amounts Json
+ approved Boolean @default(false)
+ frozenAt DateTime @default(now())
+ contentHash String
+}
+model ConnectAccount {
+ hostId String @id
+ accountId String? @unique
+ operationId String? @unique
+ active Boolean @default(true)
+ detailsSubmitted Boolean @default(false)
+ chargesEnabled Boolean @default(false)
+ payoutsEnabled Boolean @default(false)
+ currentlyDue Json @default("[]")
+ eventuallyDue Json @default("[]")
+ disabledReason String?
+ verificationStatus String @default("MISSING")
+ taxStatus String @default("MISSING")
+ schedule String @default("MANUAL")
+ timezone String @default("America/Chicago")
+ minimumCents Int @default(100)
+ nextRunAt DateTime @default(now())
+ synchronizedAt DateTime?
+ updatedAt DateTime @updatedAt
+}
+model FinanceGrant {
+ hostId String
+ userId String
+ manage Boolean @default(false)
+ grantedById String
+ createdAt DateTime @default(now())
+ @@id([hostId,userId])
+}
+model LedgerJournal {
+ id String @id @default(cuid())
+ key String @unique
+ kind String
+ currency String
+ reservationId String?
+ hostId String?
+ operationId String?
+ providerId String?
+ reversalOf String? @unique
+ description String
+ fingerprint String
+ createdAt DateTime @default(now())
+ lines LedgerLine[]
+ @@index([reservationId,createdAt])
+ @@index([hostId,createdAt])
+}
+model LedgerLine {
+ id String @id @default(cuid())
+ journalId String
+ journal LedgerJournal @relation(fields:[journalId],references:[id])
+ account String
+ debitCents Int @default(0)
+ creditCents Int @default(0)
+ @@index([journalId])
+ @@index([account])
+}
+model HostEarning {
+ id String @id @default(cuid())
+ reservationId String @unique
+ hostId String
+ currency String @default("usd")
+ grossCents Int
+ commissionCents Int
+ hostDiscountCents Int
+ netCents Int
+ refundedCents Int @default(0)
+ adjustmentCents Int @default(0)
+ availableAt DateTime?
+ checkedAt DateTime?
+ holdReason String?
+ createdAt DateTime @default(now())
+ @@index([hostId,checkedAt])
+}
+model PayoutBatch {
+ id String @id @default(cuid())
+ hostId String
+ accountId String
+ currency String
+ amountCents Int
+ state String @default("PLANNED")
+ transferId String? @unique
+ payoutId String? @unique
+ transferredCents Int @default(0)
+ reversedCents Int @default(0)
+ reversalReservedCents Int @default(0)
+ generation Int @default(1)
+ nextAttemptAt DateTime @default(now())
+ reason String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([state,nextAttemptAt])
+ @@index([hostId,createdAt])
+}
+model PayoutItem {
+ id String @id @default(cuid())
+ batchId String
+ earningId String
+ reservationId String
+ amountCents Int
+ active Boolean @default(true)
+ createdAt DateTime @default(now())
+ @@unique([batchId,earningId])
+ @@index([earningId])
+}
+model PayoutReversal {
+ id String @id @default(cuid())
+ key String @unique
+ batchId String
+ amountCents Int
+ reason String
+ operationId String? @unique
+ providerId String? @unique
+ state String @default("PLANNED")
+ createdAt DateTime @default(now())
+}
+model FinanceObject {
+ providerId String @id
+ hostId String
+ operationId String
+ kind String
+ createdAt DateTime @default(now())
+}
+model FinanceIssue {
+ id String @id @default(cuid())
+ key String @unique
+ reservationId String?
+ hostId String?
+ operationId String?
+ kind String
+ reason String
+ evidence Json @default("{}")
+ status String @default("OPEN")
+ resolution String?
+ resolvedById String?
+ checkedAt DateTime?
+ createdAt DateTime @default(now())
+ @@index([status,checkedAt])
+}
+model ProviderDispute {
+ id String @id
+ reservationId String
+ chargeId String
+ currency String
+ amountCents Int
+ status String
+ active Boolean @default(true)
+ checkedAt DateTime @default(now())
+ @@index([reservationId,active])
+}
+model FinanceAdjustment {
+ id String @id @default(cuid())
+ reservationId String
+ kind String
+ amountCents Int
+ reason String
+ evidenceId String
+ createdById String
+ approvedById String?
+ state String @default("PROPOSED")
+ journalId String? @unique
+ createdAt DateTime @default(now())
+}
+model FinanceDocument {
+ id String @id @default(cuid())
+ key String @unique
+ kind String
+ reservationId String?
+ hostId String?
+ customerId String?
+ version Int
+ templateVersion String
+ currency String
+ timezone String
+ snapshot Json
+ contentHash String
+ pdf Bytes
+ createdAt DateTime @default(now())
+ @@index([hostId,createdAt])
+ @@index([customerId,createdAt])
+}
+model TaxExemption {
+ id String @id @default(cuid())
+ customerId String
+ jurisdiction String
+ evidenceReference String
+ approvedById String
+ expiresAt DateTime
+ createdAt DateTime @default(now())
+}
+
+model FinanceQuote {
+ reservationId String @id
+ terms Json
+ createdAt DateTime @default(now())
 }

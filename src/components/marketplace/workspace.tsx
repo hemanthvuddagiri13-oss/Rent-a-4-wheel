@@ -13,5 +13,5 @@ export function Panel({ title, children }: { title: string; children: ReactNode 
   return <section className="min-w-0 rounded-2xl border border-white/10 bg-card p-5 sm:p-7"><h2 className="mb-5 font-display text-xl font-semibold text-white">{title}</h2>{children}</section>;
 }
 export function HostNav() {
-  return <nav aria-label="Host workspace" className="flex flex-wrap gap-2">{[["/host", "Overview"], ["/host/profile", "Business profile"], ["/host/vehicles", "Vehicles"], ["/host/reservations", "Reservations"], ["/host/team", "Team & owners"]].map(([href, label]) => <Link className="rounded-lg border border-white/15 px-4 py-3 text-sm text-silver hover:border-gold hover:text-white" href={href} key={href}>{label}</Link>)}</nav>;
+  return <nav aria-label="Host workspace" className="flex flex-wrap gap-2">{[["/host", "Overview"], ["/host/profile", "Business profile"], ["/host/vehicles", "Vehicles"], ["/host/reservations", "Reservations"], ["/host/team", "Team & owners"], ["/finance", "Earnings & payouts"]].map(([href, label]) => <Link className="rounded-lg border border-white/15 px-4 py-3 text-sm text-silver hover:border-gold hover:text-white" href={href} key={href}>{label}</Link>)}</nav>;
 }

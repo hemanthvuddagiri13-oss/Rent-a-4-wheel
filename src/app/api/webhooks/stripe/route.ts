@@ -1,3 +1,4 @@
+import { safeFinanceEvent } from "@/lib/finance-webhooks";
 import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
@@ -24,6 +25,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
 
+  event = safeFinanceEvent(event);
   const claim = await claimStripeEventForProcessing({
     stripeEventId: event.id,
     type: event.type,
