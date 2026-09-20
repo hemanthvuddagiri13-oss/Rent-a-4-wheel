@@ -2,6 +2,9 @@ import type { FinancialOperation,Prisma } from "@prisma/client";
 import { assertReturnFinancialAuthority } from "@/lib/return-financial-authority";
 import { lockReservation,assertEventFence } from "@/lib/financial-locks";
 import { OperationPendingError } from "@/lib/financial-errors";
+import { accountingCompleteness } from "@/lib/finance-completeness";
+import { bankMovement,recordBankMovementHold } from "@/lib/payout-movement";
+import { financeIssue } from "@/lib/finance-ledger";
 
 export async function financeOperationScopes(tx:Prisma.TransactionClient,op:FinancialOperation){
  const p=op.payload as {hostId?:string;batchId?:string};if(!p.hostId)throw new Error("Missing immutable host scope");
@@ -17,6 +20,8 @@ export async function lockPayoutReservations(tx:Prisma.TransactionClient,ids:str
 }
 export async function payoutEligibility(tx:Prisma.TransactionClient,reservationId:string,options:{ignoreBatch?:string;now?:Date}={}){
  const now=options.now??new Date(),reasons:string[]=[];
+ const accounting=await accountingCompleteness(tx,reservationId);
+ if(!accounting.complete)reasons.push("Accounting incomplete: "+accounting.reasons.join("; "));
  const r=await tx.reservation.findUniqueOrThrow({where:{id:reservationId},include:{vehicle:{include:{host:{include:{user:true}}}},trip:true}}),snapshot=await tx.financeSnapshot.findUnique({where:{reservationId}}),earning=await tx.hostEarning.findUnique({where:{reservationId}});
  if(!r.vehicle.host || r.vehicle.host.onboardingStatus!=="APPROVED" || !r.vehicle.host.user.isActive)reasons.push("Host approval or active account required");
  if(!snapshot?.approved)reasons.push("Commission, tax and settlement approval required");
@@ -52,10 +57,17 @@ export async function assertFinanceDispatch(tx:Prisma.TransactionClient,op:Finan
  const batch=await tx.payoutBatch.findUniqueOrThrow({where:{id:p.batchId}});
  if(batch.hostId!==p.hostId||batch.accountId!==p.accountId||batch.currency!==p.currency)throw new Error("Batch ownership mismatch");
  if(op.kind==="FINANCE_REVERSAL"){
+  const movement=await bankMovement(tx,batch.id);
+  if(!movement.complete){await recordBankMovementHold(tx,batch.id,movement.reasons);throw new OperationPendingError("Bank movement incomplete: "+movement.reasons.join("; "));}
   const reversal=await tx.payoutReversal.findUniqueOrThrow({where:{id:p.reversalId}});
+  if(movement.availableCents<batch.reversalReservedCents||movement.availableCents<reversal.amountCents)throw new OperationPendingError("Insufficient projected Connect funds; retain host receivable");
   if(!batch.transferId||p.transferId!==batch.transferId||reversal.batchId!==batch.id||reversal.operationId!==op.id||reversal.amountCents!==p.amount||batch.reversalReservedCents<reversal.amountCents)throw new Error("Reversal not atomically reserved");return;
  }
  if(!account.payoutsEnabled||account.verificationStatus!=="VERIFIED")throw new OperationPendingError("Stripe payouts disabled");
+ if(op.kind==="FINANCE_PAYOUT"){
+  const movement=await bankMovement(tx,batch.id);
+  if(!movement.complete||movement.paidCents){await recordBankMovementHold(tx,batch.id,movement.reasons.length?movement.reasons:["Bank funds already paid"]);throw new OperationPendingError("Bank movement incomplete or already paid");}
+ }
  const payable=op.kind==="FINANCE_PAYOUT"?batch.transferredCents-batch.reversedCents:batch.amountCents;
  if(p.amount!==payable)throw new Error("Immutable operation amount differs from unreversed batch funds");
  if(op.kind==="FINANCE_PAYOUT" && batch.transferredCents!==batch.amountCents)throw new OperationPendingError("Transfer has not been confirmed");
@@ -65,7 +77,10 @@ export async function assertFinanceDispatch(tx:Prisma.TransactionClient,op:Finan
  let eligibleTotal=0;
  for(const item of items){
   const result=await payoutEligibility(tx,item.reservationId,{ignoreBatch:batch.id});
-  if(!result.eligible||(op.kind==="FINANCE_TRANSFER"?item.amountCents!==result.amountCents:item.amountCents<result.amountCents))throw new OperationPendingError("Payout eligibility changed: "+result.reasons.join("; "));
+  if(!result.eligible||(op.kind==="FINANCE_TRANSFER"?item.amountCents!==result.amountCents:item.amountCents<result.amountCents)){
+   await financeIssue(tx,{key:"accounting-dispatch:"+batch.id,kind:"ACCOUNTING_INCOMPLETE",reservationId:item.reservationId,hostId:batch.hostId,reason:"Accounting incomplete or batch changed: "+result.reasons.join("; "),evidence:{batchId:batch.id}});
+   throw new OperationPendingError("Payout eligibility changed: "+result.reasons.join("; "));
+  }
   eligibleTotal+=result.amountCents;
  }
  if(eligibleTotal!==payable)throw new OperationPendingError("Reconciled eligible earnings differ from the provider operation amount");

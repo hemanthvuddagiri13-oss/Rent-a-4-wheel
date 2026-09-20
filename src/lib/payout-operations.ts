@@ -7,6 +7,7 @@ import { financeHost,financeAdmin,financeStepUp } from "@/lib/finance-access";
 import { createFinanceProviderObject,retrieveFinanceProviderObject,discoverFinanceProviderObject,createOnboardingLink,retrieveConnectAccount,type FinanceProviderObject,type FinancePayload } from "@/lib/finance-provider";
 import { MarketplaceError } from "@/lib/marketplace";
 import { independentCaseActor } from "@/lib/case-decision-authority";
+import { bankMovement,recordBankMovementHold } from "@/lib/payout-movement";
 
 export async function applyFinanceObject(tx:Prisma.TransactionClient,op:FinancialOperation,result:FinanceProviderObject){
  const p=op.payload as FinancePayload;
@@ -22,17 +23,23 @@ export async function applyFinanceObject(tx:Prisma.TransactionClient,op:Financia
   await tx.payoutBatch.update({where:{id:batch.id},data:{transferId:result.id,transferredCents:result.amount,...(batch.state==="PLANNED"?{state:"TRANSFERRED"}:{})}});
   if(result.amountReversed!==batch.reversedCents)await financeIssue(tx,{key:"transfer-difference:"+result.id,kind:"REVERSAL_DIFFERENCE",hostId:batch.hostId,operationId:op.id,reason:"Provider reversal total differs from posted internal reversal evidence",evidence:json({providerReversed:result.amountReversed,internalReversed:batch.reversedCents})});
  }else if(op.kind==="FINANCE_PAYOUT"){
-  if(op.key!==`payout:${batch.id}:${batch.generation}`)return;
-  if(batch.payoutId&&batch.payoutId!==result.id)throw new Error("Payout ownership mismatch");
+  const prior=await tx.payoutBankProjection.findUnique({where:{operationId:op.id}});
+  if(prior?.status==="paid"&&result.status!=="paid")throw new Error("Paid bank movement cannot regress");
+  if(op.key===`payout:${batch.id}:${batch.generation}`&&batch.payoutId&&batch.payoutId!==result.id)throw new Error("Payout ownership mismatch");
   const terminal=["paid","failed","canceled"].includes(result.status);
   if(batch.state==="PAID"&&result.status!=="paid"){await financeIssue(tx,{key:"payout-regression:"+result.id,kind:"PAYOUT_DIFFERENCE",hostId:batch.hostId,reason:"Authoritative payout status changed after paid; investigate return without reopening earnings"});return;}
   if(result.status==="paid")await journal(tx,{key:"payout:"+result.id,kind:"HOST_PAYOUT",currency:batch.currency,hostId:batch.hostId,operationId:op.id,providerId:result.id,description:"Stripe confirmed bank payout",lines:[{account:"MEMO_CONNECT_LIABILITY",debitCents:result.amount},{account:"MEMO_CONNECT_FUNDS",creditCents:result.amount}]});
-  await tx.payoutBatch.update({where:{id:batch.id},data:{payoutId:result.id,...(result.status==="paid"?{paidCents:result.amount}:{}),state:result.status==="paid"?"PAID":terminal?"PAYOUT_FAILED":"PAYOUT_PENDING",reason:terminal&&result.status!=="paid"?"Stripe confirmed payout "+result.status:null,nextAttemptAt:new Date(Date.now()+60000)}});
+  await tx.payoutBankProjection.upsert({where:{operationId:op.id},create:{operationId:op.id,batchId:batch.id,providerId:result.id,currency:result.currency,amountCents:result.amount,status:result.status},update:{status:result.status}});
+  const generations=await tx.payoutBankProjection.findMany({where:{batchId:batch.id}});
+  const paidCents=generations.filter(g=>g.status==="paid").reduce((n,g)=>n+g.amountCents,0),pendingBankCents=generations.filter(g=>!["paid","failed","canceled"].includes(g.status)).reduce((n,g)=>n+g.amountCents,0);
+  await tx.payoutBatch.update({where:{id:batch.id},data:{paidCents,pendingBankCents,...(op.key===`payout:${batch.id}:${batch.generation}`?{payoutId:result.id,state:result.status==="paid"?"PAID":terminal?"PAYOUT_FAILED":"PAYOUT_PENDING",reason:terminal&&result.status!=="paid"?"Stripe confirmed payout "+result.status:null}:{}),nextAttemptAt:new Date(Date.now()+60000)}});
+  const movement=await bankMovement(tx,batch.id);
+  if(movement.complete)await tx.financeIssue.updateMany({where:{key:"bank-movement:"+batch.id},data:{status:"RESOLVED",resolution:"All bank generations have authoritative accounting projections"}});
  }else if(op.kind==="FINANCE_REVERSAL"){
   const reversal=await tx.payoutReversal.findUniqueOrThrow({where:{id:p.reversalId}});if(reversal.state==="SUCCEEDED")return;
   if(reversal.amountCents!==result.amount||batch.reversalReservedCents<result.amount)throw new Error("Reversal balance mismatch");
   await journal(tx,{key:"transfer-reversal:"+result.id,kind:"TRANSFER_REVERSAL",currency:batch.currency,hostId:batch.hostId,operationId:op.id,providerId:result.id,description:reversal.reason,lines:[{account:"STRIPE_CLEARING",debitCents:result.amount},{account:"HOST_RECEIVABLE",creditCents:result.amount}]});
-  const heldFunds=Math.min(result.amount,Math.max(0,batch.transferredCents-batch.paidCents-batch.reversedCents));
+  const heldFunds=result.amount;
   if(heldFunds)await journal(tx,{key:"transfer-reversal-memo:"+result.id,kind:"TRANSFER_REVERSAL_MEMO",currency:batch.currency,hostId:batch.hostId,operationId:op.id,providerId:result.id,description:"Release the reversed amount from tracked Connect funds",lines:[{account:"MEMO_CONNECT_LIABILITY",debitCents:heldFunds},{account:"MEMO_CONNECT_FUNDS",creditCents:heldFunds}]});
   await tx.payoutReversal.update({where:{id:reversal.id},data:{state:"SUCCEEDED",providerId:result.id}});
   await tx.payoutBatch.update({where:{id:batch.id},data:{reversedCents:{increment:result.amount},reversalReservedCents:{decrement:result.amount},...(batch.reversedCents+result.amount===batch.transferredCents?{state:"REVERSED"}:{})}});
@@ -85,31 +92,33 @@ export async function createPayoutBatch(hostId:string,db:PrismaClient=prisma,wor
  },{maxWait:15000,timeout:15000});
 }
 export async function planBankPayout(batchId:string){return prisma.$transaction(async tx=>{const b=await tx.payoutBatch.findUniqueOrThrow({where:{id:batchId}}),items=await tx.payoutItem.findMany({where:{batchId}});await lockPayoutReservations(tx,items.map(i=>i.reservationId),b.hostId);const current=await tx.payoutBatch.findUniqueOrThrow({where:{id:batchId}});if(current.state!=="TRANSFERRED"||current.transferredCents<=current.reversedCents||current.reversalReservedCents)throw new MarketplaceError("Batch is not ready for bank payout.",409);return prepareOperation(tx,{key:`payout:${batchId}:${current.generation}`,kind:"FINANCE_PAYOUT",payload:json({hostId:b.hostId,batchId,accountId:b.accountId,amount:current.transferredCents-current.reversedCents,currency:b.currency})});});}
-export async function planTransferReversal(userId:string,issueId:string,code:string,db:PrismaClient=prisma){return db.$transaction(async tx=>{
+export async function planTransferReversal(userId:string,issueId:string,code:string,db:PrismaClient=prisma){const outcome=await db.$transaction(async tx=>{
  await financeAdmin(tx,userId,true);const issue=await tx.financeIssue.findUniqueOrThrow({where:{id:issueId}});if(!["POST_PAYOUT_REFUND","POST_PAYOUT_LOSS"].includes(issue.kind))throw new MarketplaceError("An unresolved approved refund recovery is required.",409);
  const evidence=issue.evidence as {batchId:string;refundId:string;hostCents:number;reverseTransfers:boolean};if(!evidence.reverseTransfers)throw new MarketplaceError("Frozen business policy does not authorize transfer reversal.",409);
  const b=await tx.payoutBatch.findUniqueOrThrow({where:{id:evidence.batchId}}),items=await tx.payoutItem.findMany({where:{batchId:b.id}});await lockPayoutReservations(tx,items.map(i=>i.reservationId),b.hostId);
  const locked=await tx.payoutBatch.findUniqueOrThrow({where:{id:b.id}});
- if(locked.state==="PAYOUT_PENDING")throw new MarketplaceError("Reconcile the pending bank payout before reserving transfer recovery.",409);
+
  for(const item of items){const r=await tx.reservation.findUniqueOrThrow({where:{id:item.reservationId}});await independentCaseActor(tx,{id:issueId,kind:"CLAIM",reservationId:r.id,vehicleId:r.vehicleId,openedById:r.customerId},userId);}
  const prior=await tx.payoutReversal.findUnique({where:{key:"refund-recovery:"+evidence.refundId}});if(prior)return{id:prior.id};
  if(issue.status==="RESOLVED")throw new MarketplaceError("Recovery already resolved.",409);
+ const movement=await bankMovement(tx,b.id);
+ if(!movement.complete||movement.unreservedCents<evidence.hostCents){const reasons=movement.complete?["Insufficient projected Connect funds; retain the approved host receivable"]:movement.reasons;await recordBankMovementHold(tx,b.id,reasons);return {blocked:reasons.join("; ")};}
  await financeStepUp(tx,userId,code);
  const bank=await tx.financialOperation.findUnique({where:{key:`payout:${b.id}:${locked.generation}`}});
- if(bank&&!await tx.financialDispatch.count({where:{operationId:bank.id,phase:"DISPATCHED"}})){
+ if(bank&&!bank.providerId&&!bank.result&&!await tx.financialDispatch.count({where:{operationId:bank.id,phase:{in:["DISPATCHED","SUCCEEDED","UNCERTAIN"]}}})&&!await tx.financeObject.count({where:{operationId:bank.id}})){
   await tx.financialOperation.update({where:{id:bank.id},data:{state:"DEAD_LETTER",leaseToken:null,leaseExpiresAt:null,lastError:"SUPERSEDED_BY_APPROVED_RECOVERY"}});
   await tx.payoutBatch.update({where:{id:b.id},data:{generation:{increment:1}}});
  }
- const reserved=await tx.$executeRaw`UPDATE "PayoutBatch" SET "reversalReservedCents"="reversalReservedCents"+${evidence.hostCents} WHERE id=${b.id} AND "transferredCents"-"reversedCents"-"reversalReservedCents">=${evidence.hostCents}`;if(!reserved)throw new MarketplaceError("Reversal exceeds unreserved transferred funds.",409);
+ const reserved=await tx.$executeRaw`UPDATE "PayoutBatch" SET "reversalReservedCents"="reversalReservedCents"+${evidence.hostCents} WHERE id=${b.id} AND "transferredCents"-"paidCents"-"pendingBankCents"-"reversedCents"-"reversalReservedCents">=${evidence.hostCents}`;if(!reserved)throw new MarketplaceError("Reversal exceeds unreserved transferred funds.",409);
  const reversal=await tx.payoutReversal.create({data:{key:"refund-recovery:"+evidence.refundId,batchId:b.id,amountCents:evidence.hostCents,reason:"Approved frozen loss allocation"}});
  const op=await prepareOperation(tx,{key:"reversal:"+reversal.id,kind:"FINANCE_REVERSAL",payload:json({hostId:b.hostId,batchId:b.id,accountId:b.accountId,transferId:b.transferId,amount:reversal.amountCents,currency:b.currency,reversalId:reversal.id})});await tx.payoutReversal.update({where:{id:reversal.id},data:{operationId:op.id}});
  await tx.auditLog.create({data:{actorId:userId,action:"finance.reversal.authorized",entityType:"PayoutReversal",entityId:reversal.id,metadata:{issueId}}});return{id:reversal.id};
-});}
+});if("blocked" in outcome)throw new MarketplaceError("Bank movement incomplete: "+outcome.blocked,409);return outcome;}
 export async function retryBankPayout(userId:string,id:string,code:string){
  await financeAdmin(prisma,userId,true);
  const batch=await prisma.payoutBatch.findUniqueOrThrow({where:{id}}),old=await prisma.financialOperation.findUniqueOrThrow({where:{key:`payout:${id}:${batch.generation}`}});
  await executeFinanceOperation(old); // Retrieve authoritative failure before releasing retry authority.
- return prisma.$transaction(async tx=>{await lockFinanceOperation(tx,old);await financeStepUp(tx,userId,code);const b=await tx.payoutBatch.findUniqueOrThrow({where:{id}});if(b.state!=="PAYOUT_FAILED")throw new MarketplaceError("Stripe-confirmed failed/canceled payout required.",409);await tx.payoutBatch.update({where:{id},data:{state:"TRANSFERRED",payoutId:null,generation:{increment:1},reason:null}});await tx.auditLog.create({data:{actorId:userId,action:"finance.payout.retry",entityType:"PayoutBatch",entityId:id}});return{id};});
+ return prisma.$transaction(async tx=>{await lockFinanceOperation(tx,old);await financeStepUp(tx,userId,code);const b=await tx.payoutBatch.findUniqueOrThrow({where:{id}});const movement=await bankMovement(tx,id);if(!movement.complete)throw new MarketplaceError("Bank movement incomplete: "+movement.reasons.join("; "),409);if(b.state!=="PAYOUT_FAILED")throw new MarketplaceError("Stripe-confirmed failed/canceled payout required.",409);await tx.payoutBatch.update({where:{id},data:{state:"TRANSFERRED",payoutId:null,generation:{increment:1},reason:null}});await tx.auditLog.create({data:{actorId:userId,action:"finance.payout.retry",entityType:"PayoutBatch",entityId:id}});return{id};});
 }
 
 export async function voidUndispatchedBatch(userId:string,id:string,code:string,reason:string){

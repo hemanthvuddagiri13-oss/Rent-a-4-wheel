@@ -54,6 +54,16 @@ jobs:
           done
       - name: Production build
         run: npm run build
+      - name: Refund accounting and payout races (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/payout-projection-blockers.test.ts -t "refund accounting completeness" || exit 1
+          done
+      - name: Bank payout and reversal crash recovery (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/payout-projection-blockers.test.ts -t "bank payout reversal crash recovery" || exit 1
+          done
       - name: Return financial-review concurrency and file revocation (five runs)
         run: |
           for run in 1 2 3 4 5; do

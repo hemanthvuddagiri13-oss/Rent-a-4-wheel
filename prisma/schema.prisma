@@ -1945,6 +1945,7 @@ model PayoutBatch {
  payoutId String? @unique
  transferredCents Int @default(0)
  paidCents Int @default(0)
+ pendingBankCents Int @default(0)
  reversedCents Int @default(0)
  reversalReservedCents Int @default(0)
  generation Int @default(1)
@@ -1954,6 +1955,22 @@ model PayoutBatch {
  updatedAt DateTime @updatedAt
  @@index([state,nextAttemptAt])
  @@index([hostId,createdAt])
+}
+model AccountingCheckpoint {
+ reservationId String @id
+ fingerprint String
+ version Int @default(1)
+ updatedAt DateTime @updatedAt
+}
+model PayoutBankProjection {
+ operationId String @id
+ batchId String
+ providerId String @unique
+ currency String
+ amountCents Int
+ status String
+ updatedAt DateTime @updatedAt
+ @@index([batchId])
 }
 model PayoutItem {
  id String @id @default(cuid())

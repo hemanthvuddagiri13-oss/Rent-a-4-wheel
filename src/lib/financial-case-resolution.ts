@@ -9,6 +9,7 @@ import { planAllDepositReleases } from "@/lib/deposit-release-plan";
 import { PRE_TRIP_STATES } from "@/lib/financial-projection";
 import { linkLegacyRentalEvidence } from "@/lib/legacy-rental-evidence";
 import { assertSettledReturnEvidence } from "@/lib/return-financial-authority";
+import { requireAccountingComplete } from "@/lib/finance-completeness";
 
 type Action = "ADOPT" | "CONFIRM_FAILURE" | "AUTHORIZE_SETTLEMENT" | "RELEASE_INVENTORY" | "ESCALATE" | "ASSIGN";
 export async function resolveFinancialCase(actor: { id: string; role: string }, input: { caseId: string; action: Action; reason: string; providerId?: string; assigneeId?: string }) {
@@ -132,6 +133,9 @@ export async function resolveFinancialCase(actor: { id: string; role: string }, 
         // It does not complete the trip or create a release; ordinary completion
         // rechecks the resolved decision under the same lock.
         await assertSettledReturnEvidence(tx, r.id, current.id);
+        // Existing finance-enabled reservations may release their review hold
+        // only after real accounting recovery has committed its checkpoint.
+        if((await tx.financeSnapshot.findUnique({where:{reservationId:r.id}}))?.hostId)await requireAccountingComplete(tx,r.id);
         await tx.reservation.update({ where: { id: r.id }, data: { financialDisposition: "TERMINATED" } });
       } else {
         if (r.trip?.startedAt || ![...PRE_TRIP_STATES, "CHECKOUT_HOLD", "AWAITING_PAYMENT", "PAYMENT_FAILED", "EXPIRED", "CANCELLED_BY_CUSTOMER", "CANCELLED_BY_HOST"].includes(r.status)) throw new Error("Operational trips cannot use pre-trip settlement");
