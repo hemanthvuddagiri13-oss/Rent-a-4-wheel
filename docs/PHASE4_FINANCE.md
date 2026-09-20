@@ -45,6 +45,6 @@ PDFs are immutable versioned private snapshots with currency and timezone. Month
 
 The financial-verification workflow runs fresh migrations, seed, typecheck, lint, two full test passes, five financial-concurrency passes, production build and existing phase regression suites. Browser journeys use real Next.js/PostgreSQL/Chromium at 375, 390, 430, 768, 1024 and 1440 pixels. Provider fixtures exercise failures without live money movement. Concurrency assertions use independent database connections and synchronization barriers, including observed PostgreSQL lock waits.
 
-Validation is still in progress. Consult the final commit's workflow and delivery report for exact results; this document is not a green-build claim.
+Consult the final commit's workflow and delivery report for exact verification results; this architecture document is not a green-build claim.
 
 Production gates remain live Stripe onboarding/transfer/payout/reversal and webhook verification, deployed cron and alert validation, business approval of commissions/settlement/loss policies, professional jurisdiction/exemption/tax review, provider-confirmed tax-document and 1099 workflow, operational reconciliation procedures and capacity validation for large accumulated balances. The source-level live-money guard must not be removed as part of deployment configuration.
