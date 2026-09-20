@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  devIndicators: process.env.BROWSER_TEST_PORT ? false : undefined,
   // Browser suites start independent Next servers. Keep their route manifests
   // separate from each other and from the production build.
   distDir: /^\d{4,5}$/.test(process.env.BROWSER_TEST_PORT ?? "") ? `.next-browser-${process.env.BROWSER_TEST_PORT}` : ".next",
