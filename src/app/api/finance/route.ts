@@ -6,7 +6,7 @@ import { MarketplaceError,marketplaceLimit } from "@/lib/marketplace";
 import { financeAdmin,financeHost } from "@/lib/finance-access";
 import { saveFinanceRule } from "@/lib/finance-rules";
 import { connectOnboarding,synchronizeConnect,createPayoutBatch,planTransferReversal,retryBankPayout,voidUndispatchedBatch } from "@/lib/payout-operations";
-import { proposeAdjustment,approveAdjustment,updatePayoutSchedule,grantFinance,resolveFinanceIssue,allocateChargeback,deactivateConnect,approveTaxExemption } from "@/lib/finance-admin";
+import { proposeAdjustment,approveAdjustment,updatePayoutSchedule,grantFinance,resolveFinanceIssue,allocateChargeback,deactivateConnect,approveTaxExemption,retryScheduledFinance } from "@/lib/finance-admin";
 import { issueFinanceDocument } from "@/lib/finance-documents";
 import { requestAuthCode } from "@/lib/auth-code";
 import { safeLog } from "@/lib/safe-log";
@@ -28,6 +28,7 @@ export async function POST(req:Request){
   case "reversal": result=await planTransferReversal(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode));break;
   case "voidBatch": result=await voidUndispatchedBatch(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode),z.string().parse(d.reason));break;
   case "retryPayout": result=await retryBankPayout(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode));break;
+  case "retrySchedule": result=await retryScheduledFinance(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode),z.string().parse(d.reason));break;
   case "deactivate": result=await deactivateConnect(userId,z.string().parse(d.hostId),z.string().parse(d.stepUpCode),z.string().parse(d.reason));break;
   case "exemption": result=await approveTaxExemption(userId,d);break;
   case "chargeback": result=await allocateChargeback(userId,z.string().parse(d.id),z.string().parse(d.stepUpCode));break;

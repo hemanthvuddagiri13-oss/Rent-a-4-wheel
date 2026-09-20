@@ -2,7 +2,7 @@ import { hostYearToDate } from "@/lib/finance-reporting";
 import type Stripe from "stripe";
 import * as financeProvider from "@/lib/finance-provider";
 import { handleFinanceEvent } from "@/lib/finance-webhooks";
-import { allocateChargeback,proposeAdjustment,approveAdjustment } from "@/lib/finance-admin";
+import { allocateChargeback,proposeAdjustment,approveAdjustment,resolveFinanceIssue,retryScheduledFinance } from "@/lib/finance-admin";
 import { financeQuote,freezeFinance } from "@/lib/finance-rules";
 import { calculatePricing } from "@/lib/pricing";
 import { afterAll,afterEach,expect,it,vi } from "vitest";
@@ -20,7 +20,23 @@ import { processOutboxOnce } from "@/lib/outbox";
 import { financeHost } from "@/lib/finance-access";
 import { issueFinanceDocument,readFinanceDocument } from "@/lib/finance-documents";
 const remote=vi.hoisted(()=>({create:vi.fn(),retrieve:vi.fn(),discover:vi.fn()}));
-vi.mock("@/lib/finance-provider",async original=>({...await original<object>(),verifyFinanceDestination:async()=>{},createFinanceProviderObject:remote.create,retrieveFinanceProviderObject:remote.retrieve,discoverFinanceProviderObject:remote.discover}));
+// Even indirect provider preflight imports use a controlled Stripe boundary.
+// Account ownership still comes from real PostgreSQL fixtures; no SDK request
+// in this integration suite can reach Stripe with a synthetic key.
+vi.mock("stripe",()=>{
+ type Result={id:string;operationKey:string;hostId:string;accountId:string;amount:number;currency:string;amountReversed:number;status:string};
+ const metadata=(r:Result)=>({operationKey:r.operationKey,hostId:r.hostId});
+ const transfer=(r:Result)=>({id:r.id,metadata:metadata(r),destination:r.accountId,amount:r.amount,currency:r.currency,amount_reversed:r.amountReversed,reversed:r.amountReversed===r.amount});
+ const payout=(r:Result)=>({id:r.id,metadata:metadata(r),amount:r.amount,currency:r.currency,status:r.status});
+ const reversal=(r:Result)=>({id:r.id,metadata:metadata(r),amount:r.amount,currency:r.currency});
+ async function* discover(project:(r:Result)=>unknown){const result=await remote.discover();if(result)yield project(result);}
+ return {default:class {
+  accounts={retrieve:async(id:string)=>{const {prisma}=await import("./helpers/factories");const a=await prisma.connectAccount.findUniqueOrThrow({where:{accountId:id}});return {id,metadata:{hostId:a.hostId},payouts_enabled:a.payoutsEnabled,details_submitted:a.detailsSubmitted,requirements:{disabled_reason:null},settings:{payouts:{schedule:{interval:"manual"}}}};}};
+  balance={retrieve:async()=>({available:[{currency:"usd",amount:100000000}]})};
+  transfers={create:async()=>transfer(await remote.create()),retrieve:async()=>transfer(await remote.retrieve()),list:()=>discover(transfer),createReversal:async()=>reversal(await remote.create()),retrieveReversal:async()=>reversal(await remote.retrieve()),listReversals:()=>discover(reversal)};
+  payouts={create:async()=>payout(await remote.create()),retrieve:async()=>payout(await remote.retrieve()),list:()=>discover(payout)};
+ }};
+});
 const one=new PrismaClient(),two=new PrismaClient(),users:string[]=[],hosts:string[]=[],vehicles:string[]=[];
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();remote.create.mockReset();remote.retrieve.mockReset();remote.discover.mockReset();});
 afterAll(async()=>{
@@ -32,14 +48,14 @@ afterAll(async()=>{
  await prisma.financialOperation.deleteMany({where:{kind:{startsWith:"FINANCE_"},payload:{path:["hostId"],string_starts_with:""}}});
  await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.user.deleteMany({where:{id:{in:users}}});await Promise.all([one.$disconnect(),two.$disconnect(),prisma.$disconnect()]);
 });
-async function fixture(reuse?:{h:Awaited<ReturnType<typeof createTestHost>>;customer:Awaited<ReturnType<typeof createTestCustomer>>;v:Awaited<ReturnType<typeof createTestVehicle>>}){
+async function fixture(reuse?:{h:Awaited<ReturnType<typeof createTestHost>>;customer:Awaited<ReturnType<typeof createTestCustomer>>;v:Awaited<ReturnType<typeof createTestVehicle>>},stripePaymentIntentId?:string){
  const h=reuse?.h??await createTestHost(),customer=reuse?.customer??await createTestCustomer();const v=reuse?.v??await createTestVehicle({hostId:h.hostProfile.id});if(!reuse){users.push(h.user.id,customer.id);hosts.push(h.hostProfile.id);vehicles.push(v.id);}
  const offset=reuse?await prisma.reservation.count({where:{vehicleId:v.id}}):0;
  const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date(Date.UTC(2041,0,1+offset*4)),returnAt:new Date(Date.UTC(2041,0,4+offset*4)),status:"COMPLETED"});
  await prisma.trip.create({data:{reservationId:r.id,startedAt:new Date(Date.now()-86400000*4),endedAt:new Date(Date.now()-86400000*2)}});
  await prisma.tripEvent.create({data:{reservationId:r.id,type:"RETURN_REVIEWED",actorId:h.user.id}});
  for(const [submittedById,submittedByRole]of [[customer.id,"CUSTOMER"],[h.user.id,"HOST"]]as const)await prisma.conditionReport.create({data:{reservationId:r.id,phase:"POST_TRIP",submittedById,submittedByRole,acceptedAt:new Date(),mileage:500,fuelLevel:100,photos:{create:[{category:"EXTERIOR",storageKey:"local:finance-fixture"},{category:"INTERIOR",storageKey:"local:finance-fixture"}]}}});
- const payment=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents}});
+ const payment=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents,stripePaymentIntentId}});
  await prisma.financeQuote.create({data:{reservationId:r.id,terms:{commission:{version:1},tax:{version:1},settlement:{delayDays:1,minimumCents:1,loss:{refundHostBps:10000,chargebackHostBps:10000,reverseTransfers:true}},amounts:{grossCents:15000,hostDiscountCents:0,platformDiscountCents:0,commissionCents:1500,hostNetCents:13500,rentalTaxCents:0,feeTaxCents:0,feesCents:0,totalCents:15000},approved:true}}});
  await withReservationLock(r.id,tx=>accountReservation(tx,r.id));
  if(!reuse)await prisma.connectAccount.create({data:{hostId:h.hostProfile.id,accountId:"acct_"+randomUUID(),detailsSubmitted:true,payoutsEnabled:true,verificationStatus:"VERIFIED",synchronizedAt:new Date(),minimumCents:1}});
@@ -140,8 +156,7 @@ it("additional collection is a liability until an approved allocation, never aut
 });
 
 it("provider disputes hold earnings and lost disputes require independent step-up allocation",async()=>{
- const f=await fixture(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(admin.id);const intentId="pi_"+randomUUID(),id="dp_"+randomUUID(),chargeId="ch_"+randomUUID();
- await prisma.payment.update({where:{id:f.payment.id},data:{stripePaymentIntentId:intentId}});
+ const intentId="pi_"+randomUUID(),id="dp_"+randomUUID(),chargeId="ch_"+randomUUID(),f=await fixture(undefined,intentId),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(admin.id);
  let status="needs_response";const provider={disputes:{retrieve:vi.fn(async()=>({id,charge:chargeId,currency:"usd",amount:5000,status}))},charges:{retrieve:vi.fn(async()=>({id:chargeId,payment_intent:intentId}))}};
  vi.spyOn(financeProvider,"financeStripe").mockReturnValue(provider as unknown as Stripe);
  const event={id:"evt_"+randomUUID(),type:"charge.dispute.updated",data:{object:{id}}} as Stripe.Event;
@@ -174,3 +189,16 @@ it("deposit generations retain authorization and release evidence independently"
 });
 
 it("raw earning updates cannot rewrite the frozen allocation or overdraw its adjusted balance",async()=>{const f=await fixture();await expect(prisma.hostEarning.update({where:{reservationId:f.r.id},data:{netCents:999999}})).rejects.toThrow("Immutable earning origin");await expect(prisma.hostEarning.update({where:{reservationId:f.r.id},data:{adjustmentCents:-13501}})).rejects.toThrow("earning_amounts_nonnegative");expect(await prisma.hostEarning.findUnique({where:{reservationId:f.r.id}})).toMatchObject({netCents:13500,adjustmentCents:0});});
+
+it("a never-dispatched old intent can resume after authorized correction without inventing a new provider key",async()=>{
+ vi.stubEnv("FINANCE_SANDBOX_ENABLED","true");vi.stubEnv("STRIPE_SECRET_KEY","sk_test_fixture");const f=await fixture(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(admin.id);const batch=await createPayoutBatch(f.h.hostProfile.id),op=await prisma.financialOperation.findUniqueOrThrow({where:{key:"transfer:"+batch.id}});
+ await prisma.$transaction(async tx=>{await lockFinanceOperation(tx,op);await tx.financialOperation.update({where:{id:op.id},data:{state:"REVIEW",consecutiveFailures:20,firstAttemptAt:new Date(Date.now()-48*3600000)}});});
+ const issue=await prisma.financeIssue.create({data:{key:"operation:"+op.id,kind:"PROVIDER_UNCERTAIN",hostId:f.h.hostProfile.id,operationId:op.id,reason:"Configuration failed before any provider dispatch"}});
+ await expect(resolveFinanceIssue(admin.id,issue.id,"000000","Corrected test account configuration")).rejects.toThrow("step-up");
+ await prisma.authCode.create({data:{email:admin.email,purpose:"FINANCE_STEP_UP",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});await resolveFinanceIssue(admin.id,issue.id,"123456","Corrected test account configuration");
+ const payload=op.payload as {hostId:string;accountId:string;amount:number;currency:string};remote.create.mockResolvedValue({id:"tr_"+randomUUID(),operationKey:op.key,kind:op.kind,hostId:payload.hostId,accountId:payload.accountId,amount:payload.amount,currency:payload.currency,amountReversed:0,status:"transferred"});await executeFinanceOperation(op);expect(remote.create).toHaveBeenCalledTimes(1);expect(remote.discover).not.toHaveBeenCalled();expect(await prisma.financialOperation.count({where:{key:op.key}})).toBe(1);await prisma.authCode.deleteMany({where:{email:admin.email}});
+});
+it("failed schedule delivery resumes through the same outbox record after step-up approval",async()=>{
+ const f=await fixture(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(admin.id);const message=await prisma.outboxMessage.create({data:{type:"finance_schedule",status:"FAILED",attempts:5,deliveryKey:randomUUID(),payload:{hostId:f.h.hostProfile.id,cutoff:new Date().toISOString()}}});
+ await expect(retryScheduledFinance(admin.id,message.id,"000000","Corrected provider configuration")).rejects.toThrow("step-up");await prisma.authCode.create({data:{email:admin.email,purpose:"FINANCE_STEP_UP",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});await retryScheduledFinance(admin.id,message.id,"123456","Corrected provider configuration");expect(await processOutboxOnce(1,[message.id],one)).toMatchObject({processed:1,failed:0});expect(await prisma.outboxMessage.findUnique({where:{id:message.id}})).toMatchObject({status:"SENT"});expect(await prisma.payoutBatch.count({where:{hostId:f.h.hostProfile.id}})).toBe(1);await prisma.authCode.deleteMany({where:{email:admin.email}});
+});

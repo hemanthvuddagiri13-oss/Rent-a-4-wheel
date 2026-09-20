@@ -32,7 +32,16 @@ export async function grantFinance(userId:string,employeeId:string,manage:boolea
 export async function resolveFinanceIssue(userId:string,id:string,code:string,reason:string){
  await financeAdmin(prisma,userId,true);if(reason.trim().length<10)throw new MarketplaceError("A specific reconciliation reason is required.");
  const issue=await prisma.financeIssue.findUniqueOrThrow({where:{id}});if(!issue.operationId||issue.kind!=="PROVIDER_UNCERTAIN")throw new MarketplaceError("This difference needs accounting evidence; it cannot be written off by closing a queue item.",409);
- const op=await prisma.financialOperation.findUniqueOrThrow({where:{id:issue.operationId}}),result=op.providerId?await retrieveFinanceProviderObject(op,op.providerId):await discoverFinanceProviderObject(op);
+ const op=await prisma.financialOperation.findUniqueOrThrow({where:{id:issue.operationId}});
+ if(!op.providerId&&!await prisma.financialDispatch.count({where:{operationId:op.id,phase:{in:["DISPATCHED","SUCCEEDED","UNCERTAIN"]}}}))return prisma.$transaction(async tx=>{
+  await lockFinanceOperation(tx,op);const current=await tx.financialOperation.findUniqueOrThrow({where:{id:op.id}});
+  if(current.providerId||current.state!=="REVIEW"||current.leaseExpiresAt&&current.leaseExpiresAt>new Date()||await tx.financialDispatch.count({where:{operationId:op.id,phase:{in:["DISPATCHED","SUCCEEDED","UNCERTAIN"]}}}))throw new MarketplaceError("Provider dispatch evidence changed; reconcile the existing outcome.",409);
+  const batchId=(current.payload as {batchId?:string}).batchId;if(batchId)for(const item of await tx.payoutItem.findMany({where:{batchId}}))await independentFinance(tx,userId,item.reservationId);
+  await financeStepUp(tx,userId,code);await tx.financialOperation.update({where:{id:op.id},data:{state:"READY",consecutiveFailures:0,leaseToken:null,leaseExpiresAt:null,nextAttemptAt:new Date(),lastError:null}});
+  await tx.financeIssue.update({where:{id},data:{status:"RESOLVED",resolvedById:userId,resolution:"Verified never dispatched; resume original immutable intent: "+reason}});
+  await tx.auditLog.create({data:{actorId:userId,action:"finance.undispatched.resumed",entityType:"FinancialOperation",entityId:op.id,metadata:{reason}}});return{id};
+ });
+ const result=op.providerId?await retrieveFinanceProviderObject(op,op.providerId):await discoverFinanceProviderObject(op);
  if(!result)throw new MarketplaceError("Provider outcome remains unknown. No replay or write-off is authorized.",409);
  return prisma.$transaction(async tx=>{await lockFinanceOperation(tx,op);const current=await tx.financialOperation.findUniqueOrThrow({where:{id:op.id}});if(current.leaseExpiresAt&&current.leaseExpiresAt>new Date())throw new MarketplaceError("An active recovery worker still owns this operation.",409);const currentIssue=await tx.financeIssue.findUniqueOrThrow({where:{id}});if(currentIssue.status==="RESOLVED")return{id};const batchId=(op.payload as {batchId?:string}).batchId;if(batchId){for(const item of await tx.payoutItem.findMany({where:{batchId}}))await independentFinance(tx,userId,item.reservationId);}await financeStepUp(tx,userId,code);await applyFinanceObject(tx,op,result);await tx.financialOperation.update({where:{id:op.id},data:{providerId:result.id,result:JSON.parse(JSON.stringify(result)),state:"OBSERVED",leaseToken:null,leaseExpiresAt:null,lastError:null}});await tx.financeIssue.update({where:{id},data:{status:"RESOLVED",resolution:reason,resolvedById:userId}});await tx.auditLog.create({data:{actorId:userId,action:"finance.reconciliation.resolved",entityType:"FinanceIssue",entityId:id,metadata:{reason,providerId:result.id}}});return{id};});
 }
@@ -58,4 +67,16 @@ export async function approveTaxExemption(userId:string,input:unknown){
  const d=z.object({customerId:z.string().min(1),jurisdiction:z.string().trim().min(2).max(120),evidenceReference:z.string().regex(/^[A-Za-z0-9:_-]{6,160}$/),expiresAt:z.string().datetime(),reason:z.string().trim().min(10).max(1000),stepUpCode:z.string(),reviewAttestation:z.literal("yes")}).parse(input);
  if(new Date(d.expiresAt)<=new Date())throw new MarketplaceError("Exemption evidence must remain valid.");
  return prisma.$transaction(async tx=>{await financeStepUp(tx,userId,d.stepUpCode);await tx.user.findUniqueOrThrow({where:{id:d.customerId}});const row=await tx.taxExemption.create({data:{customerId:d.customerId,jurisdiction:d.jurisdiction,evidenceReference:d.evidenceReference,expiresAt:new Date(d.expiresAt),approvedById:userId}});await tx.auditLog.create({data:{actorId:userId,action:"finance.tax_exemption.approved",entityType:"TaxExemption",entityId:row.id,metadata:{reason:d.reason,evidenceReference:d.evidenceReference,jurisdiction:d.jurisdiction}}});return{id:row.id};});
+}
+
+export async function retryScheduledFinance(userId:string,id:string,code:string,reason:string){
+ if(reason.trim().length<10)throw new MarketplaceError("Describe the corrected delivery failure.");
+ return prisma.$transaction(async tx=>{
+  await financeAdmin(tx,userId,true);await tx.$queryRaw`SELECT id FROM "OutboxMessage" WHERE id=${id} FOR UPDATE`;
+  const message=await tx.outboxMessage.findUniqueOrThrow({where:{id}});
+  if(message.type!=="finance_schedule"||message.status!=="FAILED"||message.leaseExpiresAt&&message.leaseExpiresAt>new Date())throw new MarketplaceError("Only failed, unleased finance scheduling work may be resumed.",409);
+  await financeStepUp(tx,userId,code);
+  await tx.outboxMessage.update({where:{id},data:{status:"PENDING",attempts:0,nextRetryAt:new Date(),leaseToken:null,leaseExpiresAt:null,lastError:null}});
+  await tx.auditLog.create({data:{actorId:userId,action:"finance.schedule.delivery_resumed",entityType:"OutboxMessage",entityId:id,metadata:{reason}}});return{id};
+ });
 }

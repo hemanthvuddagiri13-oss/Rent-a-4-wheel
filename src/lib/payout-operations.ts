@@ -13,7 +13,7 @@ export async function applyFinanceObject(tx:Prisma.TransactionClient,op:Financia
  if(result.kind!==op.kind||result.hostId!==p.hostId||result.operationKey!==op.key||p.accountId&&result.accountId!==p.accountId||p.amount!==undefined&&(result.amount!==p.amount||result.currency!==p.currency))throw new Error("Provider object does not match immutable operation");
  if(op.kind==="FINANCE_CONNECT"){
   const a=await tx.connectAccount.findUniqueOrThrow({where:{hostId:p.hostId}});if(a.accountId&&a.accountId!==result.id)throw new Error("Connect ownership changed");
-  await tx.connectAccount.update({where:{hostId:p.hostId},data:{accountId:result.id,detailsSubmitted:result.detailsSubmitted,chargesEnabled:result.chargesEnabled,payoutsEnabled:result.payoutsEnabled,currentlyDue:json(result.currentlyDue??[]),eventuallyDue:json(result.eventuallyDue??[]),disabledReason:result.disabledReason,verificationStatus:result.status==="verified"?"VERIFIED":"REQUIRES_ACTION",taxStatus:result.taxStatus??"PENDING",synchronizedAt:new Date()}});return;
+  await tx.connectAccount.update({where:{hostId:p.hostId},data:{accountId:result.id,detailsSubmitted:result.detailsSubmitted,chargesEnabled:result.chargesEnabled,payoutsEnabled:result.payoutsEnabled,currentlyDue:json(result.currentlyDue??[]),eventuallyDue:json(result.eventuallyDue??[]),disabledReason:result.disabledReason,verificationStatus:!a.active?"DEACTIVATED":result.status==="verified"?"VERIFIED":"REQUIRES_ACTION",taxStatus:result.taxStatus??"PENDING",synchronizedAt:new Date()}});return;
  }
  const batch=await tx.payoutBatch.findUniqueOrThrow({where:{id:p.batchId}});
  if(op.kind==="FINANCE_TRANSFER"){
@@ -122,7 +122,7 @@ export async function voidUndispatchedBatch(userId:string,id:string,code:string,
   await financeStepUp(tx,userId,code);
   await tx.financialOperation.updateMany({where:{id:{in:operations.map(o=>o.id)}},data:{state:"DEAD_LETTER",leaseToken:null,leaseExpiresAt:null,lastError:"UNDISPATCHED_BATCH_VOIDED"}});
   await tx.payoutBatch.update({where:{id},data:{state:"VOIDED",reason}});await tx.payoutItem.updateMany({where:{batchId:id,active:true},data:{active:false}});
-  await tx.financeIssue.updateMany({where:{kind:"BATCH_CHANGED",evidence:{path:["batchId"],equals:id},status:{not:"RESOLVED"}},data:{status:"RESOLVED",resolution:"Undispatched batch voided without money movement: "+reason,resolvedById:userId}});
+  await tx.financeIssue.updateMany({where:{OR:[{kind:"BATCH_CHANGED",evidence:{path:["batchId"],equals:id}},{kind:"PROVIDER_UNCERTAIN",operationId:{in:operations.map(o=>o.id)}}],status:{not:"RESOLVED"}},data:{status:"RESOLVED",resolution:"Undispatched batch voided without money movement: "+reason,resolvedById:userId}});
   await tx.auditLog.create({data:{actorId:userId,action:"finance.batch.voided",entityType:"PayoutBatch",entityId:id,metadata:{reason}}});return{id};
  });
 }

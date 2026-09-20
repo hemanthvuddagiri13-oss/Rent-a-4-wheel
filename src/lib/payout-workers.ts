@@ -8,9 +8,9 @@ import { financeStripe } from "@/lib/finance-provider";
 import { withReservationLock } from "@/lib/financial-locks";
 
 export function nextPayoutCutoff(schedule:string,zone:string,now=new Date()){
- let date=Temporal.Instant.from(now.toISOString()).toZonedDateTimeISO(zone).toPlainDate().add({days:1});
+ let date=Temporal.Instant.from(now.toISOString()).toZonedDateTimeISO(zone).toPlainDate();
  for(let i=0;i<370;i++,date=date.add({days:1})){
-  if(schedule==="WEEKLY"&&date.dayOfWeek===1||schedule==="TWICE_MONTHLY"&&[1,15].includes(date.day)||schedule==="MONTHLY"&&date.day===1)return new Date(date.toZonedDateTime({timeZone:zone,plainTime:"09:00"}).epochMilliseconds);
+  if(schedule==="WEEKLY"&&date.dayOfWeek===1||schedule==="TWICE_MONTHLY"&&[1,15].includes(date.day)||schedule==="MONTHLY"&&date.day===1){const cutoff=new Date(date.toZonedDateTime({timeZone:zone,plainTime:"09:00"}).epochMilliseconds);if(cutoff>now)return cutoff;}
  }
  return new Date(now.getTime()+365*86400000);
 }
