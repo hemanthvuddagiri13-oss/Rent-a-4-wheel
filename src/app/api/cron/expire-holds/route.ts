@@ -1,3 +1,5 @@
+import {authenticatedCron} from "@/lib/security-request";
+import {observeWorker} from "@/lib/observability";
 import { NextRequest, NextResponse } from "next/server";
 import { expireStaleReservations } from "@/lib/cleanup";
 
@@ -13,11 +15,11 @@ export async function POST(req: NextRequest) {
   if (!configuredSecret) {
     return NextResponse.json({ error: "CRON_SECRET is not configured." }, { status: 503 });
   }
-  const provided = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (provided !== configuredSecret) {
+
+  if (!authenticatedCron(req.headers)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await expireStaleReservations();
+  const result = await observeWorker("expire-holds",()=>expireStaleReservations());
   return NextResponse.json(result);
 }

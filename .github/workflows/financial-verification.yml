@@ -81,6 +81,11 @@ jobs:
         run: npm test
       - name: Full suite, second run
         run: npm test
+      - name: National authority and financial policy stability (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/national-jurisdiction.test.ts tests/marketplace-pricing.test.ts tests/production-security.test.ts || exit 1
+          done
       - name: Dispatch concurrency stability (five consecutive runs)
         run: |
           for run in 1 2 3 4 5; do

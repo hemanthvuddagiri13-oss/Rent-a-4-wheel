@@ -128,7 +128,12 @@ export function StepReview({ vehicle, extras, state, update, onNext, onBack }: P
               <Row label="Discount" value={`-${formatCurrency(state.breakdown.discountCents)}`} className="text-emerald-400" />
             )}
             <Row label="Taxes" value={formatCurrency(state.breakdown.taxCents)} />
-            {state.breakdown.feesCents > 0 && <Row label="Fees" value={formatCurrency(state.breakdown.feesCents)} />}
+            {state.breakdown.marketplace ? <>
+              <Row label="Platform service fee" value={formatCurrency(state.breakdown.marketplace.platformFeeCents)} />
+              <Row label="Insurance / protection" value={formatCurrency(state.breakdown.marketplace.protectionCents)} />
+              <Row label="Payment processing" value={formatCurrency(state.breakdown.marketplace.processingCents)} />
+              <p className="text-sm text-silver">Sample pricing for staging. Rates and protection are not approved for public launch.</p>
+            </> : state.breakdown.feesCents > 0 && <Row label="Fees" value={formatCurrency(state.breakdown.feesCents)} />}
             <Separator className="my-2" />
             <Row label="Total" value={formatCurrency(state.breakdown.totalCents)} bold />
             {state.breakdown.depositCents > 0 && (

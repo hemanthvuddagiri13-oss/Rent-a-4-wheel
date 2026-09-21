@@ -40,6 +40,7 @@ export function productionConfiguration(env: Environment = process.env): Configu
     if (!/^re_[A-Za-z0-9_]+$/.test(env.RESEND_API_KEY ?? "")) add("RESEND_API_KEY");
     if (!/^[^\r\n]+@[^\s<>]+\.[^\s<>]+>?$/.test(env.EMAIL_FROM ?? "")) add("EMAIL_FROM");
     if (!Number.isInteger(Number(env.CLAMAV_PORT)) || Number(env.CLAMAV_PORT) < 1 || Number(env.CLAMAV_PORT) > 65535) add("CLAMAV_PORT");
+    if(env.CLAMAV_TLS!=="true")add("CLAMAV_TLS","UNSAFE");
     if (env.PRIVATE_STORAGE_PROVIDER !== "s3") add("PRIVATE_STORAGE_PROVIDER", "UNSAFE");
     if (env.PRIVATE_STORAGE_ENV !== environment) add("PRIVATE_STORAGE_ENV", "UNSAFE");
     if (env.VERCEL_ENV === "preview" && environment !== "preview") add("APP_ENV", "UNSAFE");

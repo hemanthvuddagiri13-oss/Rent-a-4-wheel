@@ -10,7 +10,7 @@ const configured = () => ({
   PRIVATE_STORAGE_PROVIDER: "s3", PRIVATE_STORAGE_ENV: "staging", PRIVATE_STORAGE_BUCKET: "r4w-staging-private",
   PRIVATE_STORAGE_REGION: "us-east-1", PRIVATE_STORAGE_ENDPOINT: "https://s3.us-east-1.amazonaws.com",
   PRIVATE_STORAGE_KMS_KEY_ID: "staging-key", PRIVATE_STORAGE_ACCESS_KEY_ID: "fixture", PRIVATE_STORAGE_SECRET_ACCESS_KEY: "fixture",
-  CLAMAV_HOST: "scanner.internal", CLAMAV_PORT: "3310", RATE_LIMIT_STORE: "postgres",
+  CLAMAV_HOST: "scanner.internal", CLAMAV_PORT: "3310", CLAMAV_TLS: "true", RATE_LIMIT_STORE: "postgres",
   MONITORING_ALERT_URL: "https://alerts.internal/ingest", MONITORING_ALERT_SECRET: "c".repeat(48), DEPLOYMENT_DATA_ENV: "staging", PROVIDER_ACCOUNT_ENV: "staging",
 });
 describe("deployment trust boundary", () => {

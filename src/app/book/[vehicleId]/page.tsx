@@ -1,4 +1,5 @@
 import { getSiteSettings } from "@/lib/settings";
+import { visibleJurisdictions } from "@/lib/jurisdiction";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
@@ -12,7 +13,7 @@ export default async function BookPage({ params }: { params: Promise<{ vehicleId
   const { vehicleId } = await params;
 
   const vehicleRecord = await prisma.vehicle.findUnique({
-    where: { id: vehicleId },
+    where: { id: vehicleId, jurisdictionCode: {in: await visibleJurisdictions()} },
     include: { images: { orderBy: { position: "asc" }, take: 1 } },
   });
   if (!vehicleRecord || vehicleRecord.status !== "ACTIVE") notFound();

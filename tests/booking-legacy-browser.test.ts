@@ -8,6 +8,7 @@ import { encode } from "next-auth/jwt";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { fingerprint } from "@/lib/financial-operations";
+import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 const root = path.resolve(__dirname, ".."), cutoff = "20260917010000_financial_recovery_generations";
 function url(name: string) { const u = new URL(process.env.DATABASE_URL!); u.pathname = "/" + name; return u.toString(); }
 function sql(db: string, args: string[]) { execFileSync("psql", [db, "-v", "ON_ERROR_STOP=1", ...args], { stdio: "inherit" }); }
@@ -33,6 +34,11 @@ describe("previous schema checkout resumed by real Next/PostgreSQL/Chromium", ()
         UPDATE "Reservation" SET "bookingFingerprint"='finalized-original',"checkoutFingerprint"='finalized-checkout' WHERE "id"='mig_test_res_confirmed';`]);
       // These records really existed before either timezone or version columns.
       for (const migration of migrations.filter(m => m > cutoff)) sql(db, ["-f", path.join(root, "prisma/migrations", migration, "migration.sql")]);
+      // Migration must not guess geography or approve a market. Explicit test-only release follows migration.
+      expect(await client.jurisdiction.count({where:{mode:"DISABLED"}})).toBe(51);
+      expect((await client.vehicle.findUniqueOrThrow({where:{id:vehicleId}})).jurisdictionCode).toBeNull();
+      await fixtureJurisdiction(client);
+      await client.vehicle.update({where:{id:vehicleId},data:{jurisdictionCode:"TX"}});
       const before = await client.reservation.findUniqueOrThrow({ where: { id }, include: { extras: true, payments: true } });
       const finalized = await client.reservation.findUniqueOrThrow({ where: { id: "mig_test_res_confirmed" } });
       expect(before.bookingFingerprintVersion).toBe(1); expect(before.bookingFingerprint).toBe(old);

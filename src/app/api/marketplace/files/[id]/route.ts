@@ -2,11 +2,12 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { readPrivateDocument } from "@/lib/storage";
 import { canReadBusinessFile } from "@/lib/business-file-access";
+import { visibleJurisdictions } from "@/lib/jurisdiction";
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const file = await prisma.marketplaceFile.findUnique({ where: { id } });
   if (!file) return new Response("Not found", { status: 404 });
-  const vehicle = file.vehicleId ? await prisma.vehicle.findUnique({ where: { id: file.vehicleId }, select: { listingApproval: true, status: true } }) : null;
+  const vehicle = file.vehicleId ? await prisma.vehicle.findUnique({ where: { id: file.vehicleId, jurisdictionCode: {in: await visibleJurisdictions()} }, select: { listingApproval: true, status: true } }) : null;
   const publicPhoto = file.purpose === "LISTING_PHOTO" && file.scanStatus === "CLEAN" && vehicle?.listingApproval === "APPROVED" && vehicle.status === "ACTIVE";
   if (!publicPhoto) {
     const session = await auth();

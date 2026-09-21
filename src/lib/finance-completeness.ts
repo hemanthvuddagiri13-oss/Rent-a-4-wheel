@@ -1,6 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { fingerprint } from "@/lib/financial-operations";
 import { lossSchema,roundBps } from "@/lib/finance-rules";
+import type { FinanceTerms } from "@/lib/finance-rules";
+import { marketplaceRefundAllocation } from "@/lib/marketplace-refund-allocation";
 
 // Call only while holding the reservation guard. This checkpoint describes
 // economic evidence, not UI status or worker timestamps. New evidence makes it
@@ -59,7 +61,9 @@ async function accountingEvidence(tx: Prisma.TransactionClient, reservationId: s
   if(paid.amountCents<=0||cash>paid.amountCents)reasons.push("Refund total exceeds captured rental evidence");
   else{
    const prorate=(amount:number)=>Number(BigInt(cash)*BigInt(amount)/BigInt(paid.amountCents));
-   const expected=Math.min(cash-prorate(amounts.rentalTaxCents+amounts.feeTaxCents),Math.max(0,net+adjusted),roundBps(prorate(net),allocation.data.refundHostBps));
+   const expected=(snapshot!.commission as {engine?:string}).engine==="MARKETPLACE_V1"
+    ?marketplaceRefundAllocation(snapshot!.amounts as FinanceTerms["amounts"],cash,paid.amountCents,allocation.data.refundHostBps,net+adjusted).host
+    :Math.min(cash-prorate(amounts.rentalTaxCents+amounts.feeTaxCents),Math.max(0,net+adjusted),roundBps(prorate(net),allocation.data.refundHostBps));
    if(refunded!==expected)reasons.push("Refund allocation differs from frozen policy entitlement");
   }
  }

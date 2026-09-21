@@ -7,6 +7,7 @@ import { financeAdmin,financeHost } from "@/lib/finance-access";
 import { fingerprint,json } from "@/lib/financial-operations";
 import { lockReservation } from "@/lib/financial-locks";
 import { accountReservation } from "@/lib/finance-ledger";
+import type { FinanceTerms } from "@/lib/finance-rules";
 
 const customerKinds=["PAYMENT_RECEIPT","REFUND_RECEIPT","RENTAL_INVOICE","FINAL_TRIP_STATEMENT"];
 const hostKinds=["EARNINGS_STATEMENT","PAYOUT_STATEMENT","ADJUSTMENT_STATEMENT","MONTHLY_SUMMARY","YEARLY_SUMMARY"];
@@ -28,6 +29,8 @@ export async function issueFinanceDocument(userId:string,input:{kind:string;rese
    if(input.kind==="REFUND_RECEIPT"&&!r.refunds.some(f=>f.status==="SUCCEEDED"))throw new MarketplaceError("A succeeded refund is required for a receipt.",409);
    if(input.kind==="FINAL_TRIP_STATEMENT"&&r.status!=="COMPLETED")throw new MarketplaceError("Final statements require a completed trip.",409);
    await accountReservation(tx,r.id);const frozen=await tx.financeSnapshot.findUniqueOrThrow({where:{reservationId:r.id}});
+   const amounts=frozen.amounts as FinanceTerms["amounts"];
+   Object.assign(snapshot,{pricingPolicyHash:frozen.contentHash,jurisdiction:r.jurisdictionCode,pricingStatus:frozen.approved?"Historical approved snapshot":"SAMPLE / UNAPPROVED",separateCharges:{platformServiceFeeCents:amounts.guestServiceCents??r.feesCents,protectionCents:amounts.protectionCents??0,guestProcessingCents:amounts.guestProcessingCents??0,taxesCents:r.taxCents,depositAuthorizationCents:r.depositCents,extrasCents:r.extrasCents,discountCents:r.discountCents,...(!customerKinds.includes(input.kind)?{hostCommissionCents:amounts.commissionCents,hostProcessingCents:amounts.hostProcessingCents??0,hostRiskReserveCents:amounts.riskReserveCents??0,hostEarningsCents:amounts.hostNetCents}:{})}});
    Object.assign(snapshot,{confirmation:r.confirmationNumber,timezone:r.bookingTimezone,amounts:customerKinds.includes(input.kind)?{rentalSubtotalCents:r.subtotalCents,extrasCents:r.extrasCents,discountCents:r.discountCents,taxCents:r.taxCents,serviceFeeCents:r.feesCents,totalCents:r.totalCents}:frozen.amounts,payments:customerKinds.includes(input.kind)?r.payments.filter(p=>p.type!=="DEPOSIT_AUTH").map(p=>({type:p.type,status:p.status,amountCents:p.amountCents,currency:p.currency})):undefined,refunds:r.refunds.map(f=>({amountCents:f.amountCents,status:f.status})),adjustments:!customerKinds.includes(input.kind)?await tx.financeAdjustment.findMany({where:{reservationId:r.id,state:"APPROVED"},select:{kind:true,amountCents:true,createdAt:true}}):undefined,taxApproval:frozen.approved?"Configured tax snapshot":"NOT TAX-APPROVED - PROFESSIONAL REVIEW REQUIRED"});
   }else if(input.kind==="PAYOUT_STATEMENT"){
    const b=await tx.payoutBatch.findUniqueOrThrow({where:{id:input.batchId}});hostId=b.hostId;if(!["FINANCE_AGENT","ADMIN","SUPER_ADMIN"].includes(actor.role))await financeHost(tx,userId,hostId);Object.assign(snapshot,{batchId:b.id,amountCents:b.amountCents,currency:b.currency,items:await tx.payoutItem.findMany({where:{batchId:b.id},select:{reservationId:true,amountCents:true}}),reversals:await tx.payoutReversal.findMany({where:{batchId:b.id},select:{amountCents:true,state:true,reason:true}}),status:b.state,paidCents:b.paidCents,reversedCents:b.reversedCents,issuedFor:b.createdAt.toISOString()});

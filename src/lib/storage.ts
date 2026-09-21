@@ -53,14 +53,15 @@ export async function readPrivateDocument(key:string):Promise<{buffer:Buffer}>{
  return {buffer};
 }
 export async function deletePrivateDocument(key:string){
- await prisma.$transaction(async tx=>{
+ const shouldDelete=await prisma.$transaction(async tx=>{
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"private:"+key},0))::text`;
-  const row=await tx.privateObject.findUnique({where:{key}});
+  const row=await tx.privateObject.findUnique({where:{key}});if(row?.state==="DELETED")return false;
   if(row?.state!=="DELETING"&&row&&(row.hold||row.retainedUntil&&row.retainedUntil>new Date()))throw new Error("PRIVATE_OBJECT_HELD");
   if(row)await tx.privateObject.update({where:{key},data:{state:"DELETING",deletedAt:new Date()}});
   await tx.operationsJob.upsert({where:{key:"delete:"+hash(key)},create:{key:"delete:"+hash(key),kind:"DELETE",resourceId:key},update:{}});
-  await tx.auditLog.create({data:{action:"storage.delete.intent",entityType:"PrivateObject",entityId:hash(key)}});
+  await tx.auditLog.create({data:{action:"storage.delete.intent",entityType:"PrivateObject",entityId:hash(key)}});return true;
  });
+ if(!shouldDelete)return;
  await deletePrivateBytes(key);
  await prisma.$transaction(async tx=>{await tx.privateObject.updateMany({where:{key,state:"DELETING"},data:{state:"DELETED"}});await tx.operationsJob.updateMany({where:{key:"delete:"+hash(key)},data:{state:"DONE"}});await tx.auditLog.create({data:{action:"storage.deleted",entityType:"PrivateObject",entityId:hash(key)}});});
 }

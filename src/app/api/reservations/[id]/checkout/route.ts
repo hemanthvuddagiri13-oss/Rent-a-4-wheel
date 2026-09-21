@@ -1,4 +1,5 @@
 import { freezeFinance } from "@/lib/finance-rules";
+import { requireReservationJurisdiction } from "@/lib/jurisdiction";
 import { safeLog } from "@/lib/safe-log";
 import { withReservationLock } from "@/lib/financial-locks";
 import { fingerprint } from "@/lib/financial-operations";
@@ -52,7 +53,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   if (reservation.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(reservation.status) || !reservation.expiresAt || reservation.expiresAt <= new Date()) return NextResponse.json({ error: "Checkout unavailable" }, { status: 409 });
-  if (reservation.checkoutFingerprint === checkoutFingerprint) return NextResponse.json({ success: true });
+  if (reservation.checkoutFingerprint === checkoutFingerprint) {
+    try { await withReservationLock(id,async tx=>{
+      await requireReservationJurisdiction(tx,id,"CHECKOUT");
+      const current=await tx.reservation.findUniqueOrThrow({where:{id}});
+      if(current.financialDisposition!=="OPEN"||!current.expiresAt||current.expiresAt<=new Date()||!["CHECKOUT_HOLD","AWAITING_PAYMENT"].includes(current.status))throw new Error("Checkout unavailable");
+    }); return NextResponse.json({success:true}); }
+    catch { return NextResponse.json({error:"Checkout unavailable"},{status:409}); }
+  }
   if (reservation.bookingFingerprint && parsed.data.bookingFingerprint !== reservation.bookingFingerprint) return NextResponse.json({ error: "Booking changed; refresh your review." }, { status: 409 });
   if (reservation.status !== "CHECKOUT_HOLD") {
     return NextResponse.json({ error: "This reservation is no longer awaiting checkout." }, { status: 409 });
@@ -96,6 +104,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     await withReservationLock(id, async (tx) => {
+      await requireReservationJurisdiction(tx,id,"CHECKOUT");
       const current = await tx.reservation.findUniqueOrThrow({ where: { id } });
       if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout unavailable");
       if (current.checkoutFingerprint === checkoutFingerprint) return;

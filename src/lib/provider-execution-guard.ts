@@ -6,6 +6,7 @@ import { OperationPendingError, UncertainOutcomeError } from "@/lib/financial-er
 import { safeErrorCode } from "@/lib/safe-log";
 import { assertDepositReleaseReviewClear } from "@/lib/return-financial-authority";
 import { requireReleaseFeature } from "@/lib/release-control";
+import {requireReservationJurisdiction,jurisdictionDecision} from "@/lib/jurisdiction";
 
 function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value)); }
 
@@ -48,11 +49,9 @@ export async function assertCurrentLease(db: PrismaClient, operation: FinancialO
 
 async function assertDispatchAuthority(db: PrismaClient, op: FinancialOperation) {
   // Admission gates do not block compensating refunds, deposit releases or reversals.
-  if(op.kind==="RENTAL")await requireReleaseFeature("booking",db);
-  if(op.kind==="DEPOSIT")await requireReleaseFeature("deposits",db);
-  if(op.kind==="FINANCE_CONNECT")await requireReleaseFeature("connect",db);
-  if(op.kind==="FINANCE_TRANSFER")await requireReleaseFeature("transfers",db);
-  if(op.kind==="FINANCE_PAYOUT")await requireReleaseFeature("payouts",db);
+  if(op.kind==="RENTAL"||op.kind==="DEPOSIT"){const jurisdiction=await requireReservationJurisdiction(db,op.reservationId!,"PAYMENT");await requireReleaseFeature(op.kind==="RENTAL"?"booking":"deposits",db,jurisdiction.code);}
+  if(op.kind==="FINANCE_CONNECT"){const host=await db.hostProfile.findUniqueOrThrow({where:{id:(op.payload as {hostId:string}).hostId}});const jurisdiction=await jurisdictionDecision(db,host.jurisdictionCode,"HOSTING");await requireReleaseFeature("connect",db,jurisdiction.code);}
+  if(op.kind==="FINANCE_TRANSFER"||op.kind==="FINANCE_PAYOUT"){const items=await db.payoutItem.findMany({where:{batchId:(op.payload as {batchId:string}).batchId}});for(const item of items){const jurisdiction=await requireReservationJurisdiction(db,item.reservationId,"PAYOUT");await requireReleaseFeature(op.kind==="FINANCE_TRANSFER"?"transfers":"payouts",db,jurisdiction.code);}}
   if (op.kind.startsWith("FINANCE_")) { await assertFinanceDispatch(db,op); return; }
   if (!op.reservationId) { if (op.kind !== "CUSTOMER") throw new UncertainOutcomeError("Provider operation has no release authority"); return; }
   const r = await db.reservation.findUniqueOrThrow({ where: { id: op.reservationId }, include: { deposit: true, trip: true } });

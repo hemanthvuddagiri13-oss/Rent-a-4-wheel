@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
       couponCode,
     });
     const extras = await prisma.reservationExtra.findMany({ where: { reservationId: result.id }, include: { extra: { select: { name: true } } } });
-    const breakdown = { rateType: result.rateType, rateAmountCents: result.rateAmountCents, units: result.units,
+    const breakdown = { marketplace: await frozenMarketplaceSummary(result.id), rateType: result.rateType, rateAmountCents: result.rateAmountCents, units: result.units,
       days: bookingDays(result.pickupAt, result.returnAt, result.bookingTimezone), subtotalCents: result.subtotalCents,
       extrasCents: result.extrasCents, discountCents: result.discountCents, taxCents: result.taxCents, feesCents: result.feesCents,
       totalCents: result.totalCents, depositCents: result.depositCents,
@@ -67,3 +67,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Something went wrong holding this vehicle." }, { status: 500 });
   }
 }
+import { frozenMarketplaceSummary } from "@/lib/reservation-summary";

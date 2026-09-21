@@ -87,6 +87,8 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   expect(host.onboardingStatus).toBe("SUBMITTED");
   await screenshot(page, "host-overview", [375, 390, 430, 768, 1024, 1440]);
   await page.goto(`${base}/host/vehicles/new`);
+  await page.getByLabel("Pickup city",{exact:true}).fill("Dallas");
+  await page.getByLabel("Vehicle operating state",{exact:true}).selectOption("TX");
   const fields = { "VIN (17 characters)": "1HGCM82633A123456", "License plate": "BROWSER", Make: "Honda", Model: "Accord", "Registration expiration": "2035-01-01", "Insurance expiration": "2035-01-01", "Describe your vehicle": "Synthetic browser listing with comfortable seating and practical storage." };
   for (const [label, value] of Object.entries(fields)) await page.getByLabel(label, { exact: true }).fill(value);
   await screenshot(page, "host-listing-form");

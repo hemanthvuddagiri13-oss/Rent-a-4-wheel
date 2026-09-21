@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { jurisdictionDecision, requireVehicleJurisdiction } from "@/lib/jurisdiction";
 import { prisma } from "@/lib/prisma";
 import { canManageSettings } from "@/lib/rbac";
 import { marketplaceActor, MarketplaceError, marketplaceLimit } from "@/lib/marketplace";
@@ -15,9 +16,14 @@ export async function POST(req: Request) {
     await prisma.$transaction(async tx => {
       const actor = await marketplaceActor(tx, session.user.id);
       if (!canManageSettings(actor.role)) throw new MarketplaceError("Forbidden", 403);
+      if (data.status === "APPROVED" && data.action === "host") {
+        const host = await tx.hostProfile.findUniqueOrThrow({where: {id: data.id}});
+        await jurisdictionDecision(tx, host.jurisdictionCode, "HOSTING");
+      }
       if (data.action === "host") await tx.hostProfile.update({ where: { id: data.id }, data: { onboardingStatus: data.status as "APPROVED" | "REJECTED" | "SUSPENDED", approvedAt: data.status === "APPROVED" ? new Date() : null, approvedById: actor.id } });
       else {
         await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + data.id})`;
+        if (data.status === "APPROVED") await requireVehicleJurisdiction(tx, data.id, "ACTIVATION");
         const vehicle = await tx.vehicle.findUniqueOrThrow({ where: { id: data.id }, include: { host: true, images: true, agreementAcceptances: { where: { type: "HOST_AGREEMENT" } } } });
         if (data.status === "APPROVED" && vehicle.hostId) {
           const files = await tx.marketplaceFile.findMany({ where: { vehicleId: vehicle.id, hostId: vehicle.hostId, scanStatus: "CLEAN" } });

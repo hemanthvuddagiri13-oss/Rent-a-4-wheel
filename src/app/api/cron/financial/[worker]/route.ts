@@ -1,3 +1,4 @@
+import {observeWorker} from "@/lib/observability";
 import { collectReleases } from "@/lib/release-outcomes";
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
@@ -12,10 +13,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ worker
   const { worker } = await context.params;
   if (!Object.hasOwn(financialWorkers, worker)) return NextResponse.json({ error: "Unknown worker" }, { status: 404 });
   try {
-    const { result, releases, releaseOperations } = await collectReleases<Record<string, unknown>>(() => financialWorkers[worker as keyof typeof financialWorkers]());
+    const { result, releases, releaseOperations } = await collectReleases<Record<string, unknown>>(() => observeWorker<Record<string, unknown>>("financial/"+worker,()=>financialWorkers[worker as keyof typeof financialWorkers]()));
     return NextResponse.json({ ...result, releases, releaseOperations });
   } catch {
     return NextResponse.json({ error: "Recovery failed; retry required" }, { status: 503 });
   }
 }
 export const GET = POST;
+
+

@@ -5,6 +5,7 @@ import { lockReservation } from "@/lib/financial-locks";
 import { prisma } from "@/lib/prisma";
 import { certifyAccounting } from "@/lib/finance-completeness";
 import { transferMayHaveMoved } from "@/lib/payout-movement";
+import { marketplaceRefundAllocation } from "@/lib/marketplace-refund-allocation";
 
 export type LedgerPosting={account:string;debitCents?:number;creditCents?:number};
 export async function journal(tx:Prisma.TransactionClient,input:{key:string;kind:string;currency:string;reservationId?:string|null;hostId?:string|null;operationId?:string|null;providerId?:string|null;reversalOf?:string;description:string;lines:LedgerPosting[]}) {
@@ -25,7 +26,20 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
  const rentals=r.payments.filter(p=>p.type==="RENTAL"&&p.status==="SUCCEEDED");
  if(rentals.length>1||rentals.some(p=>p.amountCents!==r.totalCents||p.currency!==s.currency)){await financeIssue(tx,{key:"payment-mismatch:"+id,kind:"PAYMENT_DIFFERENCE",reservationId:id,hostId:s.hostId??undefined,reason:"Rental amount or currency differs from frozen checkout evidence"});return;}
  for(const p of rentals){
-  await journal(tx,{key:"payment:"+p.id,kind:"RENTAL_PAYMENT",currency:p.currency,reservationId:id,hostId:s.hostId,providerId:p.stripePaymentIntentId,description:"Customer rental payment and frozen allocation",lines:[{account:"STRIPE_CLEARING",debitCents:p.amountCents},{account:"PLATFORM_DISCOUNTS",debitCents:a.platformDiscountCents},{account:s.hostId?"HOST_PAYABLE":"PLATFORM_RENTAL_REVENUE",creditCents:a.hostNetCents},{account:"COMMISSION_REVENUE",creditCents:a.commissionCents},{account:"TAX_PAYABLE",creditCents:a.rentalTaxCents+a.feeTaxCents},{account:"SERVICE_FEE_REVENUE",creditCents:a.feesCents}]});
+  const marketplace=(s.commission as {engine?:string}).engine==="MARKETPLACE_V1";
+  const lines:LedgerPosting[]=marketplace?[
+   {account:"STRIPE_CLEARING",debitCents:p.amountCents},
+   {account:"PLATFORM_DISCOUNTS",debitCents:a.platformDiscountCents},
+   {account:"PAYMENT_PROCESSING_EXPENSE",debitCents:a.platformProcessingCents??0},
+   {account:"HOST_PAYABLE",creditCents:a.hostNetCents},
+   // Sample, unsettled marketplace fees are deferred, never recognized revenue.
+   {account:"UNSETTLED_PLATFORM_FEES",creditCents:a.commissionCents+(a.guestServiceCents??0)},
+   {account:"TAX_PAYABLE",creditCents:a.rentalTaxCents+a.feeTaxCents},
+   {account:"PROTECTION_PAYABLE",creditCents:a.protectionCents??0},
+   {account:"PROCESSING_PAYABLE",creditCents:(a.guestProcessingCents??0)+(a.hostProcessingCents??0)+(a.platformProcessingCents??0)},
+   {account:"HOST_RISK_RESERVE_PAYABLE",creditCents:a.riskReserveCents??0},
+  ]:[{account:"STRIPE_CLEARING",debitCents:p.amountCents},{account:"PLATFORM_DISCOUNTS",debitCents:a.platformDiscountCents},{account:s.hostId?"HOST_PAYABLE":"PLATFORM_RENTAL_REVENUE",creditCents:a.hostNetCents},{account:"COMMISSION_REVENUE",creditCents:a.commissionCents},{account:"TAX_PAYABLE",creditCents:a.rentalTaxCents+a.feeTaxCents},{account:"SERVICE_FEE_REVENUE",creditCents:a.feesCents}];
+  await journal(tx,{key:"payment:"+p.id,kind:"RENTAL_PAYMENT",currency:p.currency,reservationId:id,hostId:s.hostId,providerId:p.stripePaymentIntentId,description:"Customer rental payment and frozen allocation",lines});
   if(s.hostId)await tx.hostEarning.upsert({where:{reservationId:id},update:{},create:{reservationId:id,hostId:s.hostId,currency:p.currency,grossCents:a.grossCents,commissionCents:a.commissionCents,hostDiscountCents:a.hostDiscountCents,netCents:a.hostNetCents,availableAt:r.trip?.endedAt?new Date(r.trip.endedAt.getTime()+Number((s.settlement as {delayDays?:number}).delayDays??365)*86400000):null}});
  }
  for(const p of r.payments.filter(p=>p.status==="SUCCEEDED"&&["ADDITIONAL_CHARGE","DEPOSIT_CAPTURE"].includes(p.type)&&p.amountCents>0)){
@@ -46,6 +60,25 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
   const batchItem=earning?await tx.payoutItem.findFirst({where:{earningId:earning.id,active:true}}):null;
   const batch=batchItem?await tx.payoutBatch.findUniqueOrThrow({where:{id:batchItem.batchId}}):null;
   const sent=batch?await transferMayHaveMoved(tx,batch.id):false;
+  if((s.commission as {engine?:string}).engine==="MARKETPLACE_V1"){
+   const target=marketplaceRefundAllocation(a,cumulative,paid.amountCents,allocation.data.refundHostBps,earning?earning.netCents+earning.adjustmentCents:0);
+   const previous=(accounts:string[])=>priorRefunds.flatMap(j=>j.lines).filter(l=>accounts.includes(l.account)).reduce((n,l)=>n+l.debitCents-l.creditCents,0);
+   const allocationLines:LedgerPosting[]=[
+    {account:"TAX_PAYABLE",debitCents:target.tax-previous(["TAX_PAYABLE"])},
+    {account:"PROTECTION_PAYABLE",debitCents:target.protection-previous(["PROTECTION_PAYABLE"])},
+    {account:"HOST_RISK_RESERVE_PAYABLE",debitCents:target.reserve-previous(["HOST_RISK_RESERVE_PAYABLE"])},
+    {account:sent?"HOST_RECEIVABLE":"HOST_PAYABLE",debitCents:target.host-previous(["HOST_PAYABLE","HOST_RECEIVABLE"])},
+    {account:"UNSETTLED_PLATFORM_FEES",debitCents:target.platformFees-previous(["UNSETTLED_PLATFORM_FEES"])},
+    {account:"PLATFORM_REFUND_COST",debitCents:target.platformCost-previous(["PLATFORM_REFUND_COST"])},
+    {account:"PLATFORM_DISCOUNTS",creditCents:target.discount+previous(["PLATFORM_DISCOUNTS"])},
+    {account:"STRIPE_CLEARING",creditCents:f.amountCents},
+   ];
+   await journal(tx,{key:"refund:"+f.id,kind:"REFUND",currency:paid.currency,reservationId:id,hostId:s.hostId,providerId:f.stripeRefundId,description:"Refund allocated from frozen marketplace policy and pass-through liabilities",lines:allocationLines});
+   const hostDelta=target.host-previous(["HOST_PAYABLE","HOST_RECEIVABLE"]);
+   if(earning&&hostDelta){await tx.hostEarning.update({where:{id:earning.id},data:{refundedCents:{increment:hostDelta}}});earning.refundedCents+=hostDelta;}
+   if(batch&&hostDelta)await financeIssue(tx,{key:"refund-recovery:"+f.id,kind:sent?"POST_PAYOUT_REFUND":"BATCH_CHANGED",reservationId:id,hostId:s.hostId??undefined,reason:"Frozen marketplace refund changes batch entitlement; reconcile before movement",evidence:json({batchId:batch.id,refundId:f.id,hostCents:hostDelta,reverseTransfers:allocation.data.reverseTransfers})});
+   continue;
+  }
   await journal(tx,{key:"refund:"+f.id,kind:"REFUND",currency:paid.currency,reservationId:id,hostId:s.hostId,providerId:f.stripeRefundId,description:sent?"Refund after host transfer; receivable requires recovery":"Refund reduces pending host earnings",lines:[{account:sent?"HOST_RECEIVABLE":"HOST_PAYABLE",debitCents:host},{account:"TAX_PAYABLE",debitCents:tax},{account:"PLATFORM_REFUND_COST",debitCents:f.amountCents-tax-host},{account:"STRIPE_CLEARING",creditCents:f.amountCents}]});
   if(earning&&host){await tx.hostEarning.update({where:{id:earning.id},data:{refundedCents:{increment:host}}});earning.refundedCents+=host;}
   if(batch&&host)await financeIssue(tx,{key:"refund-recovery:"+f.id,kind:sent?"POST_PAYOUT_REFUND":"BATCH_CHANGED",reservationId:id,hostId:s.hostId??undefined,reason:sent?"Recover approved host share without double recovery":"Refund changed frozen batch; reconcile before movement",evidence:json({batchId:batch.id,refundId:f.id,hostCents:host,reverseTransfers:allocation.data.reverseTransfers})});

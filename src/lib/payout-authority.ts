@@ -1,4 +1,5 @@
 import type { FinancialOperation,Prisma } from "@prisma/client";
+import {requireReservationJurisdiction} from "@/lib/jurisdiction";
 import { assertReturnFinancialAuthority } from "@/lib/return-financial-authority";
 import { lockReservation,assertEventFence } from "@/lib/financial-locks";
 import { OperationPendingError } from "@/lib/financial-errors";
@@ -20,6 +21,7 @@ export async function lockPayoutReservations(tx:Prisma.TransactionClient,ids:str
 }
 export async function payoutEligibility(tx:Prisma.TransactionClient,reservationId:string,options:{ignoreBatch?:string;now?:Date}={}){
  const now=options.now??new Date(),reasons:string[]=[];
+ try{await requireReservationJurisdiction(tx,reservationId,"PAYOUT");}catch{reasons.push("Jurisdiction is not released for payouts");}
  const accounting=await accountingCompleteness(tx,reservationId);
  if(!accounting.complete)reasons.push("Accounting incomplete: "+accounting.reasons.join("; "));
  const r=await tx.reservation.findUniqueOrThrow({where:{id:reservationId},include:{vehicle:{include:{host:{include:{user:true}}}},trip:true}}),snapshot=await tx.financeSnapshot.findUnique({where:{reservationId}}),earning=await tx.hostEarning.findUnique({where:{reservationId}});
