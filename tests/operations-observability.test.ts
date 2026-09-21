@@ -4,6 +4,7 @@ import {monitorOperations} from "@/lib/observability";
 import {claimOperations} from "@/lib/operations";
 import {WORKER_STALENESS_MINUTES,staleWorkerCount} from "@/lib/worker-schedule";
 import {prisma} from "./helpers/factories";
+import {onRequestError} from "@/instrumentation";
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();vi.useRealTimers();});afterAll(()=>prisma.$disconnect());
 it("detects silent or stale schedules using persisted successful worker observations",async()=>{
  await prisma.operationalEvent.createMany({data:Object.keys(WORKER_STALENESS_MINUTES).map(source=>({category:"CRON_COMPLETE",severity:"INFO",source}))});expect(await staleWorkerCount()).toBe(0);
@@ -24,4 +25,9 @@ it("replays the exact persisted alert payload and key after an uncertain provide
 it("moves a worker that crashes on its last lease into review instead of leaving it permanently running",async()=>{
  const kind="EXHAUSTED_"+randomUUID(),key=kind;await prisma.operationsJob.create({data:{key,kind,state:"RUNNING",attempts:5,leaseToken:randomUUID(),leaseExpiresAt:new Date(0)}});
  expect(await claimOperations(kind)).toEqual([]);expect(await prisma.operationsJob.findUniqueOrThrow({where:{key}})).toMatchObject({state:"REVIEW",lastErrorCode:"LEASE_EXHAUSTED",leaseToken:null});
+});
+it("records a request correlation ID without serializing private exceptions, URLs or headers",async()=>{
+ vi.stubEnv("NEXT_RUNTIME","nodejs");const id=randomUUID(),secret="synthetic-private-payload";
+ await onRequestError(new Error(secret),{path:"/private?code="+secret,method:"GET",headers:{"x-request-id":id,authorization:secret}},{routerKind:"App Router",routePath:"/private",routeType:"route",renderSource:"react-server-components",revalidateReason:undefined});
+ const row=await prisma.operationalEvent.findFirstOrThrow({where:{requestId:id}});expect(row.category).toBe("APPLICATION_FAILED");expect(JSON.stringify(row)).not.toContain(secret);
 });

@@ -26,7 +26,12 @@ async function runScan(job:OperationsJob){
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"private:"+key},0))::text`;
   const saved=await tx.operationsJob.updateMany({where:{key:job.key,state:"RUNNING",leaseToken:job.leaseToken,leaseExpiresAt:{gt:new Date()}},data:{state:"DONE",leaseToken:null,leaseExpiresAt:null}});if(!saved.count)return;
   const projected=await tx.privateObject.updateMany({where:{key,state:"SCANNING",deletedAt:null},data:{state:result.status,scannedAt:new Date(),scanEngine:"ClamAV",scanVersion:version}});
-  if(projected.count)await tx.auditLog.create({data:{action:result.status==="CLEAN"?"storage.scan.clean":"storage.scan.infected",entityType:"PrivateObject",entityId:hash(key)}});
+  if(projected.count){
+   await tx.driverDocument.updateMany({where:{storageKey:key,contentSha256:row.sha256,deletedAt:null,malwareScanStatus:{not:"INFECTED"}},data:{malwareScanStatus:result.status}});
+   await tx.marketplaceFile.updateMany({where:{storageKey:key,sha256:row.sha256,scanStatus:{not:"INFECTED"}},data:{scanStatus:result.status}});
+   await tx.collaborationFile.updateMany({where:{storageKey:key,sha256:row.sha256,deletedAt:null,scanStatus:{notIn:["INFECTED","DELETION_COMMITTED"]}},data:{scanStatus:result.status}});
+   await tx.auditLog.create({data:{action:result.status==="CLEAN"?"storage.scan.clean":"storage.scan.infected",entityType:"PrivateObject",entityId:hash(key)}});
+  }
  });
 }
 export async function runOperations(kind:"SCAN"|"DELETE"|"AGREEMENT"){
@@ -44,6 +49,6 @@ export async function runOperations(kind:"SCAN"|"DELETE"|"AGREEMENT"){
  return {claimed:jobs.length,completed,failed};
 }
 export async function operationalMetrics(){
- const [uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures,overdueCases,uncertainWrites,staleWorkers,agreementFailures,retentionFailures]=await Promise.all([
- prisma.financialOperation.count({where:{state:{in:["REVIEW","DEAD_LETTER"]}}}),prisma.refund.count({where:{status:"FAILED"}}),prisma.financialOperation.count({where:{kind:"DEPOSIT_RELEASE",state:{notIn:["OBSERVED"]}}}),prisma.financeIssue.count({where:{status:{not:"RESOLVED"}}}),prisma.outboxMessage.count({where:{status:{in:["PENDING","FAILED"]}}}),prisma.operationsJob.count({where:{kind:"SCAN",state:{in:["RETRY","REVIEW"]}}}),prisma.operationsJob.count({where:{kind:"DELETE",state:{in:["RETRY","REVIEW"]}}}),prisma.serviceCase.count({where:{state:{not:"CLOSED"},dueAt:{lt:new Date()}}}),prisma.privateObject.count({where:{writeState:{in:["UNCERTAIN","RUNNING"]}}}),staleWorkerCount(),prisma.operationsJob.count({where:{kind:"AGREEMENT",state:{in:["RETRY","REVIEW"]}}}),prisma.storageDeletionJob.count({where:{state:"DEAD_LETTER"}})]);return {uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures,overdueCases,uncertainWrites,staleWorkers,agreementFailures,retentionFailures};
+ const [uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures,overdueCases,uncertainWrites,staleWorkers,agreementFailures,retentionFailures,operatorReviews]=await Promise.all([
+ prisma.financialOperation.count({where:{state:{in:["REVIEW","DEAD_LETTER"]}}}),prisma.refund.count({where:{status:"FAILED"}}),prisma.financialOperation.count({where:{kind:"DEPOSIT_RELEASE",state:{notIn:["OBSERVED"]}}}),prisma.financeIssue.count({where:{status:{not:"RESOLVED"}}}),prisma.outboxMessage.count({where:{status:{in:["PENDING","FAILED"]}}}),prisma.operationsJob.count({where:{kind:"SCAN",state:{in:["RETRY","REVIEW"]}}}),prisma.operationsJob.count({where:{kind:"DELETE",state:{in:["RETRY","REVIEW"]}}}),prisma.serviceCase.count({where:{state:{not:"CLOSED"},dueAt:{lt:new Date()}}}),prisma.privateObject.count({where:{writeState:{in:["UNCERTAIN","RUNNING"]}}}),staleWorkerCount(),prisma.operationsJob.count({where:{kind:"AGREEMENT",state:{in:["RETRY","REVIEW"]}}}),prisma.storageDeletionJob.count({where:{state:"DEAD_LETTER"}}),prisma.operationsJob.count({where:{kind:{in:["ALERT","LEGACY_IMPORT"]},state:{in:["RETRY","REVIEW"]}}})]);return {uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures,overdueCases,uncertainWrites,staleWorkers,agreementFailures,retentionFailures,operatorReviews};
 }

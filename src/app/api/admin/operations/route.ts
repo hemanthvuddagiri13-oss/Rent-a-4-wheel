@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import {importLegacyPrivateObject} from "@/lib/legacy-private-import";
 import { jurisdictionAdminCommand } from "@/lib/jurisdiction-admin";
 import { prisma } from "@/lib/prisma";
 import { productionConfiguration } from "@/lib/production-config";
@@ -14,8 +15,9 @@ export async function POST(req:Request){
   if(data.action==="stepUp"){const user=await prisma.user.findUniqueOrThrow({where:{id:userId}});const result=await requestAuthCode({email:user.email,ip:null,purpose:"SECURITY_STEP_UP"});return Response.json({success:result.ok},{status:result.ok?200:429});}
   if(data.action==="feature"&&FEATURES.includes(data.key)&&typeof data.enabled==="boolean")return Response.json(await setReleaseFeature(userId,data.key,data.enabled,String(data.code??""),String(data.reason??"")));
   if(data.action==="policy")return Response.json(await registerPolicy(userId,data));
+  if(data.action==="importLegacyObject")return Response.json(await importLegacyPrivateObject(userId,data));
   if(["jurisdictionMode","jurisdictionGate","pricingPolicy","revokeJurisdictionGate","revokePricingPolicy"].includes(data.action))return Response.json(await jurisdictionAdminCommand(userId,data));
-  if(data.action==="retry"&&typeof data.key==="string"&&data.key.length<=200&&typeof data.reason==="string"&&data.reason.length>=10&&data.reason.length<=500){await securityStepUp(userId,String(data.code??""));const result=await prisma.$transaction(async tx=>{const actor=await tx.user.findUniqueOrThrow({where:{id:userId}});if(!actor.isActive||actor.role!=="SUPER_ADMIN")throw new Error("Forbidden");const changed=await tx.operationsJob.updateMany({where:{key:data.key,state:"REVIEW"},data:{state:"RETRY",attempts:0,nextAttemptAt:new Date(),leaseToken:null,leaseExpiresAt:null}});if(changed.count)await tx.auditLog.create({data:{actorId:userId,action:"operations.review.retry",entityType:"OperationsJob",entityId:data.key,metadata:{reason:data.reason}}});return {retried:changed.count};});return Response.json(result);}
+  if(data.action==="retry"&&typeof data.key==="string"&&data.key.length<=200&&typeof data.reason==="string"&&data.reason.length>=10&&data.reason.length<=500){await securityStepUp(userId,String(data.code??""));const result=await prisma.$transaction(async tx=>{const actor=await tx.user.findUniqueOrThrow({where:{id:userId}});if(!actor.isActive||actor.role!=="SUPER_ADMIN")throw new Error("Forbidden");const changed=await tx.operationsJob.updateMany({where:{key:data.key,state:"REVIEW",kind:{in:["SCAN","DELETE","AGREEMENT","ALERT"]}},data:{state:"RETRY",attempts:0,nextAttemptAt:new Date(),leaseToken:null,leaseExpiresAt:null}});if(changed.count)await tx.auditLog.create({data:{actorId:userId,action:"operations.review.retry",entityType:"OperationsJob",entityId:data.key,metadata:{reason:data.reason}}});return {retried:changed.count};});return Response.json(result);}
   return Response.json({error:"Invalid operation"},{status:400});
  }catch{return Response.json({error:"Operation refused. Check prerequisites and use a fresh security code."},{status:409});}
 }

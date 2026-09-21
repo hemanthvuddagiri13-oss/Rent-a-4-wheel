@@ -77,16 +77,18 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   }
  },180000);
  it("refreshes revoked roles and disabled accounts on real authenticated HTTP requests",async()=>{
+   const isolated=await browser.newContext();
    const u=await createTestCustomer({role:"SUPER_ADMIN"});users.push(u.id);
    const device=await createDeviceSession(u.id);
    const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:"SUPER_ADMIN",sid:device.sid,rotation:device.rotation},secret,salt:"authjs.session-token"});
-   await context.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);
-   expect((await (await context.request.get(base+"/api/auth/session")).json()).user.role).toBe("SUPER_ADMIN");
+   await isolated.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);
+   expect((await (await isolated.request.get(base+"/api/auth/session")).json()).user.role).toBe("SUPER_ADMIN");
    await prisma.user.update({where:{id:u.id},data:{role:"CUSTOMER"}});
-   expect((await (await context.request.get(base+"/api/auth/session")).json()).user.role).toBe("CUSTOMER");
+   expect((await (await isolated.request.get(base+"/api/auth/session")).json()).user).toMatchObject({id:u.id,role:"CUSTOMER"});
    await prisma.user.update({where:{id:u.id},data:{isActive:false}});
-   expect((await (await context.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
-   expect((await context.request.get(base+"/api/reservations/missing/status")).status()).toBe(401);
+   expect((await (await isolated.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
+   expect((await isolated.request.get(base+"/api/reservations/missing/status")).status()).toBe(401);
+   await isolated.close();
  });
 
 });

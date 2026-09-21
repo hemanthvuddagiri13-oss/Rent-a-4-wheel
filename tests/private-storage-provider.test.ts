@@ -5,7 +5,8 @@ import {createHash,randomUUID} from "node:crypto";
 import {verifyPrivateBucket,putS3Private,readS3Private,deleteS3Private} from "@/lib/s3-private";
 import {storePrivateDocument,readPrivateDocument,deletePrivateDocument} from "@/lib/storage";
 import {runOperations} from "@/lib/operations";
-import {prisma} from "./helpers/factories";
+import {prisma,createTestCustomer} from "./helpers/factories";
+import {importLegacyPrivateObject} from "@/lib/legacy-private-import";
 import {barrier} from "./helpers/barrier";
 let server:Server,scanner:ScannerServer,endpoint:string,scannerPort:string;
 let publicBucket=false,encrypted=true,malware=false,putFailure=false,deleteFailure=false,puts=0;
@@ -79,4 +80,16 @@ it("fails closed on an unavailable scanner, exhausts bounded retries into review
  // Explicit operator-boundary fixture: HTTP reauthentication is tested separately.
  scannerUnavailable=false;await prisma.operationsJob.update({where:{key},data:{state:"RETRY",attempts:0,nextAttemptAt:new Date(0)}});await runOperations("SCAN");
  expect((await prisma.operationsJob.findUniqueOrThrow({where:{key}})).state).toBe("DONE");expect((await readPrivateDocument(stored.storageKey)).buffer.toString()).toBe("scanner outage fixture");
+});
+it("imports only attached legacy bytes with matching evidence and fresh reauthentication, then releases quarantine through scanning",async()=>{
+ configure();const admin=await createTestCustomer({role:"SUPER_ADMIN"}),owner=await createTestCustomer(),bytes=Buffer.from("synthetic legacy identity bytes"),key="s3:"+randomUUID()+".png";
+ await putS3Private(key,bytes,"image/png");const document=await prisma.driverDocument.create({data:{userId:owner.id,type:"LICENSE_FRONT",storageKey:key,mimeType:"image/png",fileSizeBytes:bytes.length,contentSha256:sha(bytes.toString()),malwareScanStatus:"QUARANTINED"}});
+ const input={action:"importLegacyObject",resourceType:"IDENTITY",resourceId:document.id,sha256:document.contentSha256,size:bytes.length,mimeType:"image/png",code:"123456",reason:"Controlled legacy import fixture with verified provider inventory"};
+ await expect(importLegacyPrivateObject(admin.id,input)).rejects.toThrow("REAUTHENTICATION");
+ const {hash:codeHash}=await import("bcryptjs");async function authorize(){await prisma.authCode.create({data:{email:admin.email,purpose:"SECURITY_STEP_UP",codeHash:await codeHash("123456",4),expiresAt:new Date(Date.now()+60000)}});}
+ await authorize();await expect(importLegacyPrivateObject(admin.id,{...input,sha256:"0".repeat(64)})).rejects.toThrow("EVIDENCE_MISMATCH");expect(await prisma.privateObject.findUnique({where:{key}})).toBeNull();
+ await authorize();expect(await importLegacyPrivateObject(admin.id,input)).toEqual({quarantined:true,held:true});
+ expect((await prisma.privateObject.findUniqueOrThrow({where:{key}}))).toMatchObject({hold:true,state:"QUARANTINED",writeState:"STORED"});await expect(readPrivateDocument(key)).rejects.toThrow("NOT_CLEAN");
+ await prisma.operationsJob.update({where:{key:"scan:"+sha(key)},data:{nextAttemptAt:new Date(0)}});await runOperations("SCAN");expect((await prisma.driverDocument.findUniqueOrThrow({where:{id:document.id}})).malwareScanStatus).toBe("CLEAN");expect((await readPrivateDocument(key)).buffer).toEqual(bytes);
+ await expect(deletePrivateDocument(key)).rejects.toThrow("HELD");await authorize();await expect(importLegacyPrivateObject(admin.id,input)).rejects.toThrow("EXISTING_MANIFEST");
 });

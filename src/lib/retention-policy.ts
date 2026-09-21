@@ -28,7 +28,7 @@ async function retentionCodeApproved(tx:Prisma.TransactionClient,code:string){
 // Filter unapproved scopes before LIMIT so they cannot starve approved scopes.
 // Recheck under the shared authority lock at every irreversible authorization point.
 export async function retentionScopeFilter(){
- if(localDevelopment())return (_reservation:Prisma.Sql)=>Prisma.sql`TRUE`;
+ if(localDevelopment())return ()=>Prisma.sql`TRUE`;
  const codes:string[]=[];for(const row of await prisma.jurisdiction.findMany({select:{code:true}}))if(await retentionCodeApproved(prisma,row.code))codes.push(row.code);
  return (reservation:Prisma.Sql)=>codes.length?Prisma.sql`EXISTS (SELECT 1 FROM "Reservation" rp JOIN "Vehicle" vp ON vp.id=rp."vehicleId" WHERE rp.id=${reservation} AND COALESCE(rp."jurisdictionCode",vp."jurisdictionCode") IN (${Prisma.join(codes)}))`:Prisma.sql`FALSE`;
 }

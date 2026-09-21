@@ -47,7 +47,9 @@ Deletion first commits logical revocation and durable intent. Holds are checked 
 
 `writeState=RUNNING/UNCERTAIN` means upload completion is unproved. Lost responses do not prove absence. No second write or successful erasure claim is permitted. Obtain provider request/object evidence and resolve under a reviewed procedure; do not simply reset state or delete the manifest. Automated ambiguous-upload adjudication is intentionally unavailable. Exercise this procedure with the real provider before release.
 
-Legacy files without manifests stay unreadable in deployed environments until a reviewed import establishes provenance, hash/size, retention and scan evidence. Never manufacture clean status from an unverified URL. Financial and signed-agreement evidence has no automatic destruction approval. Privacy outcomes may require retention/legal review, not promises of complete erasure.
+Legacy files without manifests stay unreadable in deployed environments until a reviewed import establishes provenance, hash/size, retention and scan evidence. SUPER_ADMIN may submit `action: importLegacyObject` to `/api/admin/operations` with a fresh security code, reason, known resource type/id, expected SHA-256, size and MIME type. Supported types are IDENTITY, BUSINESS, CONDITION, AGREEMENT and COLLABORATION. The server resolves the existing storage key; arbitrary keys/URLs are not accepted. Existing source hashes must match. Objects without historical hashes require independently verified provider inventory evidence. The import records a durable intent, verifies bytes, leaves a retention hold and queues a new scan. It cannot override an existing upload's uncertain outcome, infection or deletion intent. A failed read can be retried through the same import command with fresh reauthentication. Import is not proof of Cloudinary encryption or production provider approval.
+
+Never manufacture clean status from an unverified URL. Financial and signed-agreement evidence has no automatic destruction approval. Privacy outcomes may require retention/legal review, not promises of complete erasure.
 
 ## Outage recovery
 

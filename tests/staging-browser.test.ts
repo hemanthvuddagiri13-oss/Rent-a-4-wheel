@@ -29,9 +29,12 @@ it.skipIf(!enabled)("enforces staging configuration, real database sessions, sec
  const {context,user,session}=await login(),page=await context.newPage();const response=await page.goto(base+"/account/security");
  expect(response?.status()).toBe(200);expect(response?.headers()["strict-transport-security"]).toContain("max-age=31536000");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["content-security-policy"]).not.toContain("unsafe-eval");expect(response?.headers()["cache-control"]).toContain("no-store");
  await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await page.getByText("this device",{exact:false}).waitFor();await page.screenshot({path:"test-artifacts/staging/account-security.png",fullPage:true});
+ await page.getByLabel("One-use security code",{exact:true}).fill("000000");await page.getByRole("button",{name:"Rotate session credential",exact:true}).click();await page.getByRole("status").filter({hasText:"A fresh security code is required."}).waitFor();
+ expect((await(await context.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
  expect((await context.request.get(base+"/api/admin/operations")).status()).toBe(403);
  expect((await context.request.post(base+"/api/account/security",{headers:{origin:"https://untrusted.invalid"},data:{action:"revokeAll"}})).status()).toBe(403);
  expect((await context.request.post(base+"/api/account/security",{data:{action:"revokeAll"}})).status()).toBe(403);
+ expect((await context.request.post(base+"/api/reservations/synthetic/confirm-dev-payment",{headers:{origin:base},data:{}})).status()).toBe(403);
  for(const route of ["/api/cron/operations/scan","/api/cron/operations/delete","/api/cron/operations/monitor","/api/cron/financial/recovery","/api/cron/payouts/recovery","/api/cron/community","/api/cron/expire-holds"])expect((await context.request.post(base+route)).status(),route).toBe(401);
  const health=await context.request.get(base+"/api/health/ready");expect(health.status()).toBe(503);expect(await health.json()).toEqual({ready:false});
  await prisma.session.update({where:{id:session.sid},data:{revokedAt:new Date()}});expect((await context.request.get(base+"/api/account/security")).status()).toBe(401);expect((await(await context.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
@@ -41,4 +44,10 @@ it.skipIf(!enabled)("keeps live money disabled and requires fresh reauthenticati
  const {context}=await login("SUPER_ADMIN");const status=await context.request.get(base+"/api/admin/operations");expect(status.status()).toBe(200);const body=await status.json();expect(body.configuration).toMatchObject({environment:"staging",ready:true,liveFinanceEnabled:false});expect(JSON.stringify(body)).not.toContain(secret);
  for(const key of ["live_charges","payouts"]){const result=await context.request.post(base+"/api/admin/operations",{headers:{origin:base},data:{action:"feature",key,enabled:true,code:"000000",reason:"Synthetic unauthorized release attempt"}});expect(result.status()).toBe(409);}
  await context.close();
+},60000);
+it.skipIf(!enabled)("revokes the database device on Auth.js sign-out so replaying its old encrypted cookie cannot authenticate",async()=>{
+ const {context,session}=await login();const original=await context.cookies(),csrf=await(await context.request.get(base+"/api/auth/csrf")).json();
+ const response=await context.request.post(base+"/api/auth/signout",{headers:{origin:base,"X-Auth-Return-Redirect":"1"},form:{csrfToken:csrf.csrfToken,callbackUrl:base}});expect(response.ok()).toBe(true);
+ expect((await prisma.session.findUniqueOrThrow({where:{id:session.sid}})).revokedAt).not.toBeNull();
+ await context.addCookies(original);expect((await context.request.get(base+"/api/account/security")).status()).toBe(401);await context.close();
 },60000);

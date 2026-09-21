@@ -14,6 +14,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await marketplaceLimit(session.user.id);
     const data = z.object({ signerName: z.string().trim().min(2).max(150), version: z.string(), accept: z.literal("yes") }).parse(await req.json());
     const acceptance = await prisma.$transaction(async tx => {
+      // Same authority-before-document order as policy writers and provider dispatch.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended('release-control',0))::text`;
       const { role, vehicle } = await marketplaceVehicle(tx, session.user.id, id, true);
       if (role !== "OWNER") throw new MarketplaceError("Only the host owner can sign.", 403);
       await tx.$queryRaw`SELECT "id" FROM "LegalDocument" WHERE "type"='HOST_AGREEMENT' FOR UPDATE`;

@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { verifyAuthCode, getRequestIp } from "@/lib/auth-code";
 import { authConfig } from "@/auth.config";
 import { safeLog } from "@/lib/safe-log";
-import { createDeviceSession, validateDeviceSession, rotateDeviceSession } from "@/lib/device-sessions";
+import { reportOperationalEvent } from "@/lib/observability";
+import { createDeviceSession, validateDeviceSession, rotateDeviceSession, revokeDeviceSessions } from "@/lib/device-sessions";
 import { localDevelopment } from "@/lib/deployment-environment";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -13,13 +14,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   // Encrypted cookie is only a locator. The database authorizes every request.
   session: { strategy: "jwt", maxAge: 7 * 86400 },
   useSecureCookies: !localDevelopment(),
+  events: { async signOut(message) {
+    if("token" in message&&typeof message.token?.id==="string"&&typeof message.token?.sid==="string")await revokeDeviceSessions(message.token.id,message.token.sid);
+  } },
   callbacks: {
     ...authConfig.callbacks,
     async jwt(params) {
       const token = await authConfig.callbacks.jwt(params);
       if (params.user) { token.sid = params.user.sid; token.rotation = params.user.rotation; }
       if (params.trigger === "update" && params.session?.action === "rotate" && token.id && token.sid && typeof token.rotation === "number") {
-        token.rotation = await rotateDeviceSession(token.id, token.sid, token.rotation, String(params.session.code ?? ""));
+        try { token.rotation = await rotateDeviceSession(token.id, token.sid, token.rotation, String(params.session.code ?? "")); }
+        catch { safeLog("SESSION_ROTATION_REFUSED"); }
       }
       return token;
     },
@@ -48,7 +53,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const ip = getRequestIp(request.headers);
         const result = await verifyAuthCode({ email, code, ip });
-        if (!result.ok) return null;
+        if (!result.ok) {await reportOperationalEvent("AUTH_DENIED","WARNING",request.headers.get("x-request-id")??undefined);return null;}
 
         const normalizedEmail = email.trim().toLowerCase();
         let user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
