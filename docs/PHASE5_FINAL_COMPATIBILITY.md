@@ -44,6 +44,9 @@ not merely attempted. Review/uncertain are diagnostic dimensions and may refer
 to the same delivery; consumers must not add them to infer distinct deliveries.
 Community responses contain explicit notification, retention and channel child
 results plus the aggregate. A child failure preserves earlier committed work.
+Financial cron includes operation-deduplicated deposit-release outcomes before
+observation. Legacy combined deposit totals are not counted again alongside their
+children. Financial and payout cron use the same actionable HTTP status.
 
 Statuses are SUCCESS, PARTIAL_FAILURE, FAILED, DISABLED and NO_WORK. A success
 with failures/review/uncertainty is PARTIAL_FAILURE. Both PARTIAL_FAILURE and

@@ -20,8 +20,12 @@ export function summarizeWorker(value:unknown):WorkerResult{
  const children:Record<string,WorkerResult>={};
  for(const key of ["notifications","retention","channels"])if(r[key])children[key]=summarizeWorker(r[key]);
  if(Object.keys(children).length)return workerResult({},children);
+ // Deposit workers already include release totals in their legacy top level.
+ // Aggregate their disjoint children once; other financial workers retain a
+ // separate primary batch alongside request-local, operation-deduplicated releases.
+ if(r.releases){const {releases,deposits,...primary}=r;return workerResult({}, {primary:summarizeWorker(deposits??primary),releases:summarizeWorker(releases)});}
  const n=(key:string)=>typeof r[key]==="number"?r[key] as number:0;
- const failed=n("failed")+n("pending"),committed=typeof r.completed==="number"?n("completed"):typeof r.delivered==="number"?n("delivered"):typeof r.accepted==="number"?n("accepted"):Math.max(0,n("processed")-n("failed"));
+ const failed=n("failed")+n("pending"),committed=typeof r.completed==="number"?n("completed"):typeof r.delivered==="number"?n("delivered"):typeof r.accepted==="number"?n("accepted"):n("processed");
  return workerResult({attempted:n("attempted"),committed,failed,stale:n("stale"),review:n("review"),quarantined:n("quarantined"),uncertain:n("uncertain"),skipped:n("skipped"),disabled:r.disabled||r.configured===false?1:0});
 }
 export const workerHttpStatus=(r:WorkerResult)=>r.status==="FAILED"||r.status==="PARTIAL_FAILURE"?503:200;

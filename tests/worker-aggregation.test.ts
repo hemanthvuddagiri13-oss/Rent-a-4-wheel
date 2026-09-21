@@ -5,8 +5,24 @@ import {prisma,createTestCustomer} from "./helpers/factories";
 import {deliverNoticeChannels} from "@/lib/notice-channels";
 import {POST} from "@/app/api/cron/community/route";
 import {dispatchCron} from "../scripts/dispatch-cron.mjs";
+import {financialWorkers} from "@/lib/financial-workers";
+import {recordRelease} from "@/lib/release-outcomes";
+import {POST as financialCron} from "@/app/api/cron/financial/[worker]/route";
+import {NextRequest} from "next/server";
 const users:string[]=[];
-afterEach(async()=>{vi.unstubAllGlobals();vi.unstubAllEnvs();await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.inboxNotice.deleteMany({where:{userId:{in:users}}});users.length=0;});afterAll(()=>prisma.$disconnect());
+afterEach(async()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.unstubAllEnvs();await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.inboxNotice.deleteMany({where:{userId:{in:users}}});users.length=0;});afterAll(()=>prisma.$disconnect());
+it("counts nested deposit releases once and preserves committed work alongside failures",()=>{
+ const result=summarizeWorker({processed:2,pending:3,failed:2,uncertain:1,deposits:{processed:1,pending:1},releases:{processed:1,failed:1,quarantined:0,uncertain:1}});
+ expect(result).toMatchObject({committed:2,failed:2,uncertain:1,status:"PARTIAL_FAILURE"});
+ expect(summarizeWorker({processed:1,failed:2})).toMatchObject({committed:1,failed:2,status:"PARTIAL_FAILURE"});
+});
+it("financial cron observes deduplicated all-quarantined release outcomes before returning HTTP status",async()=>{
+ vi.stubEnv("CRON_SECRET","fixture-cron");
+ vi.spyOn(financialWorkers,"refunds").mockImplementation(async()=>{recordRelease({operationId:"fixture-release",status:"quarantined"});recordRelease({operationId:"fixture-release",status:"quarantined"});return {processed:0,pending:0};});
+ const response=await financialCron(new NextRequest("http://localhost/api/cron/financial/refunds",{method:"POST",headers:{authorization:"Bearer fixture-cron"}}),{params:Promise.resolve({worker:"refunds"})});
+ expect(response.status).toBe(503);expect((await response.json()).worker).toMatchObject({status:"FAILED",committed:0,quarantined:1});
+ expect((await prisma.operationalEvent.findFirstOrThrow({where:{source:"financial/refunds"},orderBy:{createdAt:"desc"}})).category).toBe("CRON_FAILED");
+});
 it("does not hide an all-review nested channel batch",()=>{
  expect(failedWorkerBatch({notifications:{processed:0},retention:{processed:0},channels:{accepted:0,review:3}})).toBe(true);
 });
