@@ -21,3 +21,8 @@ export async function requireConfirmationAdmission(tx:Prisma.TransactionClient,r
  const scope=await requireReservationJurisdiction(tx,reservationId,"CONFIRMATION");
  await requireReleaseFeature("booking",tx,scope.code);
 }
+export async function requireCheckoutAdmission(tx:Prisma.TransactionClient,reservationId:string){
+ await releaseAuthorityFence(tx);
+ const scope=await requireReservationJurisdiction(tx,reservationId,"CHECKOUT");
+ await requireReleaseFeature("booking",tx,scope.code);
+}

@@ -2,12 +2,14 @@ import type { Prisma } from "@prisma/client";
 import { fingerprint } from "@/lib/financial-operations";
 import { lossSchema,roundBps } from "@/lib/finance-rules";
 import type { FinanceTerms } from "@/lib/finance-rules";
-import { additionalMarketplaceRefund, emptyRefundAllocation, marketplaceRefundAllocation, type RefundAllocation } from "@/lib/marketplace-refund-allocation";
+import { additionalMarketplaceRefund, emptyRefundAllocation, type RefundAllocation } from "@/lib/marketplace-refund-allocation";
+import {ensureRefundCompatibility} from "@/lib/refund-compatibility";
 
 // Call only while holding the reservation guard. This checkpoint describes
 // economic evidence, not UI status or worker timestamps. New evidence makes it
 // stale even when an operator has closed its review case.
 async function accountingEvidence(tx: Prisma.TransactionClient, reservationId: string) {
+ const compatibility=await ensureRefundCompatibility(tx,reservationId);
  const payments=await tx.payment.findMany({where:{reservationId},orderBy:{id:"asc"}});
  const refunds=await tx.refund.findMany({where:{reservationId},orderBy:{id:"asc"}});
  const operations=await tx.financialOperation.findMany({where:{reservationId},include:{dispatches:{orderBy:{id:"asc"}}},orderBy:{id:"asc"}});
@@ -18,6 +20,7 @@ async function accountingEvidence(tx: Prisma.TransactionClient, reservationId: s
  const snapshot=await tx.financeSnapshot.findUnique({where:{reservationId}});
  const feeReceipts=await tx.providerFeeEvidence.findMany({where:{reservationId},orderBy:{providerId:"asc"}});
  const reasons:string[]=[];
+ if(!compatibility.valid)reasons.push("Historical refund compatibility requires financial review");
  const posting=(key:string)=>journals.find(j=>j.key===key);
  for(const receipt of feeReceipts){
   const p=payments.find(p=>p.id===receipt.paymentId);
@@ -83,8 +86,10 @@ async function accountingEvidence(tx: Prisma.TransactionClient, reservationId: s
      const cashDelta=j.lines.filter(l=>l.account==="STRIPE_CLEARING").reduce((n,l)=>n+l.creditCents,0);postedCash+=cashDelta;
      const evidence=j.allocationEvidence as Evidence|null;
      try{
-      const original=marketplaceRefundAllocation(snapshot!.amounts as FinanceTerms["amounts"],postedCash,paid.amountCents,allocation.data.refundHostBps,net);
-      const expected=evidence?additionalMarketplaceRefund(snapshot!.amounts as FinanceTerms["amounts"],postedCash,paid.amountCents,allocation.data.refundHostBps,prior,evidence.availableHost):Object.fromEntries(Object.keys(prior).map(k=>[k,original[k as keyof RefundAllocation]-prior[k as keyof RefundAllocation]])) as RefundAllocation;
+      const historical=compatibility.records.find(r=>r.journalId===j.id);
+      if(!evidence&&(!compatibility.valid||!historical))throw new Error("Historical reconstruction missing");
+      const opening=historical?.openingAllocation as RefundAllocation|undefined;
+      const expected=evidence?additionalMarketplaceRefund(snapshot!.amounts as FinanceTerms["amounts"],postedCash,paid.amountCents,allocation.data.refundHostBps,prior,evidence.availableHost):Object.fromEntries(Object.keys(prior).map(k=>[k,opening![k as keyof RefundAllocation]-prior[k as keyof RefundAllocation]])) as RefundAllocation;
       if(evidence&&(evidence.version!==1||evidence.snapshotHash!==snapshot!.contentHash||evidence.paymentId!==paid.id||j.key!=="refund:"+evidence.refundId||evidence.cumulative!==postedCash||fingerprint(evidence.prior)!==fingerprint(prior)||fingerprint(evidence.delta)!==fingerprint(expected)))throw new Error("Invalid allocation evidence");
       for(const k of Object.keys(keys) as Array<keyof RefundAllocation>){const actual=j.lines.filter(l=>keys[k].includes(l.account)).reduce((n,l)=>n+(k==="discount"?l.creditCents-l.debitCents:l.debitCents-l.creditCents),0);if(actual!==expected[k])throw new Error("Invalid allocation journal");prior[k]+=actual;}
      }catch{reasons.push("Refund allocation differs from immutable sequence evidence: "+j.id);}
@@ -98,7 +103,7 @@ async function accountingEvidence(tx: Prisma.TransactionClient, reservationId: s
  }
  if(earning&&(earning.netCents!==net||earning.refundedCents!==refunded||earning.adjustmentCents!==adjusted))reasons.push("Earnings differ from immutable accounting journals");
  if(!earning&&payments.some(p=>p.type==="RENTAL"&&p.status==="SUCCEEDED")&&snapshot?.hostId)reasons.push("Host earning projection missing");
- const hash=fingerprint({version:1,feeReceipts:feeReceipts.map(r=>[r.providerId,r.fingerprint]),snapshot:snapshot?.contentHash,payments:payments.map(p=>[p.id,p.type,p.status,p.amountCents,p.currency,p.stripePaymentIntentId]),refunds:refunds.map(f=>[f.id,f.paymentId,f.status,f.amountCents,f.stripeRefundId,f.legacyUncertain]),operations:operations.map(o=>[o.id,o.fingerprint,o.providerId,o.result,o.dispatches.map(d=>[d.id,d.phase,d.providerId,d.result])]),disputes:disputes.map(d=>[d.id,d.status,d.amountCents,d.currency,d.active]),adjustments:adjustments.map(a=>[a.id,a.kind,a.amountCents,a.journalId]),journals:journals.map(j=>[j.id,j.fingerprint]),earning:earning?[earning.netCents,earning.refundedCents,earning.adjustmentCents]:null});
+ const hash=fingerprint({version:2,compatibility:compatibility.records.map(r=>[r.journalId,r.evidenceHash]),feeReceipts:feeReceipts.map(r=>[r.providerId,r.fingerprint]),snapshot:snapshot?.contentHash,payments:payments.map(p=>[p.id,p.type,p.status,p.amountCents,p.currency,p.stripePaymentIntentId]),refunds:refunds.map(f=>[f.id,f.paymentId,f.status,f.amountCents,f.stripeRefundId,f.legacyUncertain]),operations:operations.map(o=>[o.id,o.fingerprint,o.providerId,o.result,o.dispatches.map(d=>[d.id,d.phase,d.providerId,d.result])]),disputes:disputes.map(d=>[d.id,d.status,d.amountCents,d.currency,d.active]),adjustments:adjustments.map(a=>[a.id,a.kind,a.amountCents,a.journalId]),journals:journals.map(j=>[j.id,j.fingerprint]),earning:earning?[earning.netCents,earning.refundedCents,earning.adjustmentCents]:null});
  return {hash,reasons,amountCents:earning?earning.netCents-earning.refundedCents+earning.adjustmentCents:0};
 }
 

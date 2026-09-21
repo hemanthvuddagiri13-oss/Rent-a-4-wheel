@@ -7,6 +7,7 @@ import { certifyAccounting } from "@/lib/finance-completeness";
 import { transferMayHaveMoved } from "@/lib/payout-movement";
 import { additionalMarketplaceRefund } from "@/lib/marketplace-refund-allocation";
 import { projectProcessingFees } from "@/lib/processing-fees";
+import {ensureRefundCompatibility} from "@/lib/refund-compatibility";
 
 export type LedgerPosting={account:string;debitCents?:number;creditCents?:number};
 export async function journal(tx:Prisma.TransactionClient,input:{key:string;kind:string;currency:string;reservationId?:string|null;hostId?:string|null;operationId?:string|null;providerId?:string|null;reversalOf?:string;description:string;allocationEvidence?:Prisma.InputJsonValue;lines:LedgerPosting[]}) {
@@ -47,6 +48,7 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
   await journal(tx,{key:"payment:"+p.id,kind:p.type,currency:p.currency,reservationId:id,hostId:s.hostId,providerId:p.stripePaymentIntentId,description:"Confirmed collection retained pending approved settlement allocation",lines:[{account:"STRIPE_CLEARING",debitCents:p.amountCents},{account:p.type==="DEPOSIT_CAPTURE"?"DEPOSIT_SETTLEMENT_LIABILITY":"ADDITIONAL_CHARGE_LIABILITY",creditCents:p.amountCents}]});
  }
  const earning=await tx.hostEarning.findUnique({where:{reservationId:id}}),allocation=lossSchema.safeParse((s.settlement as {loss?:unknown}).loss);
+ if(!(await ensureRefundCompatibility(tx,id)).valid){await certifyAccounting(tx,id);return earning;}
  for(const f of r.refunds.filter(f=>f.status==="SUCCEEDED").sort((x,y)=>x.createdAt.getTime()-y.createdAt.getTime()||x.id.localeCompare(y.id))){
   if(await tx.ledgerJournal.findUnique({where:{key:"refund:"+f.id}}))continue;
   const paid=rentals.find(p=>p.id===f.paymentId);if(!paid){await financeIssue(tx,{key:"refund-unmatched:"+f.id,kind:"REFUND_DIFFERENCE",reservationId:id,reason:"Refund lacks succeeded rental evidence"});continue;}

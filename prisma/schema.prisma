@@ -2160,6 +2160,19 @@ model FinanceAdjustment {
  journalId String? @unique
  createdAt DateTime @default(now())
 }
+model RefundCompatibilityEvidence {
+ journalId String @id
+ reservationId String
+ refundId String @unique
+ paymentId String
+ version Int
+ evidenceHash String
+ validationResult String
+ inputs Json
+ openingAllocation Json
+ createdAt DateTime @default(now())
+ @@index([reservationId])
+}
 model FinanceDocument {
  id String @id @default(cuid())
  key String @unique

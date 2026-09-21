@@ -105,6 +105,7 @@ jobs:
         # Read-only security checks run before exercising the application.
         run: |
           git fetch origin c68b12200a36bd3e45f94292047dc03538908a29
+          git fetch origin f0255dc67c3af670c60df9d3238695e5f4d573fb
           node scripts/verify-release.mjs
           npm audit --audit-level=high
           npm test
@@ -113,6 +114,7 @@ jobs:
       - name: Phase 5 corrections and actual deployment upgrades (five consecutive runs)
         run: |
           for run in 1 2 3 4 5; do
+            npm test -- tests/historical-refund-upgrade.test.ts tests/refund-compatibility.test.ts tests/worker-aggregation.test.ts tests/checkout-retry-authority.test.ts || exit 1
             npm test -- tests/phase5-accounting-corrections.test.ts tests/phase5-admin-corrections.test.ts tests/phase5-admission-corrections.test.ts tests/phase5-authority-races.test.ts tests/phase5-worker-corrections.test.ts tests/phase5-content-validation.test.ts tests/phase5-proxy-limit.test.ts tests/phase5-upload-http.test.ts tests/direct-migration.test.ts tests/migration-phase5-exact.test.ts || exit 1
           done
       - name: National authority and financial policy stability (five runs)

@@ -14,8 +14,14 @@ import { recordAgreementAcceptance, AgreementNotReviewedError } from "@/lib/agre
 import { generateAndStoreSignedAgreementPdf } from "@/lib/agreements";
 import { getRequestIp } from "@/lib/auth-code";
 import { verifyDocumentOwnership } from "@/lib/documents";
+import {requireCheckoutAdmission} from "@/lib/admission-authority";
+import {ReleaseGateError} from "@/lib/release-control";
+import {JurisdictionUnavailable} from "@/lib/jurisdiction";
 
 const CHECKOUT_WINDOW_MINUTES = 15;
+class HistoricalCheckoutUnavailable extends Error {}
+async function requireRetryAdmission(tx:Prisma.TransactionClient,id:string){try{await requireCheckoutAdmission(tx,id);}catch(error){if(error instanceof ReleaseGateError||error instanceof JurisdictionUnavailable)throw new HistoricalCheckoutUnavailable();throw error;}}
+const historicalUnavailable=()=>NextResponse.json({success:false,status:"HISTORICAL_CHECKOUT_NOT_ELIGIBLE",historicalCheckout:true,paymentEligible:false,error:"Your historical checkout is retained, but current booking approval does not permit payment or confirmation."},{status:409});
 
 /**
  * Finalizes a checkout hold into a payment-ready reservation: attaches
@@ -55,11 +61,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (reservation.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(reservation.status) || !reservation.expiresAt || reservation.expiresAt <= new Date()) return NextResponse.json({ error: "Checkout unavailable" }, { status: 409 });
   if (reservation.checkoutFingerprint === checkoutFingerprint) {
     try { await withReservationLock(id,async tx=>{
-      await requireReservationJurisdiction(tx,id,"CHECKOUT");
+      await requireRetryAdmission(tx,id);
       const current=await tx.reservation.findUniqueOrThrow({where:{id}});
       if(current.financialDisposition!=="OPEN"||!current.expiresAt||current.expiresAt<=new Date()||!["CHECKOUT_HOLD","AWAITING_PAYMENT"].includes(current.status))throw new Error("Checkout unavailable");
     }); return NextResponse.json({success:true}); }
-    catch { return NextResponse.json({error:"Checkout unavailable"},{status:409}); }
+    catch(error) { return error instanceof HistoricalCheckoutUnavailable?historicalUnavailable():NextResponse.json({error:"Checkout unavailable"},{status:409}); }
   }
   if (reservation.bookingFingerprint && parsed.data.bookingFingerprint !== reservation.bookingFingerprint) return NextResponse.json({ error: "Booking changed; refresh your review." }, { status: 409 });
   if (reservation.status !== "CHECKOUT_HOLD") {
@@ -103,11 +109,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const userAgent = req.headers.get("user-agent");
 
   try {
-    await withReservationLock(id, async (tx) => {
-      await requireReservationJurisdiction(tx,id,"CHECKOUT");
+    const historicalRetry=await withReservationLock(id, async (tx) => {
       const current = await tx.reservation.findUniqueOrThrow({ where: { id } });
       if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout unavailable");
-      if (current.checkoutFingerprint === checkoutFingerprint) return;
+      if (current.checkoutFingerprint === checkoutFingerprint) {await requireRetryAdmission(tx,id);return true;}
+      await requireReservationJurisdiction(tx,id,"CHECKOUT");
       if (current.financialDisposition !== "OPEN" || current.status !== "CHECKOUT_HOLD" || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout hold no longer valid");
       if (current.bookingFingerprint !== reservation.bookingFingerprint) throw new Error("Booking changed concurrently");
       if (!await isVehicleAvailable(current.vehicleId, current.pickupAt, current.returnAt, { tx, excludeReservationId: id })) throw new Error("Vehicle no longer available");
@@ -157,7 +163,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         data: { reservationId: reservation.id, type: "CHECKOUT_COMPLETED", actorId: session.user.id },
       });
     });
+    if(historicalRetry)return NextResponse.json({success:true,historicalCheckout:true,paymentEligible:true});
   } catch (err) {
+    if(err instanceof HistoricalCheckoutUnavailable)return historicalUnavailable();
     if (err instanceof AgreementNotReviewedError) {
       return NextResponse.json({ error: err.message }, { status: 409 });
     }

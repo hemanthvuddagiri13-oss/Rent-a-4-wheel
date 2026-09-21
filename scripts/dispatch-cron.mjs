@@ -11,8 +11,13 @@ export async function dispatchCron(worker,env=process.env,request=fetch){
  if(!env.CRON_SECRET||env.CRON_SECRET.length<32)throw new Error("INVALID_SCHEDULER_SECRET");
  const response=await request(new URL(path,url),{method:"POST",headers:{authorization:"Bearer "+env.CRON_SECRET},redirect:"error",signal:AbortSignal.timeout(300000)});
  // Never emit provider/body data. A non-success exit is actionable by the scheduler.
- await response.body?.cancel();
- if(!response.ok)throw new Error("CRON_HTTP_"+response.status);
+ if(!response.ok){await response.body?.cancel();throw new Error("CRON_HTTP_"+response.status);}
+ // Partial failure is actionable too: schedule another bounded invocation, never
+ // blindly resend REVIEW/uncertain deliveries. Read only a bounded result body.
+ const reader=response.body?.getReader();let text="",bytes=0;
+ if(reader)try{for(;;){const {done,value}=await reader.read();if(done)break;bytes+=value.length;if(bytes>65536)throw new Error("CRON_RESULT_TOO_LARGE");text+=new TextDecoder().decode(value);}}finally{await reader.cancel();}
+ const result=text?JSON.parse(text):{};
+ if(["FAILED","PARTIAL_FAILURE"].includes(result.worker?.status??result.status))throw new Error("CRON_WORKER_"+(result.worker?.status??result.status));
  return {worker,status:response.status};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

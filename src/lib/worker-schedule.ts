@@ -9,6 +9,6 @@ export const WORKER_STALENESS_MINUTES:Record<string,number>={
  "community":10,"operations/scan":10,"operations/delete":15,"operations/agreements":10,
 };
 export async function staleWorkerCount(){
- const rows=await prisma.operationalEvent.groupBy({by:["source"],where:{category:"CRON_COMPLETE",source:{in:Object.keys(WORKER_STALENESS_MINUTES)}},_max:{createdAt:true}});
+ const rows=await prisma.operationalEvent.groupBy({by:["source"],where:{category:{in:["CRON_COMPLETE","CRON_IDLE"]},source:{in:Object.keys(WORKER_STALENESS_MINUTES)}},_max:{createdAt:true}});
  return Object.entries(WORKER_STALENESS_MINUTES).filter(([source,minutes])=>{const last=rows.find(row=>row.source===source)?._max.createdAt;return !last||last.getTime()<Date.now()-minutes*60000;}).length;
 }

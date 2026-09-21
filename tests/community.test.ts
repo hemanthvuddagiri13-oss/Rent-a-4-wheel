@@ -26,14 +26,7 @@ import { POST } from "@/app/api/community/route";
 import { POST as cron } from "@/app/api/cron/community/route";
 const users:string[]=[],hosts:string[]=[],vehicles:string[]=[];
 const one=new PrismaClient(),two=new PrismaClient();
-afterAll(async()=>{
- const cs=await prisma.serviceCase.findMany({where:{openedById:{in:users}}});const ids=cs.map(c=>c.id);
- const conv=await prisma.conversation.findMany({where:{customerId:{in:users}}});const cids=conv.map(c=>c.id);
- const messages=await prisma.conversationMessage.findMany({where:{conversationId:{in:cids}}});
- await prisma.storageDeletionJob.deleteMany({where:{fileId:{in:(await prisma.collaborationFile.findMany({where:{uploadedById:{in:users}}})).map(f=>f.id)}}});
- await prisma.collaborationFile.deleteMany({where:{uploadedById:{in:users}}});
- await prisma.messageRevision.deleteMany({where:{messageId:{in:messages.map(m=>m.id)}}});
- await prisma.conversationMessage.deleteMany({where:{conversationId:{in:cids}}});await prisma.conversationRead.deleteMany({where:{conversationId:{in:cids}}});await prisma.conversation.deleteMany({where:{id:{in:cids}}});
+afterAdeleteMany({where:{conversationId:{in:cids}}});await prisma.conversation.deleteMany({where:{id:{in:cids}}});
  await prisma.serviceCaseEvent.deleteMany({where:{caseId:{in:ids}}});await prisma.serviceCase.updateMany({where:{id:{in:ids}},data:{linkedCaseId:null}});await prisma.serviceCase.deleteMany({where:{id:{in:ids}}});
  const reviews=await prisma.tripReview.findMany({where:{reviewerId:{in:users}}});await prisma.reviewHistory.deleteMany({where:{reviewId:{in:reviews.map(r=>r.id)}}});await prisma.tripReview.deleteMany({where:{id:{in:reviews.map(r=>r.id)}}});
  await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.noticePreference.deleteMany({where:{userId:{in:users}}});await prisma.smsConsent.deleteMany({where:{userId:{in:users}}});
@@ -129,7 +122,9 @@ it("case overrides require an isolated one-use step-up code and never clear fina
 it("HTTP cron executes projections idempotently and never treats email acceptance as in-app authority",async()=>{
  const f=await fixture();process.env.CRON_SECRET="community-route-test";process.env.TWILIO_ACCOUNT_SID="";process.env.TWILIO_AUTH_TOKEN="";process.env.TWILIO_FROM_NUMBER="";
  const event=await prisma.tripEvent.create({data:{reservationId:f.r.id,actorId:f.h.user.id,type:"IDENTITY_HANDOFF_VERIFIED"}});const key="trip-event:"+event.id;expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
- const request=()=>new Request("http://localhost/api/cron/community",{method:"POST",headers:{authorization:"Bearer community-route-test"}});expect((await cron(request())).status).toBe(200);expect((await cron(request())).status).toBe(200);expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
+ const notice=await prisma.inboxNotice.findFirstOrThrow({where:{eventKey:key}});await prisma.channelDelivery.create({data:{noticeId:notice.id,userId:notice.userId,channel:"SMS",state:"REVIEW",errorCode:"PROVIDER_OUTCOME_UNKNOWN"}});
+ const request=()=>new Request("http://localhost/api/cron/community",{method:"POST",headers:{authorization:"Bearer community-route-test"}});
+ for(let i=0;i<2;i++){const response=await cron(request());expect(response.status).toBe(503);expect((await response.json()).worker.children.channels.review).toBeGreaterThanOrEqual(1);}expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
 });
 
 it("a lost private-delete response resumes the exact committed key without reviving the file",async()=>{
