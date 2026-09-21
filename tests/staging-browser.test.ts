@@ -32,7 +32,7 @@ it.skipIf(!enabled)("enforces staging configuration, real database sessions, sec
  await page.getByLabel("One-use security code",{exact:true}).fill("000000");await page.getByRole("button",{name:"Rotate session credential",exact:true}).click();await page.getByRole("status").filter({hasText:"A fresh security code is required."}).waitFor();
  expect((await(await context.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
  expect((await context.request.get(base+"/api/admin/operations")).status()).toBe(403);
- expect((await context.request.post(base+"/api/account/security",{headers:{origin:"https://untrusted.invalid"},data:{action:"revokeAll"}})).status()).toBe(403);
+ const denied=await context.request.post(base+"/api/account/security",{headers:{origin:"https://untrusted.invalid"},data:{action:"revokeAll"}});expect(denied.status()).toBe(403);expect(denied.headers()["cache-control"]).toContain("no-store");expect(denied.headers()["strict-transport-security"]).toContain("max-age=31536000");expect(denied.headers()["content-security-policy"]).toContain("default-src 'none'");
  expect((await context.request.post(base+"/api/account/security",{data:{action:"revokeAll"}})).status()).toBe(403);
  expect((await context.request.post(base+"/api/reservations/synthetic/confirm-dev-payment",{headers:{origin:base},data:{}})).status()).toBe(403);
  for(const route of ["/api/cron/operations/scan","/api/cron/operations/delete","/api/cron/operations/monitor","/api/cron/financial/recovery","/api/cron/payouts/recovery","/api/cron/community","/api/cron/expire-holds"])expect((await context.request.post(base+route)).status(),route).toBe(401);

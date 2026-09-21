@@ -38,3 +38,11 @@ Rollback uses a prior image only after schema compatibility review. Never roll b
 Require encrypted managed PostgreSQL backups and PITR/WAL retention sized by approved RPO/RTO. Protect backup access separately. An isolated restore must verify reservations, provider intents/receipts, ownership, refunds, journals, snapshots, payouts, sessions, files and migration history. Compare balances and unresolved-operation counts before reopening admissions. Revoke restored sessions and leave dispatch disabled until reconciliation completes.
 
 Fresh/populated migration tests are not production backup/PITR evidence. No production restore, capacity limit, RPO/RTO or real infrastructure isolation is claimed by this PR.
+
+### Disposable restore exercise, 2026-09-21
+
+PostgreSQL 17 `pg_dump -Fc` backed up the synthetic local test database after the nine additive Phase 5 migrations. `createdb` created a separate `phase5_restore_20260921` database, and `pg_restore --exit-on-error` restored it without dropping or changing the source. All 100 public tables and 1,442 rows matched the source by count and ordered row-content digest. `btree_gist` was present. The existing `payout_available_funds_nonnegative` NOT VALID constraint remained in the same state as the source; this exercise did not rewrite or validate historical financial constraints.
+
+This proves a logical dump/restore of disposable test data only. It does not prove managed backups, WAL/PITR, production-volume recovery, RPO/RTO or external-provider reconciliation. The dump is outside the repository and is not a deployable artifact.
+
+To repeat in isolated infrastructure: stop test writers, record source table counts/content digests, create a custom-format dump through the direct connection, restore with `--exit-on-error` into a newly created empty database, and compare every table plus extensions/constraints and migration history. Never restore into the live database for this exercise. Disable dispatch and revoke restored sessions before exposing any restored application; reconcile external provider state before considering admissions.

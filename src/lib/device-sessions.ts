@@ -24,7 +24,9 @@ export async function validateDeviceSession(userId: string, sid: string, rotatio
 export async function revokeDeviceSessions(userId: string, sid?: string) {
   return prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
-    if (!await tx.user.count({ where: { id: userId, isActive: true } })) throw new Error("SESSION_UNAVAILABLE");
+    // A suspended account may still sign out with its encrypted cookie. Revocation
+    // must survive later reactivation; removing access never requires active status.
+    if (!await tx.user.count({ where: { id: userId } })) throw new Error("SESSION_UNAVAILABLE");
     const result = await tx.session.updateMany({ where: { userId, ...(sid ? { id: sid } : {}), revokedAt: null }, data: { revokedAt: new Date() } });
     await tx.auditLog.create({ data: { actorId: userId, action: sid ? "security.session.revoked" : "security.sessions.revoked", entityType: "User", entityId: userId, metadata: { count: result.count } } });
     return result.count;

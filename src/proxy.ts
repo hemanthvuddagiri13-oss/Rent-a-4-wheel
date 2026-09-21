@@ -11,17 +11,18 @@ const { auth } = NextAuth(authConfig);
 export default auth(async (req) => {
   const { pathname } = req.nextUrl;
   const deployed = !localDevelopment(), requestId = newRequestId();
+  const reject = (status: number, error: string, extra: Record<string,string> = {}) => NextResponse.json({error,requestId},{status,headers:{...extra,"Cache-Control":"private, no-store","x-request-id":requestId,"Content-Security-Policy":"default-src 'none'; frame-ancestors 'none'",...(deployed?{"Strict-Transport-Security":"max-age=31536000; includeSubDomains"}:{})}});
   const health = pathname === "/api/health/live" || pathname === "/api/health/ready";
-  if (deployed && !health && !productionConfiguration().ready) return NextResponse.json({error:"Service configuration unavailable",requestId},{status:503,headers:{"Cache-Control":"no-store"}});
+  if (deployed && !health && !productionConfiguration().ready) return reject(503,"Service configuration unavailable");
   if (pathname.startsWith("/api/") && !health) {
     const machine = pathname === "/api/webhooks/stripe" || pathname === "/api/community/sms" || pathname.startsWith("/api/cron/");
-    if (!["GET","HEAD","OPTIONS"].includes(req.method) && !machine && !requestOriginAllowed(req)) return NextResponse.json({error:"Invalid request origin",requestId},{status:403});
+    if (!["GET","HEAD","OPTIONS"].includes(req.method) && !machine && !requestOriginAllowed(req)) return reject(403,"Invalid request origin");
     const upload = /\/files$|\/upload$|\/condition-reports$/.test(pathname), limit = upload ? 9*1024*1024 : machine ? 1024*1024 : 24000;
     if (req.body) {
       const reader=req.clone().body!.getReader();let length=0;
-      try {while(true){const part=await reader.read();if(part.done)break;length+=part.value.length;if(length>limit){void reader.cancel();return NextResponse.json({error:"Request too large",requestId},{status:413});}}}finally{reader.releaseLock();}
+      try {while(true){const part=await reader.read();if(part.done)break;length+=part.value.length;if(length>limit){void reader.cancel();return reject(413,"Request too large");}}}finally{reader.releaseLock();}
     }
-    if(deployed&&!machine){try{if(!await sharedRequestLimit(req.headers,pathname.startsWith("/api/auth/")?"auth":"api",pathname.startsWith("/api/auth/")?30:120))return NextResponse.json({error:"Too many requests",requestId},{status:429,headers:{"Retry-After":"60"}});}catch{return NextResponse.json({error:"Service temporarily unavailable",requestId},{status:503});}}
+    if(deployed&&!machine){try{if(!await sharedRequestLimit(req.headers,pathname.startsWith("/api/auth/")?"auth":"api",pathname.startsWith("/api/auth/")?30:120))return reject(429,"Too many requests",{"Retry-After":"60"});}catch{return reject(503,"Service temporarily unavailable");}}
   }
   const isAdminRoute = pathname.startsWith("/admin");
   const isAccountRoute = pathname.startsWith("/account");
