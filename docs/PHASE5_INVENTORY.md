@@ -1,0 +1,79 @@
+# Phase 5 route and environment inventory
+
+Generated from the approved source before security implementation. Identifiers only; no environment values.
+
+## API routes
+- src/app/api/account/profile/route.ts
+- src/app/api/admin/marketplace/route.ts
+- src/app/api/admin/reservations/[id]/emergency-override/route.ts
+- src/app/api/admin/reservations/[id]/return-review/route.ts
+- src/app/api/auth/[...nextauth]/route.ts
+- src/app/api/auth/request-code/route.ts
+- src/app/api/community/cases/[id]/photos/[photoId]/route.ts
+- src/app/api/community/files/[id]/route.ts
+- src/app/api/community/notices/[id]/route.ts
+- src/app/api/community/route.ts
+- src/app/api/community/sms/route.ts
+- src/app/api/contact/route.ts
+- src/app/api/cron/community/route.ts
+- src/app/api/cron/expire-holds/route.ts
+- src/app/api/cron/financial/[worker]/route.ts
+- src/app/api/cron/payouts/[worker]/route.ts
+- src/app/api/documents/[id]/route.ts
+- src/app/api/documents/upload/route.ts
+- src/app/api/finance/documents/[id]/route.ts
+- src/app/api/finance/export/route.ts
+- src/app/api/finance/route.ts
+- src/app/api/host/files/route.ts
+- src/app/api/host/reservations/route.ts
+- src/app/api/host/vehicles/[id]/agreement/route.ts
+- src/app/api/host/vehicles/route.ts
+- src/app/api/host/workspace/route.ts
+- src/app/api/marketplace/files/[id]/route.ts
+- src/app/api/reservations/[id]/agreement/route.ts
+- src/app/api/reservations/[id]/cancel/route.ts
+- src/app/api/reservations/[id]/checkout/route.ts
+- src/app/api/reservations/[id]/condition-reports/[reportId]/accept/route.ts
+- src/app/api/reservations/[id]/condition-reports/route.ts
+- src/app/api/reservations/[id]/confirm-dev-payment/route.ts
+- src/app/api/reservations/[id]/experience/route.ts
+- src/app/api/reservations/[id]/identity-handoff/route.ts
+- src/app/api/reservations/[id]/payment-intent/route.ts
+- src/app/api/reservations/[id]/photos/[photoId]/route.ts
+- src/app/api/reservations/[id]/receipt/route.ts
+- src/app/api/reservations/[id]/resume/route.ts
+- src/app/api/reservations/[id]/retry-deposit/route.ts
+- src/app/api/reservations/[id]/start-trip/route.ts
+- src/app/api/reservations/[id]/status/route.ts
+- src/app/api/reservations/[id]/trip-start-gate/route.ts
+- src/app/api/reservations/hold/route.ts
+- src/app/api/reservations/route.ts
+- src/app/api/vehicles/[id]/quote/route.ts
+- src/app/api/webhooks/stripe/route.ts
+
+## Referenced environment identifiers
+- ALLOW_DEV_PAYMENT_SIMULATION
+- ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV
+- AUTH_URL
+- CLAMAV_HOST
+- CLAMAV_PORT
+- CLOUDINARY_API_KEY
+- CLOUDINARY_API_SECRET
+- CLOUDINARY_CLOUD_NAME
+- CRON_SECRET
+- DATABASE_URL
+- DIRECT_DATABASE_URL
+- EMAIL_FROM
+- FINANCE_SANDBOX_ENABLED
+- NEXT_PUBLIC_SITE_URL
+- NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+- NEXTAUTH_URL
+- NODE_ENV
+- RESEND_API_KEY
+- STRIPE_CONNECT_COUNTRY
+- STRIPE_SECRET_KEY
+- STRIPE_WEBHOOK_SECRET
+- TWILIO_ACCOUNT_SID
+- TWILIO_AUTH_TOKEN
+- TWILIO_FROM_NUMBER
+- TWILIO_INBOUND_URL
