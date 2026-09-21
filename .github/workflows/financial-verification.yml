@@ -77,6 +77,20 @@ jobs:
         run: npx next typegen && npm run typecheck
       - name: Lint
         run: npm run lint
+      - name: Production build
+        run: npm run build
+      - name: Server secrets absent from client artifacts
+        run: node scripts/verify-release.mjs --client
+      - name: Disposable staging TLS
+        env:
+          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: node scripts/configure-ci-tls.mjs
+      - name: Production-build staging browser journeys (twice)
+        env:
+          STAGING_BROWSER: 'true'
+        run: |
+          npm test -- tests/staging-browser.test.ts
+          npm test -- tests/staging-browser.test.ts
       - name: Full suite including populated migration, first run
         # Read-only security checks run before exercising the application.
         run: |
@@ -96,20 +110,6 @@ jobs:
           for run in 1 2 3 4 5; do
             npm test -- tests/phase1-dispatch-concurrency.test.ts tests/batch1f-release-worker.test.ts tests/finance-ledger.test.ts tests/payout-finance.test.ts || exit 1
           done
-      - name: Production build
-        run: npm run build
-      - name: Server secrets absent from client artifacts
-        run: node scripts/verify-release.mjs --client
-      - name: Disposable staging TLS
-        env:
-          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
-        run: node scripts/configure-ci-tls.mjs
-      - name: Production-build staging browser journeys (twice)
-        env:
-          STAGING_BROWSER: 'true'
-        run: |
-          npm test -- tests/staging-browser.test.ts
-          npm test -- tests/staging-browser.test.ts
       - name: Refund accounting and payout races (five runs)
         run: |
           for run in 1 2 3 4 5; do
