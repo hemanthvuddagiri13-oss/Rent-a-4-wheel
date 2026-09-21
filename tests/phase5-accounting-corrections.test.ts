@@ -105,7 +105,11 @@ it.each(["HOST","GUEST","PLATFORM"] as const)("settles %s processing accrual aga
       const p=await prisma.payment.findFirstOrThrow({where:{stripePaymentIntentId:id}});
       return {id,amount:p.amountCents,currency:p.currency,status:"succeeded",latest_charge:{balance_transaction:id===intentId?{id:balanceId,fee:actual,amount:15000,net:15000-actual,currency:"usd",type:"charge",source:"ch_fixture"}:null}};
     });
-    vi.spyOn(financeProvider,"financeStripe").mockReturnValue({paymentIntents:{retrieve},refunds:{retrieve:vi.fn()},transfers:{retrieve:vi.fn()}} as unknown as Stripe);
+    const refundRetrieve=vi.fn(async(id:string)=>{
+      const refund=await prisma.refund.findFirstOrThrow({where:{stripeRefundId:id},include:{payment:true}});
+      return {id,amount:refund.amountCents,currency:refund.payment.currency,status:refund.status.toLowerCase()};
+    });
+    vi.spyOn(financeProvider,"financeStripe").mockReturnValue({paymentIntents:{retrieve},refunds:{retrieve:refundRetrieve},transfers:{retrieve:vi.fn()}} as unknown as Stripe);
     await auditFinanceHistory();await auditFinanceHistory();
     const lines=await prisma.ledgerLine.findMany({where:{journal:{reservationId:f.r.id}}});
     const balance=(account:string)=>lines.filter(l=>l.account===account).reduce((n,l)=>n+l.debitCents-l.creditCents,0);

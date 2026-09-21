@@ -52,6 +52,9 @@ beforeAll(async () => {
   await mkdir(captures, { recursive: true });
   priorHostLegal = await prisma.legalDocument.findUnique({ where: { type: "HOST_AGREEMENT" } });
   priorRentalLegal = await prisma.legalDocument.findUnique({ where: { type: "RENTAL_AGREEMENT" } });
+  // This rejection test needs an explicitly unreviewed document, independent of
+  // legal-authority fixtures retained by other suites or an earlier full run.
+  await prisma.legalDocument.upsert({where:{type:"HOST_AGREEMENT"},create:{type:"HOST_AGREEMENT",title:"Unreviewed browser fixture",content:"Controlled unreviewed terms",version:priorHostLegal?.version||"v1-draft",needsAttorneyReview:true},update:{needsAttorneyReview:true}});
   // Explicit provider-boundary fixture. The app's scanner client and all HTTP,
   // storage, authorization and database paths remain real. This is not a claim
   // that a deployed ClamAV engine or its signature database has been verified.
@@ -182,6 +185,7 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
 }, 180000);
 
 it("completes real customer and host inspection, handoff, start and return journeys without bypassing the gate", async () => {
+  scannerReply = "stream: OK\0";
   const host = await createTestHost(), customer = await createTestCustomer(), outsider = await createTestCustomer();
   users.push(host.user.id, customer.id, outsider.id); hosts.push(host.hostProfile.id);
   const vehicle = await createTestVehicle({ hostId: host.hostProfile.id, securityDepositCents: 0 }); vehicles.push(vehicle.id);

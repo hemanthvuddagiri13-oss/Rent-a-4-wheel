@@ -1,5 +1,5 @@
 import {afterAll,afterEach,it,expect,vi} from "vitest";
-import {prisma,createTestCustomer,createTestHost,createTestVehicle,createTestReservation} from "./helpers/factories";
+import {prisma,createTestCustomer,createTestHost,createTestVehicle,createTestReservation,cleanupReservationsForVehicles} from "./helpers/factories";
 import {fixtureJurisdiction} from "./helpers/jurisdiction-fixture";
 import {hostCommand} from "@/lib/marketplace";
 import {openConversation,messageCommand} from "@/lib/conversations";
@@ -15,7 +15,8 @@ vi.mock("@/lib/stripe",()=>({stripe:null}));
 import {POST as community} from "@/app/api/community/route";
 import {POST as approval} from "@/app/api/admin/marketplace/route";
 import {setVehicleStatus} from "@/app/admin/vehicles/actions";
-afterEach(()=>vi.unstubAllEnvs());afterAll(()=>prisma.$disconnect());
+const pendingFixtureVehicles:string[]=[];
+afterEach(async()=>{vi.unstubAllEnvs();await cleanupReservationsForVehicles(pendingFixtureVehicles.splice(0));});afterAll(()=>prisma.$disconnect());
 
 it.each(["disabled","expired","revoked","missing"] as const)("rejects direct prebooking inquiry API with %s authority and zero business side effects",async(kind)=>{
  const host=await createTestHost(),customer=await createTestCustomer(),v=await createTestVehicle({hostId:host.hostProfile.id,listingApproval:"APPROVED",jurisdictionCode:"OR"});
@@ -68,6 +69,7 @@ it("legacy vehicle status action cannot bypass hosting admission",async()=>{
 
 it.each([0,30000])("retains successful payment and one durable refund when booking closes before confirmation (deposit %i)",async(depositCents)=>{
  const host=await createTestHost(),customer=await createTestCustomer(),v=await createTestVehicle({hostId:host.hostProfile.id,listingApproval:"APPROVED"});
+ pendingFixtureVehicles.push(v.id);
  const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date("2047-01-01"),returnAt:new Date("2047-01-04"),status:"AWAITING_PAYMENT",expiresAt:new Date(Date.now()+600000),depositCents});
  const p=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents,stripePaymentIntentId:"pi_"+crypto.randomUUID()}});
  await prisma.releaseFeature.upsert({where:{key:"booking"},create:{key:"booking",enabled:false},update:{enabled:false}});vi.stubEnv("APP_ENV","staging");
