@@ -3,6 +3,7 @@ import type { DefaultSession } from "next-auth";
 declare module "next-auth" {
   interface Session {
     sessionId?: string;
+    credentialVersion?: number;
     user: {
       id: string;
       role: string;

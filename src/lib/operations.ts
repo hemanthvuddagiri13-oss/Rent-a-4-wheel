@@ -6,6 +6,7 @@ import { readPrivateBytes,deletePrivateBytes } from "@/lib/storage";
 import { safeLog } from "@/lib/safe-log";
 const hash=(s:string|Buffer)=>createHash("sha256").update(s).digest("hex");
 export async function claimOperations(kind:string,db:PrismaClient=prisma){
+ await db.operationsJob.updateMany({where:{kind,state:"RUNNING",attempts:{gte:5},leaseExpiresAt:{lt:new Date()}},data:{state:"REVIEW",lastErrorCode:"LEASE_EXHAUSTED",leaseToken:null,leaseExpiresAt:null}});
  const token=randomUUID();
  return db.$queryRaw<OperationsJob[]>`UPDATE "OperationsJob" SET state='RUNNING',"leaseToken"=${token},"leaseExpiresAt"=CURRENT_TIMESTAMP+interval '2 minutes',attempts=attempts+1,"updatedAt"=CURRENT_TIMESTAMP
  WHERE key IN (SELECT key FROM "OperationsJob" WHERE kind=${kind} AND attempts<5 AND "nextAttemptAt"<=CURRENT_TIMESTAMP AND (state IN ('PENDING','RETRY') OR state='RUNNING' AND "leaseExpiresAt"<CURRENT_TIMESTAMP) ORDER BY "nextAttemptAt","createdAt",key FOR UPDATE SKIP LOCKED LIMIT 10) RETURNING *`;
@@ -17,6 +18,7 @@ async function runScan(job:OperationsJob){
  const key=job.resourceId!;
  const row=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"private:"+key},0))::text`;const current=await tx.privateObject.findUniqueOrThrow({where:{key}});if(["INFECTED","DELETING","DELETED"].includes(current.state))return null;if(!await tx.operationsJob.count({where:{key:job.key,leaseToken:job.leaseToken,state:"RUNNING",leaseExpiresAt:{gt:new Date()}}}))throw new Error("LEASE_LOST");await tx.privateObject.update({where:{key},data:{state:"SCANNING"}});return current;});
  if(!row){await finishOperation(job,"DONE");return;}
+ if(row.writeState!=="STORED")throw new Error("PRIVATE_WRITE_REQUIRES_REVIEW");
  const bytes=await readPrivateBytes(key);if(bytes.length!==row.size||hash(bytes)!==row.sha256)throw new Error("PRIVATE_OBJECT_INTEGRITY");
  const version=await scannerVersion(),result=await scanWithClamAv(bytes);if(result.status==="SCAN_UNAVAILABLE")throw new Error("SCANNER_UNAVAILABLE");
  await prisma.$transaction(async tx=>{
@@ -41,6 +43,6 @@ export async function runOperations(kind:"SCAN"|"DELETE"){
  return {claimed:jobs.length,completed,failed};
 }
 export async function operationalMetrics(){
- const [uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures]=await Promise.all([
- prisma.financialOperation.count({where:{state:{in:["REVIEW","DEAD_LETTER"]}}}),prisma.refund.count({where:{status:"FAILED"}}),prisma.financialOperation.count({where:{kind:"DEPOSIT_RELEASE",state:{notIn:["OBSERVED"]}}}),prisma.financeIssue.count({where:{status:{not:"RESOLVED"}}}),prisma.outboxMessage.count({where:{status:{in:["PENDING","FAILED"]}}}),prisma.operationsJob.count({where:{kind:"SCAN",state:{in:["RETRY","REVIEW"]}}}),prisma.operationsJob.count({where:{kind:"DELETE",state:{in:["RETRY","REVIEW"]}}})]);return {uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures};
+ const [uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures,overdueCases,uncertainWrites]=await Promise.all([
+ prisma.financialOperation.count({where:{state:{in:["REVIEW","DEAD_LETTER"]}}}),prisma.refund.count({where:{status:"FAILED"}}),prisma.financialOperation.count({where:{kind:"DEPOSIT_RELEASE",state:{notIn:["OBSERVED"]}}}),prisma.financeIssue.count({where:{status:{not:"RESOLVED"}}}),prisma.outboxMessage.count({where:{status:{in:["PENDING","FAILED"]}}}),prisma.operationsJob.count({where:{kind:"SCAN",state:{in:["RETRY","REVIEW"]}}}),prisma.operationsJob.count({where:{kind:"DELETE",state:{in:["RETRY","REVIEW"]}}}),prisma.serviceCase.count({where:{state:{not:"CLOSED"},dueAt:{lt:new Date()}}}),prisma.privateObject.count({where:{writeState:{in:["UNCERTAIN","RUNNING"]}}})]);return {uncertain,refunds,deposits,payoutHolds,outbox,scanFailures,deletionFailures,overdueCases,uncertainWrites};
 }

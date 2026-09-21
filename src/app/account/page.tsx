@@ -33,6 +33,7 @@ export default async function AccountPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
       <h1 className="font-display text-3xl font-bold text-white">My Account</h1>
+      <Link href="/account/security" className="inline-block py-3 text-gold-bright underline">Account security and active sessions</Link>
       {user?.isActive && ["FINANCE_AGENT","ADMIN","SUPER_ADMIN"].includes(user.role) && <Link href="/finance/admin" className="inline-block rounded-lg border border-gold/30 px-4 py-3 text-gold-bright">Open financial administration →</Link>}
       <p className="mt-1 text-muted">Welcome back, {user?.name || user?.email}.</p>
 

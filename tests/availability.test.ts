@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { isVehicleAvailable, getAvailableVehicleIds } from "@/lib/availability";
+import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 
 const prisma = new PrismaClient();
 
@@ -8,9 +9,11 @@ let vehicleId: string;
 let otherVehicleId: string;
 
 beforeAll(async () => {
+  await fixtureJurisdiction(prisma);
   const vehicle = await prisma.vehicle.create({
     data: {
       slug: `test-availability-vehicle-${Date.now()}`,
+      jurisdictionCode: "TX",
       vin: `TESTVIN${Date.now()}`,
       licensePlate: "TEST-001",
       year: 2024,
@@ -28,6 +31,7 @@ beforeAll(async () => {
   const otherVehicle = await prisma.vehicle.create({
     data: {
       slug: `test-availability-vehicle-b-${Date.now()}`,
+      jurisdictionCode: "TX",
       vin: `TESTVINB${Date.now()}`,
       licensePlate: "TEST-002",
       year: 2024,

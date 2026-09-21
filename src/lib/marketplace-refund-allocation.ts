@@ -16,7 +16,7 @@ export function marketplaceRefundAllocation(amounts: FinanceTerms["amounts"], ca
   const weights={tax,protection,reserve,host,platformFees,platformCost:remaining};
   const keys=Object.keys(weights) as Array<keyof typeof weights>,total=paid+amounts.platformDiscountCents,budget=cash+discount;
   // Jefferson highest averages is house-monotonic. Start at its lower quotas,
-  // then assign at most one remainder per category using exact rational comparisons.
+  // then assign the remaining cents using exact rational comparisons.
   // Independent rounded shares (or largest remainders) can move pennies backwards.
   const result={...weights};
   for(const key of keys)result[key]=Number(BigInt(budget)*BigInt(weights[key])/BigInt(total));

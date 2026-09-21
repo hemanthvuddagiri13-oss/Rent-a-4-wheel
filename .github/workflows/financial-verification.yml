@@ -78,13 +78,18 @@ jobs:
       - name: Lint
         run: npm run lint
       - name: Full suite including populated migration, first run
-        run: npm test
+        # Read-only security checks run before exercising the application.
+        run: |
+          git fetch origin c68b12200a36bd3e45f94292047dc03538908a29
+          node scripts/verify-release.mjs
+          npm audit --audit-level=high
+          npm test
       - name: Full suite, second run
         run: npm test
       - name: National authority and financial policy stability (five runs)
         run: |
           for run in 1 2 3 4 5; do
-            npm test -- tests/national-jurisdiction.test.ts tests/marketplace-pricing.test.ts tests/production-security.test.ts || exit 1
+            npm test -- tests/national-jurisdiction.test.ts tests/marketplace-pricing.test.ts tests/production-security.test.ts tests/private-storage-provider.test.ts || exit 1
           done
       - name: Dispatch concurrency stability (five consecutive runs)
         run: |
@@ -93,6 +98,18 @@ jobs:
           done
       - name: Production build
         run: npm run build
+      - name: Server secrets absent from client artifacts
+        run: node scripts/verify-release.mjs --client
+      - name: Disposable staging TLS
+        env:
+          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: node scripts/configure-ci-tls.mjs
+      - name: Production-build staging browser journeys (twice)
+        env:
+          STAGING_BROWSER: 'true'
+        run: |
+          npm test -- tests/staging-browser.test.ts
+          npm test -- tests/staging-browser.test.ts
       - name: Refund accounting and payout races (five runs)
         run: |
           for run in 1 2 3 4 5; do
@@ -139,5 +156,12 @@ jobs:
         with:
           name: finance-screenshots
           path: test-artifacts/finance
+          if-no-files-found: warn
+      - name: Staging screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-screenshots
+          path: test-artifacts/staging
           if-no-files-found: warn
 

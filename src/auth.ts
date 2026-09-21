@@ -29,6 +29,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!current?.isActive) session.user = undefined as never;
       else Object.assign(session.user, { id: current.id, role: current.role, email: current.email, name: current.name });
       session.sessionId = current ? params.token.sid : undefined;
+      session.credentialVersion = current ? params.token.rotation : undefined;
       return session;
     },
   },

@@ -18,6 +18,7 @@ import { canAccessAdmin } from "@/lib/rbac";
 import { redirect } from "next/navigation";
 
 const links = [
+  { href: "/admin/operations", label: "Production readiness", icon: Settings },
   { href: "/admin/marketplace", label: "Marketplace operations", icon: Users },
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/vehicles", label: "Vehicles", icon: Car },
@@ -44,7 +45,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
           <p className="mt-1 text-xs uppercase tracking-wide text-gold-bright">Admin</p>
         </div>
         <nav className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-col lg:overflow-visible lg:pb-6">
-          {links.map((link) => (
+          {links.filter(link=>link.href!=="/admin/operations"||session.user.role==="SUPER_ADMIN").map((link) => (
             <Link
               key={link.href}
               href={link.href}

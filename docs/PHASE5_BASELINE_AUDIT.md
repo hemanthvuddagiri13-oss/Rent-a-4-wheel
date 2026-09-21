@@ -4,6 +4,8 @@ Approved main was fetched and verified exactly at c68b12200a36bd3e45f94292047dc0
 
 The local baseline attempted migrate deploy, seed, typecheck, lint, the full suite and build. Typecheck passed. Windows restricted-process execution blocked Prisma/esbuild subprocesses; PostgreSQL recovery also failed checkpoint signaling. The baseline full suite could not establish database/browser results. Build compiled then failed worker rendering. Lint traversed old generated .next-browser-* directories; Phase 5 excludes only those generated outputs, not source/tests. These are not baseline passes. Clean Linux verification of the exact baseline is required before completion.
 
+Subsequent clean Linux CI verified the exact approved baseline successfully in workflow run 35568823230 (baseline job 106235928472), including migrations, seed, typecheck, lint, tests and production build. This resolves the baseline execution blocker; the local attempts above remain recorded as failures rather than retroactively counted as passes.
+
 ## Existing controls and required additions
 
 - Financial operations use durable immutable intents, provider receipts, reservation/host guards, fenced claims and recovery. Payouts require accounting completeness and all-generation bank-movement classification. These invariants must remain intact; launch gates are additional admission controls, never replacements.
