@@ -1,16 +1,20 @@
-import { reservationEvidenceHeld, reservationHeldSql, noticeReservationSql } from "@/lib/reservation-retention";
-import { lockReservation } from "@/lib/financial-locks";
-import { randomUUID } from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { requireReleaseFeature,ReleaseGateError } from "@/lib/release-control";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { deletePrivateDocument } from "@/lib/storage";
-import { afterDays, policy } from "@/lib/collaboration-access";
-import { lockRetentionPolicy,retentionApproved,retentionScopeFilter } from "@/lib/retention-policy";
+import { marketplaceActor, MarketplaceError } from "@/lib/marketplace";
 import {workerResult} from "@/lib/worker-result";
 
-export async function lockFileRetention(tx: Prisma.TransactionClient, fileId: string) {
-  await lockRetentionPolicy(tx);
-  const f = await …12136 tokens truncated…onst data = url + [...new Set(params.keys())].sort().map(key => [...new Set(params.getAll(key))].sort().map(value => key + value).join("")).join("");
+export async function requestSmsConsent(userId: string, phone: string, consent: boolean) {
+  await marketplaceActor(prisma, userId);
+  if (!/^\+[1-9]\d{7,14}$/.test(phone) || !consent) throw new MarketplaceError("Enter an international phone number and explicitly consent to account texts.");
+  // A request alone never authorizes outbound SMS. START from that handset,
+  // authenticated by Twilio's webhook signature, confirms possession/consent.
+  const enrollment = "PENDING:" + randomUUID().replaceAll("-", "").toUpperCase();
+  await prisma.smsConsent.upsert({ where: { userId }, create: { userId, phone, consentAt: new Date(), source: enrollment }, update: { phone, stoppedAt: null, consentAt: new Date(), source: enrollment } });
+  return { success: true };
+}
+export function verifyTwilioSignature(url: string, params: URLSearchParams, signature: string, token: string) {
+  const data = url + [...new Set(params.keys())].sort().map(key => [...new Set(params.getAll(key))].sort().map(value => key + value).join("")).join("");
   const expected = Buffer.from(createHmac("sha1", token).update(data).digest("base64")), actual = Buffer.from(signature);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }

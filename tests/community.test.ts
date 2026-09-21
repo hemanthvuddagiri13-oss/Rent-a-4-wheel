@@ -26,7 +26,14 @@ import { POST } from "@/app/api/community/route";
 import { POST as cron } from "@/app/api/cron/community/route";
 const users:string[]=[],hosts:string[]=[],vehicles:string[]=[];
 const one=new PrismaClient(),two=new PrismaClient();
-afterAdeleteMany({where:{conversationId:{in:cids}}});await prisma.conversation.deleteMany({where:{id:{in:cids}}});
+afterAll(async()=>{
+ const cs=await prisma.serviceCase.findMany({where:{openedById:{in:users}}});const ids=cs.map(c=>c.id);
+ const conv=await prisma.conversation.findMany({where:{customerId:{in:users}}});const cids=conv.map(c=>c.id);
+ const messages=await prisma.conversationMessage.findMany({where:{conversationId:{in:cids}}});
+ await prisma.storageDeletionJob.deleteMany({where:{fileId:{in:(await prisma.collaborationFile.findMany({where:{uploadedById:{in:users}}})).map(f=>f.id)}}});
+ await prisma.collaborationFile.deleteMany({where:{uploadedById:{in:users}}});
+ await prisma.messageRevision.deleteMany({where:{messageId:{in:messages.map(m=>m.id)}}});
+ await prisma.conversationMessage.deleteMany({where:{conversationId:{in:cids}}});await prisma.conversationRead.deleteMany({where:{conversationId:{in:cids}}});await prisma.conversation.deleteMany({where:{id:{in:cids}}});
  await prisma.serviceCaseEvent.deleteMany({where:{caseId:{in:ids}}});await prisma.serviceCase.updateMany({where:{id:{in:ids}},data:{linkedCaseId:null}});await prisma.serviceCase.deleteMany({where:{id:{in:ids}}});
  const reviews=await prisma.tripReview.findMany({where:{reviewerId:{in:users}}});await prisma.reviewHistory.deleteMany({where:{reviewId:{in:reviews.map(r=>r.id)}}});await prisma.tripReview.deleteMany({where:{id:{in:reviews.map(r=>r.id)}}});
  await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.noticePreference.deleteMany({where:{userId:{in:users}}});await prisma.smsConsent.deleteMany({where:{userId:{in:users}}});
