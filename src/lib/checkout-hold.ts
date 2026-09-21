@@ -1,6 +1,7 @@
+import { financeQuote } from "@/lib/finance-rules";
 import { bookingDays } from "@/lib/booking-time";
 import { upgradeBookingFingerprint } from "@/lib/booking-fingerprint";
-import { fingerprint } from "@/lib/financial-operations";
+import { fingerprint, json } from "@/lib/financial-operations";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { Reservation } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -108,15 +109,16 @@ export async function createOrRefreshHold(params: {
 
 
         if (couponCode?.trim() && !coupon) throw new HoldError("Coupon is invalid or unavailable. Remove it or enter a valid code.", 400);
-        const breakdown = calculatePricing({
+        const basePrice = calculatePricing({
           vehicle,
           pickupAt,
           returnAt,
           extras: extras.map((extra) => ({ extra, quantity: 1 })),
           coupon,
-          taxRatePercent: settings.taxRatePercent, bookingTimezone,
+          taxRatePercent: vehicle.location === settings.address ? settings.taxRatePercent : 0, bookingTimezone,
         });
 
+        const {breakdown,terms}=await financeQuote(tx,vehicle,basePrice,customerId);
         const expiresAt = new Date(now.getTime() + HOLD_DURATION_MINUTES * 60 * 1000);
 
         const reservation = await tx.reservation.create({
@@ -154,6 +156,7 @@ export async function createOrRefreshHold(params: {
           },
         });
 
+        await tx.financeQuote.create({data:{reservationId:reservation.id,terms:json(terms)}});
         await tx.tripEvent.create({
           data: { reservationId: reservation.id, type: "CHECKOUT_HOLD_CREATED", actorId: customerId },
         });

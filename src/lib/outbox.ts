@@ -31,6 +31,11 @@ export async function processOutboxOnce(limit = 50, ids?: string[], db: PrismaCl
     });
     if (!claim.count) continue;
     try {
+      if(message.type==="finance_schedule"){
+        const {executeScheduledPayout}=await import("@/lib/payout-workers");
+        await executeScheduledPayout(message.id,token,message.payload,db);
+        processed++;continue;
+      }
       if (message.type !== "notification") throw new Error("Unsupported outbox message");
       const p = message.payload as OutboxNotificationPayload;
       if (!p.type) throw new Error("Missing notification type");

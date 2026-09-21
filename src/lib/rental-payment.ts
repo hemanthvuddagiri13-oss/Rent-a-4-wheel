@@ -1,3 +1,4 @@
+import { freezeFinance } from "@/lib/finance-rules";
 import type Stripe from "stripe";
 import type { FinancialOperation } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -11,6 +12,7 @@ export async function createRentalPayment(reservationId: string, customerId: str
   const operation = await withReservationLock(reservationId, async tx => {
     const r = await tx.reservation.findUniqueOrThrow({ where: { id: reservationId } });
     if (r.customerId !== customerId || r.financialDisposition !== "OPEN" || r.status !== "AWAITING_PAYMENT" || !r.expiresAt || r.expiresAt <= new Date()) throw new Error("Checkout is no longer payable");
+    await freezeFinance(tx,reservationId);
     const payment = await tx.payment.upsert({ where: { idempotencyKey: `rental-${r.id}` }, update: {}, create: { reservationId: r.id, type: "RENTAL", amountCents: r.totalCents, idempotencyKey: `rental-${r.id}` } });
     const existing = await tx.financialOperation.findUnique({ where: { key: `rental-${r.id}` } });
     if (existing) return existing;

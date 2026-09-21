@@ -1,3 +1,4 @@
+import { lockFinanceOperation } from "@/lib/payout-authority";
 import { quarantineOperation } from "@/lib/financial-cases";
 import { safeErrorCode } from "@/lib/safe-log";
 import { createHash, randomUUID } from "node:crypto";
@@ -47,7 +48,8 @@ export async function runOperation<T extends { id: string }>(operation: Financia
 }): Promise<T> {
   const token = randomUUID();
   const claimed = await prisma.$transaction(async tx => {
-    if (operation.reservationId) await lockReservation(tx, operation.reservationId);
+    if (operation.kind.startsWith("FINANCE_")) await lockFinanceOperation(tx,operation);
+    else if (operation.reservationId) await lockReservation(tx, operation.reservationId);
     else { await assertEventFence(tx); await tx.$queryRaw`SELECT financial_guard_xact(${"operation:" + operation.id})`; }
     if (operation.kind === "REFUND") {
       const refund = await tx.refund.findUnique({ where: { idempotencyKey: operation.key } });
@@ -71,10 +73,14 @@ export async function runOperation<T extends { id: string }>(operation: Financia
       observed = await provider.readBeforeDispatch();
       dispatch = provider.requiresDispatch?.(observed) ?? false;
     } else if (claimed.providerId) observed = await provider.retrieve(claimed.providerId);
-    else if (claimed.firstAttemptAt && Date.now() - claimed.firstAttemptAt.getTime() > 23 * 3600000) {
+    else if (claimed.firstAttemptAt && Date.now() - claimed.firstAttemptAt.getTime() > 23 * 3600000 && (!claimed.kind.startsWith("FINANCE_") || await prisma.financialDispatch.count({where:{operationId:claimed.id,phase:"DISPATCHED"}}))) {
       const found = await provider.discover();
       if (!found) throw new UncertainOutcomeError("Provider outcome unknown beyond safe replay window; reconciliation required");
       observed = found;
+    } else if (claimed.kind.startsWith("FINANCE_") && await prisma.financialDispatch.count({where:{operationId:claimed.id,phase:"DISPATCHED"}})) {
+      const found=await provider.discover();
+      if(!found)throw new UncertainOutcomeError("Dispatched finance outcome remains unknown; no new provider call is authorized");
+      observed=found;
     } else if (claimed.kind === "DEPOSIT" && claimed.reservationId && (await prisma.reservation.findUniqueOrThrow({ where: { id: claimed.reservationId } })).financialDisposition !== "OPEN") {
       const found = await provider.discover();
       if (!found) throw new UncertainOutcomeError("Terminated reservation has an unresolved prior deposit attempt");
@@ -85,7 +91,8 @@ export async function runOperation<T extends { id: string }>(operation: Financia
     const polling = claimed.kind === "REFUND" ? !["succeeded", "failed", "canceled"].includes(providerStatus ?? "") : claimed.kind === "RENTAL" || claimed.kind === "DEPOSIT" && !["succeeded", "canceled"].includes(providerStatus ?? "");
     const nextPoll = providerStatus === "requires_capture" ? new Date(Date.now() + 3600000) : new Date(Date.now() + 60000);
     await db.$transaction(async tx => {
-      if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
+      if (claimed.kind.startsWith("FINANCE_")) await lockFinanceOperation(tx,claimed);
+      else if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
       else await assertEventFence(tx);
       const saved = await tx.financialOperation.updateMany({
         where: { id: claimed.id, leaseToken: token, leaseExpiresAt: { gt: new Date() } },
@@ -104,7 +111,8 @@ export async function runOperation<T extends { id: string }>(operation: Financia
     // Includes DB errors after provider success. Never turn uncertainty into a
     // terminal failure or free the reserved refund balance.
     await prisma.$transaction(async tx => {
-      if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
+      if (claimed.kind.startsWith("FINANCE_")) await lockFinanceOperation(tx,claimed);
+      else if (claimed.reservationId) await lockReservation(tx, claimed.reservationId);
       const saved = await tx.financialOperation.updateMany({
       where: { id: claimed.id, leaseToken: token },
       data: { consecutiveFailures: { increment: 1 }, priority: ["REFUND", "DEPOSIT_RELEASE"].includes(claimed.kind) ? 10 : 20, state: error instanceof UncertainOutcomeError || claimed.consecutiveFailures >= 19 ? "REVIEW" : "RETRY", leaseToken: null, leaseExpiresAt: null, nextAttemptAt: new Date(Date.now() + 30000), lastError: safeErrorCode(error) },

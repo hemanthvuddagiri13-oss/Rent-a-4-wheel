@@ -1,0 +1,3 @@
+import { auth } from "@/auth";
+import { readFinanceDocument } from "@/lib/finance-documents";
+export async function GET(_req:Request,{params}:{params:Promise<{id:string}>}){const session=await auth();if(!session?.user)return new Response("Unauthorized",{status:401});try{const d=await readFinanceDocument(session.user.id,(await params).id);return new Response(new Uint8Array(d.pdf),{headers:{"Content-Type":"application/pdf","Content-Disposition":`attachment; filename="${d.kind.toLowerCase()}-v${d.version}.pdf"`,"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'none'; sandbox"}});}catch{return new Response("Not found",{status:404});}}

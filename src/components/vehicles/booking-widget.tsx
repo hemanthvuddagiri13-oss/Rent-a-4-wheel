@@ -25,6 +25,7 @@ export function BookingWidget({ vehicleId, dailyRateCents }: { vehicleId: string
   const [returnTime, setReturnTime] = useState(searchParams.get("returnTime") || "10:00");
 
   const [breakdown, setBreakdown] = useState<PricingBreakdown | null>(null);
+  const [taxWarning,setTaxWarning]=useState<string|null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +52,7 @@ export function BookingWidget({ vehicleId, dailyRateCents }: { vehicleId: string
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Unable to calculate pricing.");
-        setBreakdown(data.breakdown);
+        setBreakdown(data.breakdown);setTaxWarning(data.taxWarning??null);
       } catch (err) {
         if (err instanceof Error && err.name !== "AbortError") {
           setError(err.message);
@@ -150,6 +151,7 @@ export function BookingWidget({ vehicleId, dailyRateCents }: { vehicleId: string
               <span>{formatCurrency(breakdown.taxCents)}</span>
             </div>
           )}
+          {taxWarning&&<p className="text-xs text-amber-200">{taxWarning}</p>}
           {breakdown.feesCents > 0 && (
             <div className="flex justify-between text-muted">
               <span>Fees</span>

@@ -3,7 +3,7 @@ import { isOperator, type ServiceKind } from "@/lib/collaboration-access";
 import { marketplaceActor, MarketplaceError } from "@/lib/marketplace";
 
 // Called under reservation -> case locks, for assignment AND every decision.
-export async function independentCaseActor(tx: Prisma.TransactionClient, c: ServiceCase, userId: string) {
+export async function independentCaseActor(tx: Prisma.TransactionClient, c: Pick<ServiceCase,"id"|"kind"|"reservationId"|"vehicleId"|"openedById">, userId: string) {
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
   const actor = await marketplaceActor(tx, userId);
   if (!isOperator(actor.role, c.kind as ServiceKind)) throw new MarketplaceError("An authorized independent agent is required.",403);

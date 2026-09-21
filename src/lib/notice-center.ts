@@ -1,3 +1,4 @@
+import { financeAdmin } from "@/lib/finance-access";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { enqueueOutboxNotification, noticeCategory } from "@/lib/outbox";
@@ -16,7 +17,10 @@ export async function noticeTarget(userId: string, id: string) {
     const notice = await tx.inboxNotice.findFirst({ where: { id, userId } });
     if (!notice) throw new MarketplaceError("Not found.", 404);
     let target = "/connect";
-    if (notice.resourceType === "CONVERSATION") {
+    if (notice.resourceType === "FINANCE") {
+      await financeAdmin(tx,userId);
+      target = "/finance/admin/reconciliation";
+    } else if (notice.resourceType === "CONVERSATION") {
       await conversationAccess(tx, userId, notice.resourceId);
       target = `/connect/conversations/${notice.resourceId}`;
     } else if (notice.resourceType === "CASE") {

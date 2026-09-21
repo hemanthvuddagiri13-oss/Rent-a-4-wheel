@@ -1,0 +1,2 @@
+"use client";
+export default function ErrorPage({reset}:{reset:()=>void}){return <div className="mx-auto max-w-3xl px-4 py-12"><h1 className="text-2xl text-white">Finance is temporarily unavailable</h1><p className="my-5 text-silver">Your financial records remain saved. Refresh to retrieve the latest confirmed state.</p><button onClick={reset} className="rounded-lg bg-gold px-5 py-3 text-black">Try again</button></div>;}

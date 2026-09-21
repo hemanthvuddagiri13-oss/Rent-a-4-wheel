@@ -1,3 +1,4 @@
+import { isFinanceEvent,handleFinanceEvent } from "@/lib/finance-webhooks";
 import { safeLog } from "@/lib/safe-log";
 import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
@@ -37,7 +38,8 @@ async function dispatchWithFence(params: { eventRecordId: string; leaseToken: st
   const { eventRecordId, leaseToken, event } = params;
 
   try {
-    switch (event.type) {
+    if (isFinanceEvent(event.type)) await handleFinanceEvent(event);
+    else switch (event.type) {
       case "payment_intent.succeeded":
         await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
         break;
