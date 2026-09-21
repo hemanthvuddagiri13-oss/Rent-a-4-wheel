@@ -8,6 +8,8 @@ New deployed retention erasure requires an independent effective PRIVACY_RETENTI
 
 Every route below requires the cron bearer secret. POST is preferred; GET aliases support schedulers. Use the persistent Node deployment and direct database session connection. Jobs process bounded batches, so schedule recurrence and independently alert on scheduler silence.
 
+`deploy/r4w.cron` is an installable schedule example for the persistent Node topology. Its dispatcher reads `SITE_URL` and `CRON_SECRET` from a restricted environment file, requires HTTPS, refuses redirects, sends the secret only in the authorization header and exits nonzero on failed HTTP delivery. Its five-minute request deadline does not cancel already-dispatched provider work; existing leases/fences govern retries. Configure external failure/missed-run alerts before installation. No schedule is installed or production-enabled by this PR. `vercel.json` carries the same worker inventory for environments whose Vercel plan, runtime duration and direct/session connection capabilities have separately passed the deployment checks; its presence is not topology approval.
+
 | Route | Initial cadence | Purpose |
 |---|---|---|
 | `/api/cron/expire-holds` | 1 minute | Expire transient holds; preserve compensation intent |

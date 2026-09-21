@@ -22,7 +22,7 @@
     },
     {
       "path": "/api/cron/financial/historical-audit",
-      "schedule": "0 * * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/community",
@@ -46,7 +46,27 @@
     },
     {
       "path": "/api/cron/payouts/historical-audit",
-      "schedule": "15 * * * *"
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "schedule": "* * * * *",
+      "path": "/api/cron/expire-holds"
+    },
+    {
+      "schedule": "* * * * *",
+      "path": "/api/cron/operations/scan"
+    },
+    {
+      "schedule": "* * * * *",
+      "path": "/api/cron/operations/delete"
+    },
+    {
+      "schedule": "*/2 * * * *",
+      "path": "/api/cron/operations/agreements"
+    },
+    {
+      "schedule": "*/5 * * * *",
+      "path": "/api/cron/operations/monitor"
     }
   ]
 }
