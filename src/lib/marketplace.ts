@@ -1,5 +1,4 @@
-import { requireReleaseFeature } from "@/lib/release-control";
-import { jurisdictionDecision, requireVehicleJurisdiction } from "@/lib/jurisdiction";
+import { releaseAuthorityFence, requireHostingAdmission } from "@/lib/admission-authority";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -29,6 +28,7 @@ export async function marketplaceHost(tx: Prisma.TransactionClient, userId: stri
 }
 
 export async function marketplaceVehicle(tx: Prisma.TransactionClient, userId: string, id: string, manage = false) {
+  await releaseAuthorityFence(tx);
   // Same guard ordering as checkout; never acquire a vehicle row before its guard.
   await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + id})`;
   await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id"=${id} FOR UPDATE`;
@@ -70,9 +70,10 @@ export const listingSchema = z.object({
 export async function saveListing(userId: string, input: unknown) {
   const data = listingSchema.parse(input);
   return prisma.$transaction(async tx => {
+    await releaseAuthorityFence(tx);
     const context = data.id ? await marketplaceVehicle(tx, userId, data.id, true) : await marketplaceHost(tx, userId, true);
     const jurisdictionCode = data.jurisdictionCode ?? context.host.jurisdictionCode;
-    await jurisdictionDecision(tx, jurisdictionCode, "HOSTING");
+    await requireHostingAdmission(tx, {code:jurisdictionCode});
     if (data.ownerId && !await tx.vehicleOwner.findFirst({ where: { id: data.ownerId, hostId: context.host.id } })) throw new MarketplaceError("Choose an owner in your business.");
     const { id, features, ownerId, registrationExpiresAt, insuranceExpiresAt, ...fields } = data;
     const saved = { ...fields, jurisdictionCode, ownerId: ownerId || null, registrationExpiresAt: new Date(registrationExpiresAt), insuranceExpiresAt: new Date(insuranceExpiresAt) };
@@ -91,8 +92,7 @@ export async function saveListing(userId: string, input: unknown) {
 export async function saveHostProfile(userId: string, input: unknown) {
   const data = z.object({ legalName: text, businessName: text, phone: text, addressLine1: text, city: text, state: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/), zip: text }).parse(input);
   return prisma.$transaction(async tx => {
-    await jurisdictionDecision(tx, data.state, "HOSTING");
-    await requireReleaseFeature("hosting", tx, data.state);
+    await requireHostingAdmission(tx, {code:data.state});
     await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
     const user = await marketplaceActor(tx, userId);
     if (!["CUSTOMER", "HOST"].includes(user.role)) throw new MarketplaceError("Only an account owner can apply or edit this profile.", 403);
@@ -146,7 +146,7 @@ export async function hostCommand(userId: string, input: unknown) {
     }
     if (data.action === "unblock") await tx.vehicleBlock.deleteMany({ where: { id: data.id, vehicleId: data.vehicleId } });
     if (data.action === "availability") {
-      if (data.isBookable) await requireVehicleJurisdiction(tx, data.vehicleId, "ACTIVATION");
+      if (data.isBookable) await requireHostingAdmission(tx, {vehicleId:data.vehicleId});
       const vehicle = await tx.vehicle.findUniqueOrThrow({ where: { id: data.vehicleId } });
       if (data.isBookable && (context.host.onboardingStatus !== "APPROVED" || vehicle.listingApproval !== "APPROVED" || vehicle.status !== "ACTIVE")) throw new MarketplaceError("Host and listing approval are required before accepting bookings.", 409);
       await tx.vehicleAvailabilityConfig.upsert({ where: { vehicleId: data.vehicleId }, create: { vehicleId: data.vehicleId, isBookable: data.isBookable }, update: { isBookable: data.isBookable } });

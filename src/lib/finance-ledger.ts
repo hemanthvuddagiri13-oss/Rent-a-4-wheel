@@ -5,10 +5,11 @@ import { lockReservation } from "@/lib/financial-locks";
 import { prisma } from "@/lib/prisma";
 import { certifyAccounting } from "@/lib/finance-completeness";
 import { transferMayHaveMoved } from "@/lib/payout-movement";
-import { marketplaceRefundAllocation } from "@/lib/marketplace-refund-allocation";
+import { additionalMarketplaceRefund } from "@/lib/marketplace-refund-allocation";
+import { projectProcessingFees } from "@/lib/processing-fees";
 
 export type LedgerPosting={account:string;debitCents?:number;creditCents?:number};
-export async function journal(tx:Prisma.TransactionClient,input:{key:string;kind:string;currency:string;reservationId?:string|null;hostId?:string|null;operationId?:string|null;providerId?:string|null;reversalOf?:string;description:string;lines:LedgerPosting[]}) {
+export async function journal(tx:Prisma.TransactionClient,input:{key:string;kind:string;currency:string;reservationId?:string|null;hostId?:string|null;operationId?:string|null;providerId?:string|null;reversalOf?:string;description:string;allocationEvidence?:Prisma.InputJsonValue;lines:LedgerPosting[]}) {
  const lines=input.lines.filter(l=>(l.debitCents??0)+(l.creditCents??0)>0).map(l=>({account:l.account,debitCents:l.debitCents??0,creditCents:l.creditCents??0}));
  if(lines.length<2||lines.some(l=>!Number.isSafeInteger(l.debitCents)||!Number.isSafeInteger(l.creditCents)||l.debitCents<0||l.creditCents<0||l.debitCents&&l.creditCents)||lines.reduce((n,l)=>n+l.debitCents-l.creditCents,0)!==0)throw new Error("Unbalanced journal");
  await tx.$queryRaw`SELECT financial_guard_xact(${"journal:"+input.key})`;
@@ -61,20 +62,22 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
   const batch=batchItem?await tx.payoutBatch.findUniqueOrThrow({where:{id:batchItem.batchId}}):null;
   const sent=batch?await transferMayHaveMoved(tx,batch.id):false;
   if((s.commission as {engine?:string}).engine==="MARKETPLACE_V1"){
-   const target=marketplaceRefundAllocation(a,cumulative,paid.amountCents,allocation.data.refundHostBps,earning?earning.netCents+earning.adjustmentCents:0);
    const previous=(accounts:string[])=>priorRefunds.flatMap(j=>j.lines).filter(l=>accounts.includes(l.account)).reduce((n,l)=>n+l.debitCents-l.creditCents,0);
+   const prior={tax:previous(["TAX_PAYABLE"]),protection:previous(["PROTECTION_PAYABLE"]),reserve:previous(["HOST_RISK_RESERVE_PAYABLE"]),host:previous(["HOST_PAYABLE","HOST_RECEIVABLE"]),platformFees:previous(["UNSETTLED_PLATFORM_FEES"]),platformCost:previous(["PLATFORM_REFUND_COST"]),discount:-previous(["PLATFORM_DISCOUNTS"])};
+   const availableHost=earning?Math.max(0,earning.netCents+earning.adjustmentCents-earning.refundedCents):0;
+   const delta=additionalMarketplaceRefund(a,cumulative,paid.amountCents,allocation.data.refundHostBps,prior,availableHost);
    const allocationLines:LedgerPosting[]=[
-    {account:"TAX_PAYABLE",debitCents:target.tax-previous(["TAX_PAYABLE"])},
-    {account:"PROTECTION_PAYABLE",debitCents:target.protection-previous(["PROTECTION_PAYABLE"])},
-    {account:"HOST_RISK_RESERVE_PAYABLE",debitCents:target.reserve-previous(["HOST_RISK_RESERVE_PAYABLE"])},
-    {account:sent?"HOST_RECEIVABLE":"HOST_PAYABLE",debitCents:target.host-previous(["HOST_PAYABLE","HOST_RECEIVABLE"])},
-    {account:"UNSETTLED_PLATFORM_FEES",debitCents:target.platformFees-previous(["UNSETTLED_PLATFORM_FEES"])},
-    {account:"PLATFORM_REFUND_COST",debitCents:target.platformCost-previous(["PLATFORM_REFUND_COST"])},
-    {account:"PLATFORM_DISCOUNTS",creditCents:target.discount+previous(["PLATFORM_DISCOUNTS"])},
+    {account:"TAX_PAYABLE",debitCents:delta.tax},
+    {account:"PROTECTION_PAYABLE",debitCents:delta.protection},
+    {account:"HOST_RISK_RESERVE_PAYABLE",debitCents:delta.reserve},
+    {account:sent?"HOST_RECEIVABLE":"HOST_PAYABLE",debitCents:delta.host},
+    {account:"UNSETTLED_PLATFORM_FEES",debitCents:delta.platformFees},
+    {account:"PLATFORM_REFUND_COST",debitCents:delta.platformCost},
+    {account:"PLATFORM_DISCOUNTS",creditCents:delta.discount},
     {account:"STRIPE_CLEARING",creditCents:f.amountCents},
    ];
-   await journal(tx,{key:"refund:"+f.id,kind:"REFUND",currency:paid.currency,reservationId:id,hostId:s.hostId,providerId:f.stripeRefundId,description:"Refund allocated from frozen marketplace policy and pass-through liabilities",lines:allocationLines});
-   const hostDelta=target.host-previous(["HOST_PAYABLE","HOST_RECEIVABLE"]);
+   await journal(tx,{key:"refund:"+f.id,kind:"REFUND",currency:paid.currency,reservationId:id,hostId:s.hostId,providerId:f.stripeRefundId,description:"Refund allocated from frozen marketplace policy and pass-through liabilities",allocationEvidence:json({version:1,snapshotHash:s.contentHash,refundId:f.id,paymentId:paid.id,cumulative,prior,availableHost,delta}),lines:allocationLines});
+   const hostDelta=delta.host;
    if(earning&&hostDelta){await tx.hostEarning.update({where:{id:earning.id},data:{refundedCents:{increment:hostDelta}}});earning.refundedCents+=hostDelta;}
    if(batch&&hostDelta)await financeIssue(tx,{key:"refund-recovery:"+f.id,kind:sent?"POST_PAYOUT_REFUND":"BATCH_CHANGED",reservationId:id,hostId:s.hostId??undefined,reason:"Frozen marketplace refund changes batch entitlement; reconcile before movement",evidence:json({batchId:batch.id,refundId:f.id,hostCents:hostDelta,reverseTransfers:allocation.data.reverseTransfers})});
    continue;
@@ -101,11 +104,12 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string){
   const release=await tx.financialOperation.findFirst({where:{reservationId:id,kind:"DEPOSIT_RELEASE",providerId:target,state:"OBSERVED",result:{path:["status"],equals:"canceled"}}});
   if(release){const original=await tx.ledgerJournal.findUniqueOrThrow({where:{key}});if(!await tx.ledgerJournal.findUnique({where:{key:"deposit-release:"+target}}))await reverseJournal(tx,original.id,"deposit-release:"+target,"Security authorization released");}
  }
+ await projectProcessingFees(tx,id);
  await certifyAccounting(tx,id);
  return earning;
 }
 export async function reconcileAccounting(limit=25){
- const rows=await prisma.$queryRaw<Array<{id:string}>>`SELECT r.id FROM "Reservation" r WHERE NOT EXISTS(SELECT 1 FROM "FinanceIssue" i WHERE i."reservationId"=r.id AND i.kind IN ('PAYMENT_DIFFERENCE','ACCOUNTING_REVIEW','REFUND_DIFFERENCE') AND i.status<>'RESOLVED') AND (EXISTS(SELECT 1 FROM "HostEarning" e WHERE e."reservationId"=r.id) OR EXISTS(SELECT 1 FROM "Payment" p WHERE p."reservationId"=r.id AND p.type IN ('RENTAL','ADDITIONAL_CHARGE','DEPOSIT_CAPTURE') AND p.status='SUCCEEDED' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='payment:'||p.id)) OR EXISTS(SELECT 1 FROM "Refund" f WHERE f."reservationId"=r.id AND f.status='SUCCEEDED' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='refund:'||f.id)) OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND o.kind='DEPOSIT' AND o."providerId" IS NOT NULL AND o.result->>'status'='requires_capture' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-auth:'||o."providerId")) OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND o.kind='DEPOSIT_RELEASE' AND o.state='OBSERVED' AND o.result->>'status'='canceled' AND EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-auth:'||o."providerId") AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-release:'||o."providerId"))) ORDER BY (SELECT c."updatedAt" FROM "AccountingCheckpoint" c WHERE c."reservationId"=r.id) ASC NULLS FIRST,r.id LIMIT ${limit}`;
+ const rows=await prisma.$queryRaw<Array<{id:string}>>`SELECT r.id FROM "Reservation" r WHERE NOT EXISTS(SELECT 1 FROM "FinanceIssue" i WHERE i."reservationId"=r.id AND i.kind IN ('PAYMENT_DIFFERENCE','ACCOUNTING_REVIEW','REFUND_DIFFERENCE') AND i.status<>'RESOLVED') AND (EXISTS(SELECT 1 FROM "ProviderFeeEvidence" f WHERE f."reservationId"=r.id AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='stripe-fee:'||f."providerId")) OR EXISTS(SELECT 1 FROM "HostEarning" e WHERE e."reservationId"=r.id) OR EXISTS(SELECT 1 FROM "Payment" p WHERE p."reservationId"=r.id AND p.type IN ('RENTAL','ADDITIONAL_CHARGE','DEPOSIT_CAPTURE') AND p.status='SUCCEEDED' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='payment:'||p.id)) OR EXISTS(SELECT 1 FROM "Refund" f WHERE f."reservationId"=r.id AND f.status='SUCCEEDED' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='refund:'||f.id)) OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND o.kind='DEPOSIT' AND o."providerId" IS NOT NULL AND o.result->>'status'='requires_capture' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-auth:'||o."providerId")) OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND o.kind='DEPOSIT_RELEASE' AND o.state='OBSERVED' AND o.result->>'status'='canceled' AND EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-auth:'||o."providerId") AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-release:'||o."providerId"))) ORDER BY (SELECT c."updatedAt" FROM "AccountingCheckpoint" c WHERE c."reservationId"=r.id) ASC NULLS FIRST,r.id LIMIT ${limit}`;
  let processed=0;for(const r of rows)try{await prisma.$transaction(async tx=>{await lockReservation(tx,r.id);await accountReservation(tx,r.id);},{timeout:15000});processed++;}catch{await financeIssue(prisma,{key:"accounting-error:"+r.id,kind:"ACCOUNTING_REVIEW",reservationId:r.id,reason:"Accounting projection requires investigation"});}
  return {processed};
 }

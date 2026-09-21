@@ -1,3 +1,4 @@
+import {AdminMutationFields} from "@/components/admin/admin-mutation-fields";
 import type { Metadata } from "next";
 import { getSiteSettings } from "@/lib/settings";
 import { Input } from "@/components/ui/input";
@@ -104,6 +105,7 @@ export default async function AdminSettingsPage() {
           </div>
         </div>
 
+        <AdminMutationFields />
         <Button type="submit" size="lg">
           Save Settings
         </Button>

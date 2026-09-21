@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import type { LegalDocumentType, Prisma } from "@prisma/client";
 import { requireReservationJurisdiction, requireVehicleJurisdiction } from "@/lib/jurisdiction";
 import { requireReleaseFeature } from "@/lib/release-control";
+import {releaseAuthorityFence} from "@/lib/admission-authority";
+import {lockReservation} from "@/lib/financial-locks";
 
 export class AgreementNotReviewedError extends Error {
   constructor(type: LegalDocumentType) {
@@ -44,6 +46,9 @@ export async function recordAgreementAcceptance(
     userAgent: string | null;
   }
 ) {
+  await releaseAuthorityFence(tx);
+  if(params.reservationId)await lockReservation(tx,params.reservationId);
+  else if(params.vehicleId){await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+params.vehicleId})`;await tx.$queryRaw`SELECT id FROM "Vehicle" WHERE id=${params.vehicleId} FOR UPDATE`;}
   // Approval is scoped to the subject's operating jurisdiction, never a default state.
   if(params.reservationId){const scope=await requireReservationJurisdiction(tx,params.reservationId,"CHECKOUT");await requireReleaseFeature("booking",tx,scope.code);}
   else if(params.vehicleId){const scope=await requireVehicleJurisdiction(tx,params.vehicleId,"HOSTING");await requireReleaseFeature("hosting",tx,scope.code);}

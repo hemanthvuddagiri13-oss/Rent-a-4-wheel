@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/utils";
 import { BLOCKING_RESERVATION_STATUSES } from "@/lib/reservation-state-machine";
+import {releaseAuthorityFence,requireHostingAdmission} from "@/lib/admission-authority";
+import {marketplaceActor} from "@/lib/marketplace";
 import type { VehicleCategory, Transmission, FuelType, VehicleStatus, OwnershipType } from "@prisma/client";
 
 async function requireAdmin() {
@@ -39,8 +41,14 @@ export async function createVehicle(formData: FormData) {
 
   const imageUrls = parseImageUrls(String(formData.get("imageUrls") ?? ""));
 
-  const vehicle = await prisma.vehicle.create({
+  await prisma.$transaction(async tx=>{
+  await releaseAuthorityFence(tx);
+  if(!canAccessAdmin((await marketplaceActor(tx,session.user.id)).role))throw new Error("Forbidden");
+  const jurisdictionCode=String(formData.get("jurisdictionCode")??"").trim().toUpperCase();
+  await requireHostingAdmission(tx,{code:jurisdictionCode});
+  const vehicle = await tx.vehicle.create({
     data: {
+      jurisdictionCode,
       slug,
       vin: String(formData.get("vin")),
       licensePlate: String(formData.get("licensePlate")),
@@ -74,8 +82,9 @@ export async function createVehicle(formData: FormData) {
     },
   });
 
-  await prisma.auditLog.create({
+  await tx.auditLog.create({
     data: { actorId: session.user.id, action: "vehicle.create", entityType: "Vehicle", entityId: vehicle.id },
+  });
   });
 
   revalidatePath("/admin/vehicles");
@@ -88,6 +97,10 @@ export async function updateVehicle(vehicleId: string, formData: FormData) {
   const imageUrls = parseImageUrls(String(formData.get("imageUrls") ?? ""));
 
   await prisma.$transaction(async (tx) => {
+    await releaseAuthorityFence(tx);
+    await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+vehicleId})`;
+    if(!canAccessAdmin((await marketplaceActor(tx,session.user.id)).role))throw new Error("Forbidden");
+    if(formData.get("status")==="ACTIVE")await requireHostingAdmission(tx,{vehicleId});
     await tx.vehicle.update({
       where: { id: vehicleId },
       data: {
@@ -140,9 +153,15 @@ export async function updateVehicle(vehicleId: string, formData: FormData) {
 
 export async function setVehicleStatus(vehicleId: string, status: VehicleStatus) {
   const session = await requireAdmin();
-  await prisma.vehicle.update({ where: { id: vehicleId }, data: { status } });
-  await prisma.auditLog.create({
+  await prisma.$transaction(async tx=>{
+  await releaseAuthorityFence(tx);
+  await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+vehicleId})`;
+  if(!canAccessAdmin((await marketplaceActor(tx,session.user.id)).role))throw new Error("Forbidden");
+  if(status==="ACTIVE")await requireHostingAdmission(tx,{vehicleId});
+  await tx.vehicle.update({ where: { id: vehicleId }, data: { status } });
+  await tx.auditLog.create({
     data: { actorId: session.user.id, action: "vehicle.status_change", entityType: "Vehicle", entityId: vehicleId, metadata: { status } },
+  });
   });
   revalidatePath("/admin/vehicles");
 }

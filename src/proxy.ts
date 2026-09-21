@@ -5,6 +5,7 @@ import { canAccessAdmin } from "@/lib/rbac";
 import { localDevelopment } from "@/lib/deployment-environment";
 import { productionConfiguration } from "@/lib/production-config";
 import { newRequestId, requestOriginAllowed, sharedRequestLimit } from "@/lib/security-request";
+import {requestBodyLimit} from "@/lib/request-body-policy";
 
 const { auth } = NextAuth(authConfig);
 
@@ -17,7 +18,7 @@ export default auth(async (req) => {
   if (pathname.startsWith("/api/") && !health) {
     const machine = pathname === "/api/webhooks/stripe" || pathname === "/api/community/sms" || pathname.startsWith("/api/cron/");
     if (!["GET","HEAD","OPTIONS"].includes(req.method) && !machine && !requestOriginAllowed(req)) return reject(403,"Invalid request origin");
-    const upload = /\/files$|\/upload$|\/condition-reports$/.test(pathname), limit = upload ? 9*1024*1024 : machine ? 1024*1024 : 24000;
+    const limit=requestBodyLimit(pathname,req.headers.get("content-type"),machine);
     if (req.body) {
       const reader=req.clone().body!.getReader();let length=0;
       try {while(true){const part=await reader.read();if(part.done)break;length+=part.value.length;if(length>limit){void reader.cancel();return reject(413,"Request too large");}}}finally{reader.releaseLock();}

@@ -6,6 +6,8 @@ import { createPayoutBatch,executeFinanceOperation,planBankPayout,synchronizeCon
 import { payoutSchema,selectedRule } from "@/lib/finance-rules";
 import { financeStripe } from "@/lib/finance-provider";
 import { withReservationLock } from "@/lib/financial-locks";
+import { retainProcessingFee } from "@/lib/processing-fees";
+import { accountReservation } from "@/lib/finance-ledger";
 
 export function nextPayoutCutoff(schedule:string,zone:string,now=new Date()){
  let date=Temporal.Instant.from(now.toISOString()).toZonedDateTimeISO(zone).toPlainDate();
@@ -45,7 +47,7 @@ export async function auditFinanceHistory(){
   const intent=await stripe.paymentIntents.retrieve(p.stripePaymentIntentId!,{expand:["latest_charge.balance_transaction"]});
   if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded"))await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});
   const charge=typeof intent.latest_charge==="object"?intent.latest_charge:null,balance=charge&&typeof charge.balance_transaction==="object"?charge.balance_transaction:null;
-  if(balance&&balance.fee>0){const {journal}=await import("@/lib/finance-ledger");await withReservationLock(r.id,tx=>journal(tx,{key:"stripe-fee:"+balance.id,kind:"STRIPE_FEE",currency:balance.currency,reservationId:r.id,providerId:balance.id,description:"Provider-reported processing fee",lines:[{account:"STRIPE_FEE_EXPENSE",debitCents:balance.fee},{account:"STRIPE_CLEARING",creditCents:balance.fee}]}));}
+  if(balance&&p.status==="SUCCEEDED"&&p.type!=="DEPOSIT_AUTH"){await retainProcessingFee(p.id,balance);await withReservationLock(r.id,tx=>accountReservation(tx,r.id));}
  }
  for(const refund of r.refunds.filter(f=>f.stripeRefundId)){
   const actual=await stripe.refunds.retrieve(refund.stripeRefundId!);

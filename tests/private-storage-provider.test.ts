@@ -8,9 +8,18 @@ import {runOperations} from "@/lib/operations";
 import {prisma,createTestCustomer} from "./helpers/factories";
 import {importLegacyPrivateObject} from "@/lib/legacy-private-import";
 import {barrier} from "./helpers/barrier";
+import sharp from "sharp";
+import {createDeviceSession} from "@/lib/device-sessions";
+import {adminExecution} from "@/lib/protected-admin";
+import {PDFDocument} from "pdf-lib";
+import {NextRequest} from "next/server";
+const authState=vi.hoisted(()=>({user:null as null|{id:string;role:string}}));
+vi.mock("@/auth",()=>({auth:async()=>authState.user?{user:authState.user}:null}));
+import {GET as downloadDocument} from "@/app/api/documents/[id]/route";
+async function executionFor(userId:string){const s=await createDeviceSession(userId);return adminExecution({user:{id:userId},sessionId:s.sid,credentialVersion:s.rotation},new Headers({origin:new URL(process.env.SITE_URL??process.env.AUTH_URL??process.env.NEXTAUTH_URL??"http://localhost:3000").origin}));}
 let server:Server,scanner:ScannerServer,endpoint:string,scannerPort:string;
 let publicBucket=false,encrypted=true,malware=false,putFailure=false,deleteFailure=false,puts=0;
-let scannerUnavailable=false;
+let scannerUnavailable=false,reads=0;
 const scannerSockets=new Set<Socket>();
 let putEntered:ReturnType<typeof barrier>|null=null,putRelease:ReturnType<typeof barrier>|null=null;
 const objects=new Map<string,Buffer>(),deleted:string[]=[],kms="arn:aws:kms:us-east-1:000000000000:key/synthetic";
@@ -31,7 +40,7 @@ beforeAll(async()=>{
    expect(req.headers["if-none-match"]).toBe("*");expect(req.headers["x-amz-server-side-encryption"]).toBe("aws:kms");objects.set(key,Buffer.concat(chunks));res.statusCode=200;return res.end();
   }
   if(req.method==="DELETE"){if(deleteFailure){res.statusCode=503;return res.end("<Error><Code>ServiceUnavailable</Code></Error>");}expect(url.searchParams.get("versionId")).toBe("v1");deleted.push(key);objects.delete(key);res.statusCode=204;return res.end();}
-  const bytes=objects.get(key);if(!bytes){res.statusCode=404;return res.end("<Error><Code>NoSuchKey</Code></Error>");}
+  reads++;const bytes=objects.get(key);if(!bytes){res.statusCode=404;return res.end("<Error><Code>NoSuchKey</Code></Error>");}
   res.setHeader("Content-Type","application/octet-stream");res.setHeader("Content-Length",bytes.length);res.setHeader("x-amz-server-side-encryption",encrypted?"aws:kms":"AES256");res.setHeader("x-amz-server-side-encryption-aws-kms-key-id",kms);res.end(bytes);
  });
  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));endpoint="http://127.0.0.1:"+(server.address() as {port:number}).port;
@@ -82,14 +91,45 @@ it("fails closed on an unavailable scanner, exhausts bounded retries into review
  expect((await prisma.operationsJob.findUniqueOrThrow({where:{key}})).state).toBe("DONE");expect((await readPrivateDocument(stored.storageKey)).buffer.toString()).toBe("scanner outage fixture");
 });
 it("imports only attached legacy bytes with matching evidence and fresh reauthentication, then releases quarantine through scanning",async()=>{
- configure();const admin=await createTestCustomer({role:"SUPER_ADMIN"}),owner=await createTestCustomer(),bytes=Buffer.from("synthetic legacy identity bytes"),key="s3:"+randomUUID()+".png";
- await putS3Private(key,bytes,"image/png");const document=await prisma.driverDocument.create({data:{userId:owner.id,type:"LICENSE_FRONT",storageKey:key,mimeType:"image/png",fileSizeBytes:bytes.length,contentSha256:sha(bytes.toString()),malwareScanStatus:"QUARANTINED"}});
- const input={action:"importLegacyObject",resourceType:"IDENTITY",resourceId:document.id,sha256:document.contentSha256,size:bytes.length,mimeType:"image/png",code:"123456",reason:"Controlled legacy import fixture with verified provider inventory"};
- await expect(importLegacyPrivateObject(admin.id,input)).rejects.toThrow("REAUTHENTICATION");
+ configure();const admin=await createTestCustomer({role:"SUPER_ADMIN"}),owner=await createTestCustomer(),bytes=await sharp({create:{width:100,height:100,channels:3,background:"blue"}}).withMetadata().png().toBuffer(),key="s3:"+randomUUID()+".png",execution=await executionFor(admin.id);
+ await putS3Private(key,bytes,"image/png");const document=await prisma.driverDocument.create({data:{userId:owner.id,type:"LICENSE_FRONT",storageKey:key,mimeType:"image/png",fileSizeBytes:bytes.length,contentSha256:createHash("sha256").update(bytes).digest("hex"),malwareScanStatus:"QUARANTINED"}});
+ const input={action:"importLegacyObject",resourceType:"IDENTITY",resourceId:document.id,sha256:document.contentSha256,size:bytes.length,mimeType:"image/png",code:"123456",confirm:true,reason:"Controlled legacy import fixture with verified provider inventory"};
+ const beforeReads=reads;
+ await expect(importLegacyPrivateObject(admin.id,input,execution)).rejects.toThrow("ADMIN_MUTATION_REFUSED");
+ expect(reads).toBe(beforeReads);
  const {hash:codeHash}=await import("bcryptjs");async function authorize(){await prisma.authCode.create({data:{email:admin.email,purpose:"SECURITY_STEP_UP",codeHash:await codeHash("123456",4),expiresAt:new Date(Date.now()+60000)}});}
- await authorize();await expect(importLegacyPrivateObject(admin.id,{...input,sha256:"0".repeat(64)})).rejects.toThrow("EVIDENCE_MISMATCH");expect(await prisma.privateObject.findUnique({where:{key}})).toBeNull();
- await authorize();expect(await importLegacyPrivateObject(admin.id,input)).toEqual({quarantined:true,held:true});
+ await authorize();await expect(importLegacyPrivateObject(admin.id,{...input,sha256:"0".repeat(64)},execution)).rejects.toThrow("ADMIN_MUTATION_REFUSED");expect(await prisma.privateObject.findUnique({where:{key}})).toBeNull();
+ await authorize();expect(await importLegacyPrivateObject(admin.id,input,execution)).toEqual({quarantined:true,held:true});
  expect((await prisma.privateObject.findUniqueOrThrow({where:{key}}))).toMatchObject({hold:true,state:"QUARANTINED",writeState:"STORED"});await expect(readPrivateDocument(key)).rejects.toThrow("NOT_CLEAN");
- await prisma.operationsJob.update({where:{key:"scan:"+sha(key)},data:{nextAttemptAt:new Date(0)}});await runOperations("SCAN");expect((await prisma.driverDocument.findUniqueOrThrow({where:{id:document.id}})).malwareScanStatus).toBe("CLEAN");expect((await readPrivateDocument(key)).buffer).toEqual(bytes);
- await expect(deletePrivateDocument(key)).rejects.toThrow("HELD");await authorize();await expect(importLegacyPrivateObject(admin.id,input)).rejects.toThrow("EXISTING_MANIFEST");
+ const validation=await prisma.privateValidation.findUniqueOrThrow({where:{sourceKey:key}});
+ await prisma.operationsJob.update({where:{key:"scan:"+sha(validation.targetKey)},data:{nextAttemptAt:new Date(0)}});await runOperations("SCAN");expect((await prisma.driverDocument.findUniqueOrThrow({where:{id:document.id}})).malwareScanStatus).toBe("CLEAN");const clean=(await readPrivateDocument(key)).buffer;expect(clean).toEqual(Buffer.from(validation.bytes));expect((await sharp(clean).metadata()).exif).toBeUndefined();
+ authState.user={id:admin.id,role:"CUSTOMER"};const unauthorizedReads=reads;
+ expect((await downloadDocument(new NextRequest("http://localhost/api/documents/"+document.id),{params:Promise.resolve({id:document.id})})).status).toBe(403);expect(reads).toBe(unauthorizedReads);
+ authState.user={id:owner.id,role:"CUSTOMER"};const downloaded=await downloadDocument(new NextRequest("http://localhost/api/documents/"+document.id),{params:Promise.resolve({id:document.id})});
+ expect(downloaded.status).toBe(200);expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(clean);
+ expect(await prisma.documentAccessLog.count({where:{documentId:document.id,accessedById:owner.id}})).toBe(1);
+ await expect(prisma.privateValidation.update({where:{sourceKey:key},data:{bytes:Buffer.from("tamper")}})).rejects.toThrow("immutable");
+ await expect(deletePrivateDocument(key)).rejects.toThrow("HELD");await authorize();const before=puts;await importLegacyPrivateObject(admin.id,input,execution);expect(puts).toBe(before);
+});
+
+it("validates a permitted legacy PDF and refuses ambiguous resource aliases before storage reads",async()=>{
+ configure();const admin=await createTestCustomer({role:"SUPER_ADMIN"}),host=await createTestCustomer({role:"HOST"});
+ const profile=await prisma.hostProfile.create({data:{userId:host.id,legalName:"Synthetic Provider"}}),doc=await PDFDocument.create();doc.addPage([200,200]);const bytes=Buffer.from(await doc.save({useObjectStreams:false})),key="s3:"+randomUUID()+".pdf";
+ await putS3Private(key,bytes,"application/pdf");
+ const file=await prisma.marketplaceFile.create({data:{hostId:profile.id,uploadedById:host.id,purpose:"INSURANCE",storageKey:key,mimeType:"application/pdf",sha256:createHash("sha256").update(bytes).digest("hex"),scanStatus:"QUARANTINED"}});
+ const input={action:"importLegacyObject",resourceType:"BUSINESS",resourceId:file.id,sha256:file.sha256,size:bytes.length,mimeType:"application/pdf",code:"123456",confirm:true,reason:"Controlled permitted PDF import"},execution=await executionFor(admin.id),{hash:codeHash}=await import("bcryptjs");
+ await prisma.authCode.create({data:{email:admin.email,purpose:"SECURITY_STEP_UP",codeHash:await codeHash("123456",4),expiresAt:new Date(Date.now()+60000)}});
+ await importLegacyPrivateObject(admin.id,input,execution);await prisma.operationsJob.update({where:{key:"scan:"+sha(key)},data:{nextAttemptAt:new Date(0)}});await runOperations("SCAN");
+ expect((await readPrivateDocument(key)).buffer).toEqual(bytes);expect((await prisma.marketplaceFile.findUniqueOrThrow({where:{id:file.id}})).scanStatus).toBe("CLEAN");
+ const alias=await prisma.marketplaceFile.create({data:{hostId:profile.id,uploadedById:host.id,purpose:"INSURANCE",storageKey:key,mimeType:"application/pdf",sha256:file.sha256,scanStatus:"QUARANTINED"}});
+ await prisma.authCode.create({data:{email:admin.email,purpose:"SECURITY_STEP_UP",codeHash:await codeHash("123456",4),expiresAt:new Date(Date.now()+60000)}});
+ const before=reads;await expect(importLegacyPrivateObject(admin.id,{...input,resourceId:alias.id},execution)).rejects.toThrow("ADMIN_MUTATION_REFUSED");expect(reads).toBe(before);
+});
+
+it("does not import malformed legacy image bytes even when their supplied hash matches",async()=>{
+ configure();const admin=await createTestCustomer({role:"SUPER_ADMIN"}),owner=await createTestCustomer(),bytes=Buffer.from("not a PNG image"),key="s3:"+randomUUID()+".png";
+ await putS3Private(key,bytes,"image/png");const document=await prisma.driverDocument.create({data:{userId:owner.id,type:"LICENSE_FRONT",storageKey:key,mimeType:"image/png",fileSizeBytes:bytes.length,contentSha256:sha(bytes.toString()),malwareScanStatus:"QUARANTINED"}});
+ const {hash:codeHash}=await import("bcryptjs");await prisma.authCode.create({data:{email:admin.email,purpose:"SECURITY_STEP_UP",codeHash:await codeHash("123456",4),expiresAt:new Date(Date.now()+60000)}});
+ await expect(importLegacyPrivateObject(admin.id,{action:"importLegacyObject",resourceType:"IDENTITY",resourceId:document.id,sha256:document.contentSha256,size:bytes.length,mimeType:"image/png",code:"123456",confirm:true,reason:"Controlled malformed import regression"},await executionFor(admin.id))).rejects.toThrow("PRIVATE_CONTENT_INVALID");
+ expect((await prisma.driverDocument.findUniqueOrThrow({where:{id:document.id}})).malwareScanStatus).toBe("QUARANTINED");
 });

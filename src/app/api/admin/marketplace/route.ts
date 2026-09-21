@@ -1,5 +1,5 @@
 import { auth } from "@/auth";
-import { jurisdictionDecision, requireVehicleJurisdiction } from "@/lib/jurisdiction";
+import { releaseAuthorityFence, requireHostingAdmission } from "@/lib/admission-authority";
 import { prisma } from "@/lib/prisma";
 import { canManageSettings } from "@/lib/rbac";
 import { marketplaceActor, MarketplaceError, marketplaceLimit } from "@/lib/marketplace";
@@ -14,16 +14,17 @@ export async function POST(req: Request) {
       z.object({ action: z.literal("vehicle"), id: z.string(), status: z.enum(["APPROVED", "REJECTED"]), reason: z.string().trim().min(5).max(2000) }),
     ]).parse(await req.json());
     await prisma.$transaction(async tx => {
+      await releaseAuthorityFence(tx);
       const actor = await marketplaceActor(tx, session.user.id);
       if (!canManageSettings(actor.role)) throw new MarketplaceError("Forbidden", 403);
       if (data.status === "APPROVED" && data.action === "host") {
         const host = await tx.hostProfile.findUniqueOrThrow({where: {id: data.id}});
-        await jurisdictionDecision(tx, host.jurisdictionCode, "HOSTING");
+        await requireHostingAdmission(tx, {code:host.jurisdictionCode});
       }
       if (data.action === "host") await tx.hostProfile.update({ where: { id: data.id }, data: { onboardingStatus: data.status as "APPROVED" | "REJECTED" | "SUSPENDED", approvedAt: data.status === "APPROVED" ? new Date() : null, approvedById: actor.id } });
       else {
         await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + data.id})`;
-        if (data.status === "APPROVED") await requireVehicleJurisdiction(tx, data.id, "ACTIVATION");
+        if (data.status === "APPROVED") await requireHostingAdmission(tx, {vehicleId:data.id});
         const vehicle = await tx.vehicle.findUniqueOrThrow({ where: { id: data.id }, include: { host: true, images: true, agreementAcceptances: { where: { type: "HOST_AGREEMENT" } } } });
         if (data.status === "APPROVED" && vehicle.hostId) {
           const files = await tx.marketplaceFile.findMany({ where: { vehicleId: vehicle.id, hostId: vehicle.hostId, scanStatus: "CLEAN" } });

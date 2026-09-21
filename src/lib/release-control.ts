@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { localDevelopment, deploymentEnvironment } from "@/lib/deployment-environment";
 import { productionConfiguration } from "@/lib/production-config";
 import { verifyAuthCode } from "@/lib/auth-code";
+import {protectedAdminMutation,type AdminExecution} from "@/lib/protected-admin";
 export const FEATURES = ["booking","hosting","live_charges","deposits","connect","transfers","payouts","sms","reviews","claims"] as const;
 export type ReleaseFeatureKey = typeof FEATURES[number];
 export const POLICY_KINDS = ["CUSTOMER_RENTAL","HOST_VEHICLE","PRIVACY","TERMS","CANCELLATION","DEPOSIT","DAMAGE","CLAIMS","INSURANCE","MILEAGE_FUEL_LATE","RETENTION","SMS_CONSENT","PAYOUT_COMMISSION","TAX_PROCEDURES"] as const;
@@ -25,24 +26,18 @@ export async function securityStepUp(userId:string,code:string){
  const user=await prisma.user.findUnique({where:{id:userId}});
  if(!user?.isActive||user.role!=="SUPER_ADMIN"||!/^\d{6}$/.test(code)||!(await verifyAuthCode({email:user.email,code,ip:null,purpose:"SECURITY_STEP_UP"})).ok)throw new Error("SECURITY_REAUTHENTICATION_REQUIRED");
 }
-export async function setReleaseFeature(userId:string,key:ReleaseFeatureKey,enabled:boolean,code:string,reason:string){
+export async function setReleaseFeature(userId:string,key:ReleaseFeatureKey,enabled:boolean,code:string,reason:string,confirm:boolean,execution:AdminExecution){
  if(!FEATURES.includes(key)||reason.trim().length<10||reason.length>500||key==="live_charges"&&enabled)throw new ReleaseGateError();
- await securityStepUp(userId,code);
- return prisma.$transaction(async tx=>{
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('release-control',0))::text`;
-  const actor=await tx.user.findUnique({where:{id:userId}});if(!actor?.isActive||actor.role!=="SUPER_ADMIN")throw new ReleaseGateError();
+ return protectedAdminMutation(userId,{code,reason,confirm},execution,"feature",async tx=>{
   const result=await tx.releaseFeature.upsert({where:{key},create:{key,enabled},update:{enabled,version:{increment:1}}});
   if(enabled&&!localDevelopment()&&!productionConfiguration().ready)throw new ReleaseGateError();
   await tx.auditLog.create({data:{actorId:userId,action:"security.feature.changed",entityType:"ReleaseFeature",entityId:key,metadata:{enabled,reason,version:result.version}}});
   return {key,enabled,version:result.version};
  });
 }
-export async function registerPolicy(userId:string,input:{kind:string;version:string;contentHash:string;professionalReference:string;effectiveAt:string;code:string;supersedesId?:string;jurisdiction:string}){
+export async function registerPolicy(userId:string,input:{kind:string;version:string;contentHash:string;professionalReference:string;effectiveAt:string;code:string;supersedesId?:string;jurisdiction:string;reason:string;confirm:boolean},execution:AdminExecution){
  if(!/^(GLOBAL|US-[A-Z]{2})$/.test(input.jurisdiction)||!(POLICY_KINDS as readonly string[]).includes(input.kind)||!/^\d{1,4}(\.\d{1,4}){0,3}$/.test(input.version)||!/^[a-f0-9]{64}$/.test(input.contentHash)||input.professionalReference.length<10||input.professionalReference.length>500||!Number.isFinite(Date.parse(input.effectiveAt)))throw new Error("INVALID_POLICY_APPROVAL");
- await securityStepUp(userId,input.code);
- return prisma.$transaction(async tx=>{
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('release-control',0))::text`;
-  const actor=await tx.user.findUnique({where:{id:userId}});if(!actor?.isActive||actor.role!=="SUPER_ADMIN")throw new ReleaseGateError();
+ return protectedAdminMutation(userId,input,execution,"policy",async tx=>{
   if(input.supersedesId){const old=await tx.policyApproval.findUniqueOrThrow({where:{id:input.supersedesId}});if(old.kind!==input.kind||old.jurisdiction!==input.jurisdiction)throw new Error("INVALID_POLICY_APPROVAL");}
   const row=await tx.policyApproval.create({data:{kind:input.kind,version:input.version,contentHash:input.contentHash,jurisdiction:input.jurisdiction,professionalReviewRequired:true,professionalReference:input.professionalReference,approvedById:userId,approvedAt:new Date(),effectiveAt:new Date(input.effectiveAt),status:"APPROVED",supersedesId:input.supersedesId}});
   await tx.auditLog.create({data:{actorId:userId,action:"security.policy.approved",entityType:"PolicyApproval",entityId:row.id,metadata:{kind:row.kind,version:row.version,contentHash:row.contentHash}}});return {id:row.id};

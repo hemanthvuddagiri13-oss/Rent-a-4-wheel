@@ -17,6 +17,7 @@
 # next.js
 /.next/
 /.next-browser-*/
+/.next-browser-*.tsconfig.json
 /out/
 
 # production

@@ -1,4 +1,5 @@
 import { requireReleaseFeature } from "@/lib/release-control";
+import { releaseAuthorityFence } from "@/lib/admission-authority";
 import {requireVehicleJurisdiction} from "@/lib/jurisdiction";
 import { financeQuote } from "@/lib/finance-rules";
 import { bookingDays } from "@/lib/booking-time";
@@ -46,6 +47,7 @@ export async function createOrRefreshHold(params: {
   try {
     const result = await db.$transaction(
       async (tx) => {
+        await releaseAuthorityFence(tx);
         await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + vehicleId})`;
         await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${vehicleId} FOR UPDATE`;
         const jurisdiction=await requireVehicleJurisdiction(tx,vehicleId,"CHECKOUT");

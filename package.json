@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "db:seed": "tsx --env-file-if-exists=.env prisma/seed.ts",
     "db:migrate": "prisma migrate dev",
+    "db:deploy": "node scripts/migrate.mjs deploy",
     "db:studio": "prisma studio",
     "test": "vitest run"
   },

@@ -1,6 +1,10 @@
 import next from 'next';
 import { createServer } from 'node:http';
+import {writeFileSync} from 'node:fs';
 const port=Number(process.env.BROWSER_TEST_PORT || 3199);
+if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid browser fixture port');
+process.env.BROWSER_TEST_PORT=String(port);
+writeFileSync(`.next-browser-${port}.tsconfig.json`,JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts','src/**/*.ts','src/**/*.tsx',`.next-browser-${port}/types/**/*.ts`,`.next-browser-${port}/dev/types/**/*.ts`],exclude:['node_modules']}));
 const app=next({dev:true,hostname:'127.0.0.1',port});
 await app.prepare();
 const server=createServer(app.getRequestHandler());

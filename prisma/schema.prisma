@@ -1981,6 +1981,33 @@ model FinanceGrant {
  createdAt DateTime @default(now())
  @@id([hostId,userId])
 }
+model PrivateValidation {
+ sourceKey String @id
+ targetKey String @unique
+ resourceType String
+ resourceId String
+ sourceSha256 String
+ targetSha256 String
+ mimeType String
+ bytes Bytes
+ evidence Json
+ createdAt DateTime @default(now())
+}
+
+model ProviderFeeEvidence {
+ providerId String @id
+ paymentId String @unique
+ reservationId String
+ currency String
+ amountCents Int
+ feeCents Int
+ netCents Int
+ evidence Json
+ fingerprint String
+ createdAt DateTime @default(now())
+ @@index([reservationId])
+}
+
 model LedgerJournal {
  id String @id @default(cuid())
  key String @unique
@@ -1992,6 +2019,7 @@ model LedgerJournal {
  providerId String?
  reversalOf String? @unique
  description String
+ allocationEvidence Json?
  fingerprint String
  createdAt DateTime @default(now())
  lines LedgerLine[]

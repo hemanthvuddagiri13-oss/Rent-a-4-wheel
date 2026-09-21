@@ -1,3 +1,4 @@
+import {AdminMutationFields} from "@/components/admin/admin-mutation-fields";
 import type { Metadata } from "next";
 import { AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/prisma";
@@ -19,7 +20,7 @@ export default async function AdminLegalPage() {
       <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-300">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
         <p>
-          These documents are placeholders until reviewed by a licensed Texas attorney. Do not remove the
+          These documents are placeholders until reviewed by a licensed attorney for the applicable jurisdiction. Do not remove the
           &quot;needs attorney review&quot; flag until legal counsel has approved the final language.
         </p>
       </div>
@@ -54,8 +55,8 @@ export default async function AdminLegalPage() {
               />
               <Label htmlFor={`review-${doc.id}`}>Still needs attorney review</Label>
             </div>
-            <Button type="submit">Save {doc.title}</Button>
-            <div><Label htmlFor={`attorney-${doc.id}`}>Texas attorney approval reference (required to enable signing)</Label><Input id={`attorney-${doc.id}`} name="reviewReference" className="mt-2" placeholder="Counsel name and approval record/date" /></div>
+            <AdminMutationFields /><Button type="submit">Save {doc.title}</Button>
+            <div><Label htmlFor={`attorney-${doc.id}`}>Jurisdiction-specific attorney approval reference (required to enable signing)</Label><Input id={`attorney-${doc.id}`} name="reviewReference" className="mt-2" placeholder="Counsel name and approval record/date" /></div>
           </form>
         ))}
       </div>

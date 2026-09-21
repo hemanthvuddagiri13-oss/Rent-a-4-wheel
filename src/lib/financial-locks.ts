@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { financialProjection } from "@/lib/financial-projection";
 import { requireReservationJurisdiction } from "@/lib/jurisdiction";
+import { releaseAuthorityFence } from "@/lib/admission-authority";
 
 export const eventFence = new AsyncLocalStorage<{ id: string; token: string }>();
 
@@ -17,9 +18,10 @@ export async function assertEventFence(tx: Prisma.TransactionClient) {
   if (!rows.length) throw new Error("Stripe event lease lost");
 }
 
-// Lock order everywhere: event (if present), vehicle, reservation, operation.
+// Lock order everywhere: release authority, event (if present), vehicle, reservation, operation.
 // READ COMMITTED ensures reads after waiting on the lock see the winning writer.
 export async function lockReservation(tx: Prisma.TransactionClient, id: string) {
+  await releaseAuthorityFence(tx);
   await assertEventFence(tx);
   const row = await tx.reservation.findUniqueOrThrow({ where: { id }, select: { vehicleId: true } });
   await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + row.vehicleId})`;

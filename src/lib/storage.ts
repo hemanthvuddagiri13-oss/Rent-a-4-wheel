@@ -17,7 +17,7 @@ export function planPrivateDocument(mimeType:string,stableId:string):StoredDocum
  const s3=process.env.PRIVATE_STORAGE_PROVIDER==="s3";if(!s3&&!localDevelopment())throw new Error("PRIVATE_STORAGE_UNAVAILABLE");
  return {storageKey:`${s3?"s3":"local"}:${stableId}.${ext}`};
 }
-export async function storePrivateDocument(buffer:Buffer,mimeType:string,stableId:string=randomUUID()):Promise<StoredDocument>{
+export async function storePrivateDocument(buffer:Buffer,mimeType:string,stableId:string=randomUUID(),options:{hold?:boolean}={}):Promise<StoredDocument>{
  if(!buffer.length||buffer.length>16*1024*1024)throw new Error("PRIVATE_OBJECT_SIZE");
  const {storageKey:key}=planPrivateDocument(mimeType,stableId),sha256=hash(buffer);
  return withPrivateStorageGuard(key,async db=>{
@@ -26,7 +26,7 @@ export async function storePrivateDocument(buffer:Buffer,mimeType:string,stableI
   const old=await tx.privateObject.findUnique({where:{key}});
   if(old&&(old.sha256!==sha256||old.size!==buffer.length||old.mimeType!==mimeType||old.deletedAt||["DELETING","DELETED","INFECTED"].includes(old.state)))throw new Error("PRIVATE_OBJECT_CONFLICT");
   if(old?.writeState==="RUNNING"||old?.writeState==="UNCERTAIN")throw new Error("PRIVATE_WRITE_REQUIRES_REVIEW");
-  if(!old){await tx.privateObject.create({data:{key,sha256,size:buffer.length,mimeType}});if(key.startsWith("s3:"))await tx.operationsJob.create({data:{key:"scan:"+hash(key),kind:"SCAN",resourceId:key,nextAttemptAt:new Date(Date.now()+120000)}});await tx.auditLog.create({data:{action:"storage.write.intent",entityType:"PrivateObject",entityId:hash(key)}});}
+  if(!old){await tx.privateObject.create({data:{key,sha256,size:buffer.length,mimeType,hold:options.hold??false}});if(key.startsWith("s3:"))await tx.operationsJob.create({data:{key:"scan:"+hash(key),kind:"SCAN",resourceId:key,nextAttemptAt:new Date(Date.now()+120000)}});await tx.auditLog.create({data:{action:"storage.write.intent",entityType:"PrivateObject",entityId:hash(key)}});}
   if(old?.writeState==="STORED")return false;
   await tx.privateObject.update({where:{key},data:{writeState:"RUNNING"}});return true;
  });
@@ -56,6 +56,12 @@ export async function readPrivateBytes(key:string){
 }
 export async function readPrivateDocument(key:string):Promise<{buffer:Buffer}>{
  const row=await prisma.privateObject.findUnique({where:{key}});
+ const legacy=await prisma.operationsJob.findFirst({where:{kind:"LEGACY_IMPORT",resourceId:key}});
+ if(legacy){
+  const validation=await prisma.privateValidation.findUnique({where:{sourceKey:key}});
+  if(!validation||!row||row.writeState!=="STORED"||row.deletedAt||["INFECTED","DELETING","DELETED"].includes(row.state)||validation.sourceSha256!==row.sha256)throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
+  if(validation.targetKey!==key)return readPrivateDocument(validation.targetKey);
+ }
  if((!row&&!localDevelopment())||row&&(row.writeState!=="STORED"||row.state!=="CLEAN"||row.deletedAt||!localDevelopment()&&row.scanEngine==="DEVELOPMENT_FIXTURE"))throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
  const buffer=await readPrivateBytes(key);if(row&&(buffer.length!==row.size||hash(buffer)!==row.sha256))throw new Error("PRIVATE_OBJECT_INTEGRITY");
  await prisma.auditLog.create({data:{action:"storage.read",entityType:"PrivateObject",entityId:hash(key)}});

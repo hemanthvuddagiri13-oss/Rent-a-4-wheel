@@ -1,11 +1,10 @@
 import { z } from "zod";
-import { prisma } from "@/lib/prisma";
-import { securityStepUp } from "@/lib/release-control";
+import { protectedAdminMutation,type AdminExecution } from "@/lib/protected-admin";
 import { JURISDICTION_GATES } from "@/lib/jurisdiction";
 import { marketplacePricingSchema } from "@/lib/marketplace-pricing";
 import { fingerprint, json } from "@/lib/financial-operations";
 
-const common = {jurisdictionCode: z.string().regex(/^[A-Z]{2}$/), code: z.string().regex(/^\d{6}$/), reason: z.string().trim().min(10).max(500)};
+const common = {jurisdictionCode: z.string().regex(/^[A-Z]{2}$/), code: z.string().regex(/^\d{6}$/), reason: z.string().trim().min(10).max(500),confirm:z.literal(true)};
 const evidence = {effectiveAt: z.string().datetime(), endsAt: z.string().datetime().optional(), status: z.enum(["SAMPLE", "STAGING_READY"])};
 const command = z.discriminatedUnion("action", [
   z.object({...common, action: z.literal("jurisdictionMode"), mode: z.enum(["DISABLED", "STAGING"])}).strict(),
@@ -15,14 +14,10 @@ const command = z.discriminatedUnion("action", [
   z.object({...common, action: z.literal("revokePricingPolicy"), id: z.string().min(1).max(100)}).strict(),
 ]);
 
-export async function jurisdictionAdminCommand(userId: string, input: unknown) {
+export async function jurisdictionAdminCommand(userId: string, input: unknown,execution:AdminExecution) {
   const data = command.parse(input);
   if ("endsAt" in data && data.endsAt && data.endsAt <= data.effectiveAt) throw new Error("INVALID_EFFECTIVE_PERIOD");
-  await securityStepUp(userId, data.code);
-  return prisma.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('release-control',0))::text`;
-    const actor = await tx.user.findUniqueOrThrow({where: {id: userId}});
-    if (!actor.isActive || actor.role !== "SUPER_ADMIN") throw new Error("Forbidden");
+  return protectedAdminMutation(userId,data,execution,data.action,async tx => {
     await tx.jurisdiction.findUniqueOrThrow({where: {code: data.jurisdictionCode}});
     let id: string = data.jurisdictionCode;
     if (data.action === "jurisdictionMode") await tx.jurisdiction.update({where: {code: data.jurisdictionCode}, data: {mode: data.mode}});

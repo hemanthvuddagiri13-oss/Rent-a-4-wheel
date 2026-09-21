@@ -24,3 +24,24 @@ export function marketplaceRefundAllocation(amounts: FinanceTerms["amounts"], ca
   while(unassigned-->0){let chosen=keys[0];for(const key of keys)if(BigInt(weights[key])*BigInt(result[chosen]+1)>BigInt(weights[chosen])*BigInt(result[key]+1))chosen=key;result[chosen]++;}
   return {...result,discount};
 }
+
+export type RefundAllocation = ReturnType<typeof marketplaceRefundAllocation>;
+export const emptyRefundAllocation = (): RefundAllocation => ({tax:0,protection:0,reserve:0,host:0,platformFees:0,platformCost:0,discount:0});
+
+/** Later adjustments can limit new recovery, but cannot rewrite posted cents.
+ * The original snapshot fixes weights; unrecoverable incremental host amounts
+ * become explicit platform refund cost. Host credits never enlarge those weights.
+ */
+export function additionalMarketplaceRefund(amounts: FinanceTerms["amounts"], cash: number, paid: number, refundHostBps: number, prior: RefundAllocation, availableHost: number) {
+  const target = marketplaceRefundAllocation(amounts,cash,paid,refundHostBps,amounts.hostNetCents);
+  const delta = emptyRefundAllocation();
+  for (const key of Object.keys(delta) as Array<keyof RefundAllocation>) delta[key]=target[key]-prior[key];
+  const incrementalBudget=cash+target.discount-(prior.tax+prior.protection+prior.reserve+prior.host+prior.platformFees+prior.platformCost);
+  const recoverableBudget=incrementalBudget-delta.tax-delta.protection-delta.reserve-delta.platformFees;
+  delta.host=Math.min(Math.max(0,availableHost),Math.max(0,delta.host),Math.max(0,recoverableBudget));
+  // A previous host shortfall was already borne by the platform; allocate only
+  // the remaining budget after the other immutable cumulative targets.
+  delta.platformCost=recoverableBudget-delta.host;
+  if(Object.values(delta).some(n=>!Number.isSafeInteger(n)||n<0))throw new Error("REFUND_ALLOCATION_REQUIRES_REVIEW");
+  return delta;
+}
