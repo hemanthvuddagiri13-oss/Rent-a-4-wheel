@@ -172,6 +172,7 @@ model OperationalEvent {
 }
 
 model OperationsJob {
+  payload Json?
   key String @id
   kind String
   state String @default("PENDING")
@@ -1133,6 +1134,7 @@ enum LegalDocumentType {
 // Creating one is refused server-side while the source LegalDocument is
 // still flagged `needsAttorneyReview` (see src/lib/agreements.ts).
 model AgreementAcceptance {
+  artifact AgreementArtifact?
   subjectSnapshot Json?
   id              String            @id @default(cuid())
   type            LegalDocumentType
@@ -1163,6 +1165,15 @@ model AgreementAcceptance {
   @@index([reservationId])
   @@index([vehicleId])
   @@index([signedByUserId])
+}
+
+model AgreementArtifact {
+  acceptanceId String @id
+  acceptance AgreementAcceptance @relation(fields: [acceptanceId], references: [id], onDelete: Cascade)
+  storageId String @unique
+  sha256 String
+  pdf Bytes
+  createdAt DateTime @default(now())
 }
 
 // Admin-editable legal content. Content flagged `needsAttorneyReview` must

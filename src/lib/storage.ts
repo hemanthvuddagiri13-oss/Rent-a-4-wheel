@@ -17,7 +17,7 @@ export function planPrivateDocument(mimeType:string,stableId:string):StoredDocum
  const s3=process.env.PRIVATE_STORAGE_PROVIDER==="s3";if(!s3&&!localDevelopment())throw new Error("PRIVATE_STORAGE_UNAVAILABLE");
  return {storageKey:`${s3?"s3":"local"}:${stableId}.${ext}`};
 }
-export async function storePrivateDocument(buffer:Buffer,mimeType:string,stableId=randomUUID()):Promise<StoredDocument>{
+export async function storePrivateDocument(buffer:Buffer,mimeType:string,stableId:string=randomUUID()):Promise<StoredDocument>{
  if(!buffer.length||buffer.length>16*1024*1024)throw new Error("PRIVATE_OBJECT_SIZE");
  const {storageKey:key}=planPrivateDocument(mimeType,stableId),sha256=hash(buffer);
  return withPrivateStorageGuard(key,async db=>{

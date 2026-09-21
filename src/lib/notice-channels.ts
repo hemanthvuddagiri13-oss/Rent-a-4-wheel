@@ -1,4 +1,4 @@
-import { requireReleaseFeature } from "@/lib/release-control";
+import { requireReleaseFeature,ReleaseGateError } from "@/lib/release-control";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { marketplaceActor, MarketplaceError } from "@/lib/marketplace";
@@ -26,11 +26,11 @@ export async function handleSmsConsent(params: URLSearchParams) {
   }
 }
 export async function deliverNoticeChannels() {
-  await requireReleaseFeature("sms");
   const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN, from = process.env.TWILIO_FROM_NUMBER;
   // Twilio's Messages create endpoint does not provide the email provider's
   // replay key guarantee. A lost response is quarantined, never blindly resent.
   await prisma.channelDelivery.updateMany({ where: { state: "DISPATCHING", leaseUntil: { lt: new Date() } }, data: { state: "REVIEW", errorCode: "PROVIDER_OUTCOME_UNKNOWN", leaseToken: null } });
+  try{await requireReleaseFeature("sms");}catch(error){if(error instanceof ReleaseGateError)return {accepted:0,configured:false,disabled:true};throw error;}
   const pending = await prisma.$queryRaw<Array<{id:string}>>`SELECT n.id FROM "InboxNotice" n JOIN "NoticePreference" p ON p."userId"=n."userId" AND p.category=n.category LEFT JOIN "ChannelDelivery" sms ON sms."noticeId"=n.id AND sms.channel='SMS' LEFT JOIN "ChannelDelivery" push ON push."noticeId"=n.id AND push.channel='PUSH' WHERE (p.sms AND sms.id IS NULL) OR (p.push AND push.id IS NULL) ORDER BY n."createdAt",n.id LIMIT 100`;
   const notices = await prisma.inboxNotice.findMany({ where: { id: { in: pending.map(n=>n.id) } } });
   for (const n of notices) {

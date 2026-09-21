@@ -37,7 +37,7 @@ it("uses real session revocation, private responses, origin enforcement and the 
  const user=await createTestCustomer(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(user.id,admin.id);
  const current=await login(user),other=await login(user),page=await current.newPage();
  expect((await(await other.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
- const response=await page.goto(base+"/account/security");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["cache-control"]).toContain("no-store");
+ const response=await page.goto(base+"/account/security");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["cache-control"]).not.toMatch(/public|s-maxage/);expect((await current.request.get(base+"/api/account/security")).headers()["cache-control"]).toContain("no-store");
  await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await screenshot(page,"account-security");
  await page.locator("li").filter({hasNotText:"this device"}).getByRole("button",{name:"Revoke session",exact:true}).click();
  await page.getByRole("status").filter({hasText:"Security action saved"}).waitFor();

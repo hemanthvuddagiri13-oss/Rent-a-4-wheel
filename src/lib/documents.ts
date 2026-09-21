@@ -9,10 +9,9 @@ import { localDevelopment } from "@/lib/deployment-environment";
 
 export const MAX_DOCUMENT_SIZE_BYTES = 8 * 1024 * 1024; // 8MB
 
-// Default retention window for identity documents once a reservation
-// completes (or a document is never attached to one). Configurable per
-// deployment via PlatformSetting in a later phase; documented here as the
-// single source of truth for the current default.
+// Historical SAMPLE scheduling hint, not an approved retention period or
+// authorization to erase identity evidence. Deployed erasure requires an
+// independently approved jurisdiction schedule and all financial/evidence holds.
 const DEFAULT_RETENTION_DAYS = 365 * 3;
 
 export class InvalidDocumentError extends Error {}

@@ -89,7 +89,7 @@ jobs:
       - name: National authority and financial policy stability (five runs)
         run: |
           for run in 1 2 3 4 5; do
-            npm test -- tests/national-jurisdiction.test.ts tests/marketplace-pricing.test.ts tests/production-security.test.ts tests/private-storage-provider.test.ts || exit 1
+            npm test -- tests/national-jurisdiction.test.ts tests/marketplace-pricing.test.ts tests/production-security.test.ts tests/private-storage-provider.test.ts tests/retention-policy.test.ts tests/agreement-artifact.test.ts || exit 1
           done
       - name: Dispatch concurrency stability (five consecutive runs)
         run: |

@@ -14,6 +14,9 @@ Implemented controls include typed deployment validation, persistent device sess
 | 20260928040000_jurisdiction_authority_fencing | Admission/configuration locks and immutable reservation jurisdiction |
 | 20260928050000_private_write_receipts | Persist uncertain/stored provider write state; conservative historical classification |
 | 20260928060000_release_policy_fencing | Serialize release/policy/document changes with protected dispatch |
+| 20260928070000_retention_schedule_fencing | Fence exact retention-schedule changes against deletion authorization |
+| 20260928080000_agreement_artifact_intent | Persist immutable PDF bytes before storage, recover missing agreement artifacts |
+| 20260928090000_operational_alert_payload | Freeze alert request bodies across uncertain delivery retries |
 
 No approved Phase 1–4 migration is rewritten. Historical nullable jurisdiction fields are deliberately not guessed from free-form addresses. Legacy inventory must be verified before admission. New pricing policies cannot recalculate old reservations.
 

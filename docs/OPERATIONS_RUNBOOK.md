@@ -1,5 +1,11 @@
 # Operations runbook
 
+Monitoring counts overdue or never-successful schedules from persisted CRON_COMPLETE events using `WORKER_STALENESS_MINUTES`. A stopped monitor cannot report its own outage: the external scheduler must alert on missed monitor invocations and failed HTTP responses. Alert bodies and idempotency keys are persisted together; retries do not substitute current metrics into an older request. Missing historical alert payloads require review.
+
+Schedule `/api/cron/operations/agreements` every two minutes with the same bearer authentication as other operations jobs. It recovers missing signed PDFs using frozen acceptance evidence, persisted exact bytes and a fixed storage identity. Uncertain storage writes enter review; signing again is not recovery. Existing attached PDFs are never regenerated.
+
+New deployed retention erasure requires an independent effective PRIVACY_RETENTION jurisdiction gate and a professional RETENTION approval whose hash matches `fingerprint(policy(tx))` for the configured collaboration schedule. Sample defaults authorize no erasure. Unknown geography and unscoped records remain for review. Admission disablement does not revoke an independent erasure approval, and already committed deletion intents continue recovery. All financial, agreement, claim and legal/security holds remain mandatory. No jurisdiction has production retention approval in this phase.
+
 Every route below requires the cron bearer secret. POST is preferred; GET aliases support schedulers. Use the persistent Node deployment and direct database session connection. Jobs process bounded batches, so schedule recurrence and independently alert on scheduler silence.
 
 | Route | Initial cadence | Purpose |

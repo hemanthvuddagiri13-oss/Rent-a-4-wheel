@@ -1,8 +1,8 @@
-import { withReservationLock } from "@/lib/financial-locks";
+import { generateSignedAgreementArtifact } from "@/lib/agreement-artifact";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { storePrivateDocument } from "@/lib/storage";
-import { generateRentalAgreementPdf } from "@/lib/agreement-pdf";
+
+
 import type { LegalDocumentType, Prisma } from "@prisma/client";
 import { requireReservationJurisdiction, requireVehicleJurisdiction } from "@/lib/jurisdiction";
 import { requireReleaseFeature } from "@/lib/release-control";
@@ -78,6 +78,7 @@ export async function recordAgreementAcceptance(
     },
   });
 
+  await tx.operationsJob.create({data:{key:"agreement:"+acceptance.id,kind:"AGREEMENT",resourceId:acceptance.id}});
   return acceptance;
 }
 
@@ -101,11 +102,5 @@ export async function generateAndStoreSignedAgreementPdf(reservationId: string) 
   const acceptance = reservation.agreementAcceptances[0];
   if (!acceptance || acceptance.signedPdfStorageKey) return;
 
-  const pdfBytes = await generateRentalAgreementPdf({ reservation, vehicle: reservation.vehicle, acceptance });
-  const { storageKey } = await storePrivateDocument(Buffer.from(pdfBytes), "application/pdf");
-
-  await withReservationLock(reservationId, tx => tx.agreementAcceptance.updateMany({
-    where: { id: acceptance.id, signedPdfStorageKey: null },
-    data: { signedPdfStorageKey: storageKey },
-  }));
+  await generateSignedAgreementArtifact(acceptance.id);
 }
