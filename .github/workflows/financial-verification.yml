@@ -164,4 +164,3 @@ jobs:
           name: staging-screenshots
           path: test-artifacts/staging
           if-no-files-found: warn
-

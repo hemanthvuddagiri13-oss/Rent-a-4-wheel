@@ -20,5 +20,3 @@ export async function POST(req: NextRequest, context: { params: Promise<{ worker
   }
 }
 export const GET = POST;
-
-

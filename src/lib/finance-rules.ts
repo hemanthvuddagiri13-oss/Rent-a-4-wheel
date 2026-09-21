@@ -55,4 +55,3 @@ export async function saveFinanceRule(userId:string,input:unknown){
 // A future external provider implements this contract; unconfigured external
 // calculations cannot become approved snapshots or release host money.
 export interface TaxProvider { quote(input:{jurisdiction:string;currency:string;rentalCents:number;feeCents:number}):Promise<{providerId:string;rentalTaxCents:number;feeTaxCents:number;version:string}>; }
-

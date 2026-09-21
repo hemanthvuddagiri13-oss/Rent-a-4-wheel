@@ -6,7 +6,7 @@ import {dispatchCron,scheduledPaths} from "../scripts/dispatch-cron.mjs";
 it("schedules every monitored worker and the monitor without duplicates",()=>{
  const expected=[...Object.keys(WORKER_STALENESS_MINUTES),"operations/monitor"].map(name=>"/api/cron/"+name).sort();
  expect([...scheduledPaths].sort()).toEqual(expected);expect(new Set(scheduledPaths).size).toBe(expected.length);
- const cron=readFileSync("deploy/r4w.cron","utf8");for(const worker of expected)expect(cron).toContain("dispatch-cron.mjs "+worker.slice("/api/cron/".length));
+ const cron=readFileSync("deploy/r4w.cron","utf8");expect(cron).not.toContain("\r");for(const worker of expected)expect(cron).toContain("dispatch-cron.mjs "+worker.slice("/api/cron/".length));
 });
 it("uses a header-only secret, refuses redirects and reports failed invocations",async()=>{
  const env:NodeJS.ProcessEnv={NODE_ENV:"test",SITE_URL:"https://isolated.invalid",CRON_SECRET:"synthetic".repeat(8)};let calls=0;
