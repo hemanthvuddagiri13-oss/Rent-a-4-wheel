@@ -1,3 +1,4 @@
+import { requireReleaseFeature } from "@/lib/release-control";
 import { financeQuote } from "@/lib/finance-rules";
 import { bookingDays } from "@/lib/booking-time";
 import { upgradeBookingFingerprint } from "@/lib/booking-fingerprint";
@@ -33,6 +34,7 @@ export async function createOrRefreshHold(params: {
   draftId?: string;
   revision?: number;
 }, db: PrismaClient = prisma): Promise<Reservation> {
+  await requireReleaseFeature("booking",db);
   const { customerId, vehicleId, pickupAt, returnAt, extraIds, couponCode } = params;
   if (returnAt <= pickupAt) {
     throw new HoldError("Return date must be after pickup date.", 400);

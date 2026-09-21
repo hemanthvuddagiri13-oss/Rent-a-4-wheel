@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { signInCodeEmail } from "@/lib/email-templates";
+import { localDevelopment } from "@/lib/deployment-environment";
 
 const CODE_LENGTH = 6;
 const CODE_TTL_MINUTES = 10;
@@ -59,7 +60,7 @@ async function auditAuthEvent(params: {
  * elsewhere in the app (Stripe, storage) and is never available in
  * production regardless of configuration.
  */
-export async function requestAuthCode(params: { email: string; ip: string | null; purpose?: "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" | "FINANCE_STEP_UP" }): Promise<RequestCodeResult> {
+export async function requestAuthCode(params: { email: string; ip: string | null; purpose?: "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" | "FINANCE_STEP_UP" | "SECURITY_STEP_UP" }): Promise<RequestCodeResult> {
   const email = normalizeEmail(params.email);
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -89,7 +90,7 @@ export async function requestAuthCode(params: { email: string; ip: string | null
 
   await auditAuthEvent({ action: "auth.code_requested", email, metadata: { ip: params.ip, emailSent: emailResult.sent } });
 
-  const isDev = process.env.NODE_ENV !== "production";
+  const isDev = localDevelopment();
   return { ok: true, devCode: isDev && !emailResult.sent ? code : undefined };
 }
 
@@ -99,7 +100,7 @@ export async function requestAuthCode(params: { email: string; ip: string | null
  * can never be replayed), expiring, and attempt-limited (locks out further
  * guesses against that code after MAX_VERIFY_ATTEMPTS wrong tries).
  */
-export async function verifyAuthCode(params: { email: string; code: string; ip: string | null; purpose?: "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" | "FINANCE_STEP_UP" }): Promise<VerifyCodeResult> {
+export async function verifyAuthCode(params: { email: string; code: string; ip: string | null; purpose?: "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" | "FINANCE_STEP_UP" | "SECURITY_STEP_UP" }): Promise<VerifyCodeResult> {
   const email = normalizeEmail(params.email);
   const code = params.code.trim();
 

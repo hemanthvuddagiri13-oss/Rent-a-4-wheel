@@ -1,10 +1,12 @@
 import { json, prepareOperation, runOperation } from "@/lib/financial-operations";
 import Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
+import { localDevelopment } from "@/lib/deployment-environment";
 
 const secretKey = process.env.STRIPE_SECRET_KEY;
 
-export const stripe = secretKey ? new Stripe(secretKey, { timeout: 8000, maxNetworkRetries: 0 }) : null;
+// Live money movement is deliberately unavailable throughout Phase 5.
+export const stripe = secretKey?.startsWith("sk_test_") ? new Stripe(secretKey, { timeout: 8000, maxNetworkRetries: 0 }) : null;
 
 export function isStripeConfigured(): boolean {
   return Boolean(stripe && process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
@@ -36,7 +38,7 @@ export function hasAnyStripeConfiguration(): boolean {
  *  - no Stripe configuration present at all, even partial
  */
 export function isDevPaymentSimulationAllowed(): boolean {
-  return process.env.ALLOW_DEV_PAYMENT_SIMULATION === "true" && process.env.NODE_ENV === "development" && !hasAnyStripeConfiguration();
+  return localDevelopment() && process.env.ALLOW_DEV_PAYMENT_SIMULATION === "true" && process.env.NODE_ENV === "development" && !hasAnyStripeConfiguration();
 }
 
 /**

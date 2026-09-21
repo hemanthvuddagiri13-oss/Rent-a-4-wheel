@@ -71,6 +71,7 @@ model User {
 // ---------------------------------------------------------------------------
 
 enum AuthCodePurpose {
+  SECURITY_STEP_UP
   FINANCE_STEP_UP
   SIGN_IN
   EMERGENCY_OVERRIDE_STEP_UP
@@ -124,8 +125,80 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  revokedAt    DateTime?
+  rotation     Int      @default(0)
+  device       String   @default("Browser")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ReleaseFeature {
+  key       String @id
+  enabled   Boolean @default(false)
+  version   Int @default(1)
+  updatedAt DateTime @updatedAt
+}
+
+model PolicyApproval {
+  id String @id @default(cuid())
+  kind String
+  version String
+  contentHash String
+  status String @default("DRAFT")
+  jurisdiction String
+  professionalReviewRequired Boolean @default(true)
+  professionalReference String?
+  approvedById String?
+  approvedAt DateTime?
+  effectiveAt DateTime?
+  supersedesId String? @unique
+  createdAt DateTime @default(now())
+  @@unique([kind, jurisdiction, version])
+  @@index([kind, jurisdiction, status, effectiveAt])
+}
+
+model OperationalEvent {
+  id String @id @default(cuid())
+  category String
+  severity String
+  requestId String?
+  count Int @default(1)
+  createdAt DateTime @default(now())
+  @@index([category, createdAt])
+}
+
+model OperationsJob {
+  key String @id
+  kind String
+  state String @default("PENDING")
+  resourceId String?
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastErrorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([kind, state, nextAttemptAt])
+}
+
+model PrivateObject {
+  key String @id
+  sha256 String
+  size Int
+  mimeType String
+  state String @default("UPLOADED")
+  scanEngine String?
+  scanVersion String?
+  scannedAt DateTime?
+  retainedUntil DateTime?
+  hold Boolean @default(false)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([state, updatedAt])
 }
 
 model VerificationToken {

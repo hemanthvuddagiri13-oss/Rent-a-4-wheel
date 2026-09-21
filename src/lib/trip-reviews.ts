@@ -1,3 +1,4 @@
+import { requireReleaseFeature } from "@/lib/release-control";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { lockReservation, withReservationLock } from "@/lib/financial-locks";
@@ -6,6 +7,7 @@ import { participant, policy, afterDays, safeText, isOperator, audit } from "@/l
 
 const schema = z.object({ reservationId: z.string(), subject: z.enum(["VEHICLE", "HOST", "CUSTOMER"]), rating: z.coerce.number().int().min(1).max(5), body: z.string().min(3).max(5000), cleanliness: z.coerce.number().int().min(1).max(5), communication: z.coerce.number().int().min(1).max(5), accuracy: z.coerce.number().int().min(1).max(5), version: z.coerce.number().int().optional() });
 export async function saveTripReview(userId: string, input: unknown) {
+  await requireReleaseFeature("reviews");
   const data = schema.parse(input);
   return withReservationLock(data.reservationId, async tx => {
     const r = await tx.reservation.findUniqueOrThrow({ where: { id: data.reservationId }, include: { trip: true, vehicle: true } });
@@ -52,6 +54,7 @@ export async function moderateTripReview(userId: string, id: string, action: "hi
   });
 }
 export async function publicTripReviews(subject: "VEHICLE" | "HOST", subjectId: string) {
+  try { await requireReleaseFeature("reviews"); } catch { return {reviews:[],average:null,count:0}; }
   const eligible = await prisma.reservation.findMany({ where: { status: "COMPLETED", trip: { startedAt: { not: null }, endedAt: { not: null } }, vehicle: { isDemo: false, ...(subject === "VEHICLE" ? { id: subjectId } : { hostId: subjectId }) } }, select: { id: true } });
   const where = { subject, subjectId, hidden: false, publishAfter: { lte: new Date() }, reservationId: { in: eligible.map(r => r.id) } };
   const [reviews, aggregate] = await Promise.all([prisma.tripReview.findMany({ where, take: 50, orderBy: { createdAt: "desc" }, select: { id: true, rating: true, body: true, categories: true, createdAt: true } }), prisma.tripReview.aggregate({ where, _avg: { rating: true }, _count: true })]);

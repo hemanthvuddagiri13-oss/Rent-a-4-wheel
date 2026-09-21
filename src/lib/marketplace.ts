@@ -1,3 +1,4 @@
+import { requireReleaseFeature } from "@/lib/release-control";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -84,6 +85,7 @@ export async function saveListing(userId: string, input: unknown) {
 }
 
 export async function saveHostProfile(userId: string, input: unknown) {
+  await requireReleaseFeature("hosting");
   const data = z.object({ legalName: text, businessName: text, phone: text, addressLine1: text, city: text, state: text, zip: text }).parse(input);
   return prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;

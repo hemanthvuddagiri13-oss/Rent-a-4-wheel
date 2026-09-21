@@ -1,3 +1,4 @@
+import { createDeviceSession } from "@/lib/device-sessions";
 import { beforeAll,afterAll,it,expect } from "vitest";
 import { spawn,type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -12,7 +13,7 @@ beforeAll(async()=>{
  let ready=false;for(let i=0;i<240;i++){try{const response=await fetch(base+"/api/auth/session");if(response.ok&&response.headers.get("content-type")?.includes("application/json")){ready=true;break;}await new Promise(r=>setTimeout(r,500));}catch{await new Promise(r=>setTimeout(r,500));}}if(!ready)throw new Error("Next finance server unavailable");browser=await chromium.launch({headless:true});
 },150000);
 afterAll(async()=>{await browser?.close();if(child&&child.exitCode===null){const done=new Promise(r=>child.once("exit",r));child.kill();await Promise.race([done,new Promise(r=>setTimeout(r,3000))]);}await prisma.$disconnect();});
-async function login(user:{id:string;email:string;role:string}){const page=await browser.newPage();const token=await encode({token:{sub:user.id,id:user.id,email:user.email,role:user.role},secret,salt:"authjs.session-token"});await page.context().addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);return page;}
+async function login(user:{id:string;email:string;role:string}){const page=await browser.newPage();const token=await encode({token:{...await createDeviceSession(user.id),sub:user.id,id:user.id,email:user.email,role:user.role},secret,salt:"authjs.session-token"});await page.context().addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);return page;}
 async function visit(page:Page,path:string){const response=await page.goto(base+path);expect(response?.status()).toBe(200);await page.waitForLoadState("networkidle");}
 async function shots(page:Page,name:string){for(const width of [375,390,430,768,1024,1440]){await page.setViewportSize({width,height:1000});await page.evaluate(()=>window.scrollTo(0,0));expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:`${capture}/${name}-${width}.png`,fullPage:true});}}
 it("real host views private earnings, requires-action onboarding, failed configuration and all viewport widths",async()=>{

@@ -41,7 +41,8 @@ describe("previous schema checkout resumed by real Next/PostgreSQL/Chromium", ()
       while (Date.now() < deadline) { try { await fetch(base + "/api/auth/session"); ready = true; break; } catch { await new Promise(resolve => setTimeout(resolve, 500)); } }
       if (!ready) throw new Error("Real Next application did not start");
       browser = await chromium.launch({ headless: true }); const context = await browser.newContext({ timezoneId: "America/Los_Angeles" });
-      const token = await encode({ token: { id: customerId, sub: customerId, email: "mig-test-1@example.com", role: "CUSTOMER" }, secret, salt: "authjs.session-token" });
+      const device = await client.session.create({data:{userId:customerId,sessionToken:randomUUID(),expires:new Date(Date.now()+3600000)}});
+      const token = await encode({ token: { sid:device.id,rotation:0,id: customerId, sub: customerId, email: "mig-test-1@example.com", role: "CUSTOMER" }, secret, salt: "authjs.session-token" });
       await context.addCookies([{ name: "authjs.session-token", value: token, url: base, httpOnly: true, sameSite: "Lax" }]);
       const page = await context.newPage(); await page.goto(base + "/book/" + vehicleId + "?reservationId=" + id);
       await page.getByRole("heading", { name: "Driver Information" }).waitFor();

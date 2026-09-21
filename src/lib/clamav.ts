@@ -1,4 +1,8 @@
 import { createConnection } from "node:net";
+export async function scannerVersion():Promise<string>{
+ const host=process.env.CLAMAV_HOST,port=Number(process.env.CLAMAV_PORT||3310);if(!host||!Number.isInteger(port)||port<1||port>65535)throw new Error("SCANNER_UNAVAILABLE");
+ return new Promise((resolve,reject)=>{let done=false,reply="";const socket=createConnection({host,port});const finish=(version?:string)=>{if(done)return;done=true;clearTimeout(timer);socket.destroy();if(version)resolve(version);else reject(new Error("SCANNER_UNAVAILABLE"));};const timer=setTimeout(()=>finish(),5000);socket.on("connect",()=>socket.write("zVERSION\0"));socket.on("error",()=>finish());socket.on("end",()=>finish());socket.on("data",chunk=>{reply+=chunk.toString("utf8");if(reply.length>1024)return finish();if(!reply.includes("\0"))return;const match=/^ClamAV ([0-9.]+)\/([0-9]+)\//.exec(reply);finish(match?match[1]+"/"+match[2]:undefined);});});
+}
 export type ScanResult = { status: "CLEAN" | "INFECTED" | "SCAN_UNAVAILABLE" };
 
 /** ClamAV INSTREAM: https://docs.clamav.net/manual/Usage/ClamdProtocol.html

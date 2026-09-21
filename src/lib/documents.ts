@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { storePrivateDocument } from "@/lib/storage";
 import type { DocumentType, Prisma } from "@prisma/client";
 import { scanWithClamAv } from "@/lib/clamav";
+import { localDevelopment } from "@/lib/deployment-environment";
 
 export const MAX_DOCUMENT_SIZE_BYTES = 8 * 1024 * 1024; // 8MB
 
@@ -119,7 +120,7 @@ export async function storeIdentityDocument(params: {
   }
 
   if (scan.status === "SCAN_UNAVAILABLE") {
-    const isProduction = process.env.NODE_ENV === "production";
+    const isProduction = !localDevelopment();
     const devBypassEnabled = process.env.ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV === "true";
     if (isProduction || !devBypassEnabled) {
       throw new InvalidDocumentError(
@@ -162,6 +163,7 @@ export async function storeIdentityDocument(params: {
  * and non-owner access is refused until a successful scan is recorded.
  */
 export function assertDocumentViewable(document: { userId: string; malwareScanStatus: string }, viewerId: string): void {
+  if (document.malwareScanStatus === "INFECTED") throw new InvalidDocumentError("Infected content is not available.");
   if (document.userId === viewerId) return;
   if (document.malwareScanStatus !== "CLEAN") {
     throw new InvalidDocumentError("This document has not cleared malware scanning and cannot be viewed yet.");

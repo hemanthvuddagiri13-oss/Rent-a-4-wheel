@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { productionConfiguration } from "../src/lib/production-config";
 import { localDevelopment } from "../src/lib/deployment-environment";
 const configured = () => ({
-  APP_ENV: "staging", NODE_ENV: "production", DATABASE_URL: "postgresql://runtime:secure@db.internal/staging?sslmode=verify-full",
-  DIRECT_DATABASE_URL: "postgresql://migration:secure@db.internal/staging?sslmode=verify-full", SITE_URL: "https://staging.renta4wheel.com",
+  APP_ENV: "staging", NODE_ENV: "production", DATABASE_URL: "postgresql://runtime:secure@db.internal/staging?sslmode=require&sslaccept=strict",
+  DIRECT_DATABASE_URL: "postgresql://migration:secure@db.internal/staging?sslmode=require&sslaccept=strict", SITE_URL: "https://staging.renta4wheel.com",
   PRIMARY_DOMAIN: "staging.renta4wheel.com", AUTH_SECRET: "a".repeat(48), CRON_SECRET: "b".repeat(48),
   STRIPE_SECRET_KEY: "sk_test_fixture", NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_fixture", STRIPE_WEBHOOK_SECRET: "whsec_fixture",
   STRIPE_CONNECT_COUNTRY: "US", RESEND_API_KEY: "re_fixture", EMAIL_FROM: "Staging <staging@renta4wheel.com>",
@@ -28,6 +28,6 @@ describe("deployment trust boundary", () => {
     expect(productionConfiguration({ ...configured(), [field]: undefined }).ready).toBe(false);
   });
   it("blocks partial Stripe, live keys, live gates, poolers and cross-environment resources", () => {
-    for (const change of [{ STRIPE_WEBHOOK_SECRET: "" }, { STRIPE_SECRET_KEY: "sk_live_secret" }, { LIVE_FINANCE_ENABLED: "true" }, { DIRECT_DATABASE_URL: "postgresql://user:secret@pooler.internal/db?sslmode=verify-full" }, { DEPLOYMENT_DATA_ENV: "production" }, { PRIVATE_STORAGE_ENV: "production" }, { PROVIDER_ACCOUNT_ENV: "production" }, { VERCEL_ENV: "preview" }, { SITE_URL: "http://staging.renta4wheel.com" }]) expect(productionConfiguration({ ...configured(), ...change }).ready).toBe(false);
+    for (const change of [{ STRIPE_WEBHOOK_SECRET: "" }, { STRIPE_SECRET_KEY: "sk_live_secret" }, { LIVE_FINANCE_ENABLED: "true" }, { DIRECT_DATABASE_URL: "postgresql://user:secret@pooler.internal/db?sslmode=require&sslaccept=strict" }, { DEPLOYMENT_DATA_ENV: "production" }, { PRIVATE_STORAGE_ENV: "production" }, { PROVIDER_ACCOUNT_ENV: "production" }, { VERCEL_ENV: "preview" }, { SITE_URL: "http://staging.renta4wheel.com" }]) expect(productionConfiguration({ ...configured(), ...change }).ready).toBe(false);
   });
 });

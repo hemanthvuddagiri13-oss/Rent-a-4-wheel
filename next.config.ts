@@ -23,19 +23,19 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         has: [{ type: "host", value: "rentafourwheel.com" }],
         destination: "https://renta4wheel.com/:path*",
-        permanent: true,
+        statusCode: 301,
       },
       {
         source: "/:path*",
         has: [{ type: "host", value: "www.rentafourwheel.com" }],
         destination: "https://renta4wheel.com/:path*",
-        permanent: true,
+        statusCode: 301,
       },
       {
         source: "/:path*",
         has: [{ type: "host", value: "www.renta4wheel.com" }],
         destination: "https://renta4wheel.com/:path*",
-        permanent: true,
+        statusCode: 301,
       },
     ];
   },

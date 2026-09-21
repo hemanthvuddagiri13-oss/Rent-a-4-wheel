@@ -19,7 +19,7 @@ export function productionConfiguration(env: Environment = process.env): Configu
   for (const field of ["DATABASE_URL", "DIRECT_DATABASE_URL"]) {
     const value = env[field]; if (!value) continue; const parsed = url(value);
     if (!parsed || !["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.pathname || parsed.pathname === "/") add(field);
-    if (deployed && parsed && (parsed.searchParams.get("sslmode") !== "verify-full" || placeholder.test(value))) add(field, "UNSAFE");
+    if (deployed && parsed && ((parsed.searchParams.get("sslmode") !== "require" || parsed.searchParams.get("sslaccept") !== "strict") || placeholder.test(value))) add(field, "UNSAFE");
     if (field === "DIRECT_DATABASE_URL" && parsed && (parsed.searchParams.get("pgbouncer") === "true" || /pooler|pool\./i.test(parsed.hostname))) add(field, "UNSAFE");
   }
   if (deployed) {

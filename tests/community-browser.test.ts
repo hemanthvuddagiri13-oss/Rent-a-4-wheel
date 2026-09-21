@@ -1,3 +1,4 @@
+import { createDeviceSession } from "@/lib/device-sessions";
 import { beforeAll,afterAll,it,expect } from "vitest";
 import { spawn,type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -32,7 +33,7 @@ afterAll(async()=>{
  await cleanupReservationsForVehicles(vehicles);await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.hostEmployee.deleteMany({where:{hostId:{in:hosts}}});await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.hostProfile.deleteMany({where:{id:{in:hosts}}});await prisma.user.deleteMany({where:{id:{in:users}}});await prisma.$disconnect();
 });
 
-async function login(u:{id:string;email:string;role:string}){const ctx=await browser.newContext();const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:u.role},secret,salt:"authjs.session-token"});await ctx.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);return ctx.newPage();}
+async function login(u:{id:string;email:string;role:string}){const ctx=await browser.newContext();const token=await encode({token:{...await createDeviceSession(u.id),id:u.id,sub:u.id,email:u.email,role:u.role},secret,salt:"authjs.session-token"});await ctx.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);return ctx.newPage();}
 async function fixture(){const h=await createTestHost(),customer=await createTestCustomer(),agent=await createTestCustomer({role:"CLAIMS_AGENT"}),support=await createTestCustomer({role:"SUPPORT_AGENT"});users.push(h.user.id,customer.id,agent.id,support.id);hosts.push(h.hostProfile.id);const v=await createTestVehicle({hostId:h.hostProfile.id,listingApproval:"APPROVED"});vehicles.push(v.id);const r=await createTestReservation({vehicleId:v.id,customerId:customer.id,pickupAt:new Date(Date.now()-86400000),returnAt:new Date(),status:"COMPLETED"});await prisma.trip.create({data:{reservationId:r.id,startedAt:new Date(Date.now()-86400000),endedAt:new Date()}});return {h,customer,agent,support,v,r};}
 async function interactive(page:Page){await page.waitForLoadState("networkidle");await expect.poll(()=>page.locator('form[data-hydrated="false"]:visible').count()).toBe(0);}
 async function visit(page:Page,url:string){await page.goto(url);await interactive(page);}

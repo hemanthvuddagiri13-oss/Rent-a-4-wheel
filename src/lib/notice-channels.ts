@@ -1,3 +1,4 @@
+import { requireReleaseFeature } from "@/lib/release-control";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { marketplaceActor, MarketplaceError } from "@/lib/marketplace";
@@ -25,6 +26,7 @@ export async function handleSmsConsent(params: URLSearchParams) {
   }
 }
 export async function deliverNoticeChannels() {
+  await requireReleaseFeature("sms");
   const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN, from = process.env.TWILIO_FROM_NUMBER;
   // Twilio's Messages create endpoint does not provide the email provider's
   // replay key guarantee. A lost response is quarantined, never blindly resent.

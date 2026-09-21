@@ -1,3 +1,4 @@
+import { createDeviceSession } from "@/lib/device-sessions";
 import { beforeAll, afterAll, it, expect } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -16,7 +17,7 @@ const users: string[] = [], hosts: string[] = [], vehicles: string[] = [];
 const captures = "test-artifacts/marketplace";
 async function login(user: { id: string; email: string; role: string }) {
   const context = await browser.newContext();
-  const token = await encode({ token: { id: user.id, sub: user.id, email: user.email, role: user.role }, secret, salt: "authjs.session-token" });
+  const token = await encode({ token: { ...await createDeviceSession(user.id), id: user.id, sub: user.id, email: user.email, role: user.role }, secret, salt: "authjs.session-token" });
   await context.addCookies([{ name: "authjs.session-token", value: token, url: base, httpOnly: true, sameSite: "Lax" }]);
   return context;
 }
