@@ -281,9 +281,12 @@ async function independentClients() {
 it("concurrent identical messages use distinct connections and a pre-lock barrier, committing once", async () => {
   const f = await tenantFixture(), conversation = await prisma.conversation.create({ data: { customerId: f.user.id, vehicleId: f.vehicle.id, reservationId: f.reservation.id, retainUntil: new Date("2058-01-01") } });
   const [a, b] = await independentClients(); let arrivals = 0, release!: () => void; const barrier = new Promise<void>(resolve => { release = resolve; });
-  const wrapped = (db: PrismaClient) => { let first = true; return db.$extends({ query: { mobileCredential: { async findUnique({ args, query }) {
-    const row = await query(args); if (first) { first = false; if (++arrivals === 2) release(); await barrier; } return row;
-  } } } }) as unknown as PrismaClient; };
+  const wrapped = (db: PrismaClient) => db.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    // Both live transactions must reach the receipt lock before either can
+    // acquire it. Authentication's last-used CAS has already committed.
+    if (operation === "$queryRaw" && JSON.stringify(args).includes("mobile-mutation:")) { if (++arrivals === 2) release(); await barrier; }
+    return query(args);
+  } } }) as unknown as PrismaClient;
   const req = new Request(base, { headers: { authorization: "Bearer " + f.customer.accessToken, "idempotency-key": crypto.randomUUID() } });
   const invoke = (db: PrismaClient) => mobileMutation(req, "message.send", { id: conversation.id, body: "Concurrent synthetic message" }, async (tx, userId) => { await conversationAccess(tx, userId, conversation.id); }, (tx, userId) => messageCommand(userId, conversation.id, { action: "send", body: "Concurrent synthetic message" }, tx), db);
   try {

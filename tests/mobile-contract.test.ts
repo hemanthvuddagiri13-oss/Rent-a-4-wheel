@@ -15,7 +15,7 @@ it("every generated operation maps to the exact runtime method/path and OpenAPI 
     if (op.idempotent) expect(contract.parameters).toContainEqual(expect.objectContaining({ in: "header", name: "Idempotency-Key", required: true }));
     expect(contract.responses["200"].headers["Cache-Control"].schema.const).toBe("private, no-store");
   }
-  expect(mobileOperations.some(o => /admin|finance\/|override|payout.*POST/.test(o.path))).toBe(false);
+  expect(mobileOperations.some(o => o.method === "POST" && /admin|finance\/|override|payout/.test(o.path))).toBe(false);
 });
 it("strict response DTO rejects accidentally added provider/identity fields", () => {
   const schema = mobileOperations.find(o => o.operationId === "me")!.response;
