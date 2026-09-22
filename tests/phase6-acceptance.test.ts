@@ -66,6 +66,16 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
      const controls=[...document.querySelectorAll("button,a,input:not([type=hidden]),select,textarea")].filter(visible);
      return {title:document.title,h1:[...document.querySelectorAll("h1")].map(e=>e.textContent),overflow:document.documentElement.scrollWidth>innerWidth,overflowElements:[...document.querySelectorAll("body *")].filter(visible).filter(e=>{const r=e.getBoundingClientRect();return r.right>innerWidth+1||r.left< -1;}).slice(0,12).map(e=>({tag:e.tagName,classes:e.getAttribute("class"),left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right})),smallTargets:controls.filter(e=>{const r=e.getBoundingClientRect();return r.width<44||r.height<44;}).length,unlabelledFields:[...document.querySelectorAll<HTMLInputElement>("input:not([type=hidden]),select,textarea")].filter(visible).filter(e=>!e.labels?.length&&!e.getAttribute("aria-label")&&!e.getAttribute("aria-labelledby")).length,mainLandmarks:document.querySelectorAll("main").length};
     });
+    if(["account-security","admin-operations","admin-legal","admin-settings"].includes(spec.name)){
+      const smallButtons=await page.locator("main button:visible").evaluateAll(buttons=>buttons.filter(b=>b.getBoundingClientRect().height<44).map(b=>b.textContent));
+      expect(smallButtons,`Security/release action targets ${spec.name} ${width}`).toEqual([]);
+    }
+    if(spec.route.startsWith("/connect")){
+      for(const button of await page.getByRole("button",{name:"Search",exact:true}).all()){
+        expect(await button.evaluate(e=>{const range=document.createRange();range.selectNodeContents(e);return [...range.getClientRects()].length;}),"Search action label stays on one line").toBe(1);
+        expect(await button.evaluate(e=>e.getBoundingClientRect().height),"Search action target").toBeGreaterThanOrEqual(44);
+      }
+    }
     const axe=await new AxeBuilder({page}).withTags(["wcag2a","wcag2aa","wcag21aa","wcag22aa"]).analyze();
     const accessibility=axe.violations.map(v=>({id:v.id,impact:v.impact,description:v.description,nodes:v.nodes.map(n=>({target:n.target,failureSummary:n.failureSummary}))}));
     const keyboard:string[]=[];

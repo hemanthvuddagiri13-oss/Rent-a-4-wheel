@@ -195,3 +195,7 @@ The shared-control correction starts with wrapping action labels, 44px controls,
 Seven recorded candidate overflow observations were addressed through actual flex/grid minimums and wrapping: dashboard/chart containers at 1024, administrator dashboard at 375, vehicle edit heading/actions at 375, booking vehicle card at 768 and homepage hero at 375 (including separate STAFF/ADMIN observations). A subsequent exact-application audit at fead467447195d12b28da25ce06961ce75fc62a0 recorded 384 captures with zero document overflow, zero axe violations and zero browser console errors. Its separate zoom/focus checks failed; those failures are not counted as acceptance.
 
 See PHASE6_JOURNEYS.md for the complete 20-journey assertion map. Final exact-SHA verification and visual review remain mandatory before marking Phase 6 complete.
+
+## Visual inspection follow-up
+
+The 041c4ab route/role gallery was inspected across all six widths. Despite zero document overflow and axe violations, visual inspection found split Search labels in community forms, small native account-security and release actions, and the maintenance empty message outside the initial table viewport. These were corrected with non-shrinking search actions, shared buttons, labeled full-size security fields and an empty state outside the scroll table. Financial-case forms now use the shared field and action styles. Recorded focus states remain a separate review requirement.
