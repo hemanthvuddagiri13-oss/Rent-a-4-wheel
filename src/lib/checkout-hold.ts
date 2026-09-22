@@ -46,7 +46,7 @@ export async function createOrRefreshHold(params: {
   const bookingTimezone = params.bookingTimezone ?? settings.bookingTimezone;
   const bookingFingerprint = fingerprint({ customerId, vehicleId, bookingTimezone, pickupAt, returnAt, extraIds: [...new Set(extraIds)].sort(), couponCode: couponCode?.trim().toUpperCase() ?? "" });
   try {
-    const result = await domainTransaction(db, 
+    const result = await domainTransaction(db,
       async (tx) => {
         await releaseAuthorityFence(tx);
         await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + vehicleId})`;

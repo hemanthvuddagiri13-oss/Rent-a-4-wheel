@@ -75,7 +75,8 @@ it.skipIf(!enabled)("native bearer auth crosses the real production proxy withou
  try {
   const signed=await context.request.post(base+"/api/v1/mobile/auth/sign-in",{data:{email:user.email,code:"123456",deviceId:crypto.randomUUID(),platform:"ANDROID",appVersion:"1.0.0"}});
   expect(signed.status()).toBe(200);expect(signed.headers()["x-api-version"]).toBe("1");expect(signed.headers()["cache-control"]).toContain("no-store");
-  const credentials=(await signed.json()).data;
+  const signedBody=await signed.json();expect(signed.headers()["x-request-id"]).toBe(signedBody.requestId);
+  const credentials=signedBody.data;
   expect((await context.request.get(base+"/api/v1/mobile/me")).status()).toBe(401);
   const headers={authorization:"Bearer "+credentials.accessToken};
   expect((await context.request.get(base+"/api/v1/mobile/me",{headers})).status()).toBe(200);
@@ -83,6 +84,7 @@ it.skipIf(!enabled)("native bearer auth crosses the real production proxy withou
   expect((await context.request.post(base+"/api/account/security",{headers,data:{action:"revokeAll"}})).status()).toBe(403);
   const oversized=await context.request.post(base+"/api/v1/mobile/auth/refresh",{data:{refreshToken:"x".repeat(25000)}});
   expect(oversized.status()).toBe(413);expect((await oversized.json()).error.code).toBe("INVALID_REQUEST");expect(oversized.headers()["x-api-version"]).toBe("1");
+  expect(oversized.headers()["x-request-id"]).toBe((await oversized.json()).requestId);
   expect((await context.request.post(base+"/api/v1/mobile/auth/logout",{headers,data:{}})).status()).toBe(200);
   expect((await context.request.get(base+"/api/v1/mobile/me",{headers})).status()).toBe(401);
  }finally{await context.close();await prisma.authCode.deleteMany({where:{email:user.email}});}
