@@ -25,3 +25,7 @@ No migrations or financial authorization/provider-operation changes are included
 ## Secure evidence review decision
 
 Inline previews of retained identity and trip evidence are intentionally omitted. Existing endpoints enforce current authorization and private storage and return attachment downloads with `nosniff`; no public optimizer, URL, or alternate renderer was added. The trip workspace explains private downloads, hides scan-pending identity download actions, and offers trip support. Local pre-upload previews remain marked `data-sensitive` and must be masked in every CI screenshot. This is a secure download-based review alternative, not a claim that on-device downloads can be remotely revoked.
+
+## Follow-up implementation
+
+The reconciliation reporting gap above is now implemented with disjoint committed, failed and actionable counts, nested accounting outcomes and isolated per-account reporting failures. Real database and worker-boundary regression tests cover mixed results and all-review batches. This changes reporting, not financial authority or provider execution. Retained private previews remain intentionally omitted in favor of the secure alternative described above.
