@@ -1,8 +1,8 @@
 export type WorkerStatus="SUCCESS"|"PARTIAL_FAILURE"|"FAILED"|"DISABLED"|"NO_WORK";
-export type WorkerCounts={attempted:number;committed:number;processed:number;failed:number;stale:number;review:number;quarantined:number;uncertain:number;skipped:number;disabled:number};
+export type WorkerCounts={checked:number;actionable:number;attempted:number;committed:number;processed:number;failed:number;stale:number;review:number;quarantined:number;uncertain:number;skipped:number;disabled:number};
 export type WorkerResult=WorkerCounts&{status:WorkerStatus;children?:Record<string,WorkerResult>};
 export function workerResult(input:Partial<WorkerCounts>={},children?:Record<string,WorkerResult>):WorkerResult{
- const counts:WorkerCounts={attempted:0,committed:0,processed:0,failed:0,stale:0,review:0,quarantined:0,uncertain:0,skipped:0,disabled:0};
+ const counts:WorkerCounts={checked:0,actionable:0,attempted:0,committed:0,processed:0,failed:0,stale:0,review:0,quarantined:0,uncertain:0,skipped:0,disabled:0};
  for(const k of Object.keys(counts) as Array<keyof WorkerCounts>)if(input[k]!==undefined)counts[k]=input[k]!;
  if(children)for(const child of Object.values(children))for(const k of Object.keys(counts) as Array<keyof WorkerCounts>)counts[k]+=child[k];
  for(const n of Object.values(counts))if(!Number.isSafeInteger(n)||n<0)throw new Error("INVALID_WORKER_COUNTS");

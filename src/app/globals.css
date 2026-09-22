@@ -15,10 +15,14 @@
   --card: #111111;
   --card-elevated: #161616;
   --foreground: #ffffff;
-  --muted: #8a8a8a;
+  --muted: #a4a7ae;
   --silver: #d9d9d9;
-  --gold: #d4af37;
-  --gold-bright: #f5c542;
+  --gold: #d6b66a;
+  --gold-bright: #e9cb87;
+  --positive: #86d8b0;
+  --caution: #f0ca80;
+  --negative: #f5a2ab;
+  --information: #a8c7f5;
   --border: rgba(217, 217, 217, 0.12);
   --radius: 0.75rem;
 }
@@ -34,6 +38,10 @@
   --color-gold: var(--gold);
   --color-gold-bright: var(--gold-bright);
   --color-border: var(--border);
+  --color-positive: var(--positive);
+  --color-caution: var(--caution);
+  --color-negative: var(--negative);
+  --color-information: var(--information);
 
   --font-display: var(--font-oswald), "Arial Narrow", sans-serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -80,6 +88,19 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
+}
+
+/* Focus remains visible below sticky navigation, including keyboard scrolling. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+:where([id], a, button, input, select, textarea, summary) { scroll-margin-block: 6rem 2rem; }
+:where(main, section, article, fieldset) { min-width: 0; }
+@media (forced-colors: active) {
+  :where(button, input, select, textarea, [role="dialog"]) { border: 1px solid ButtonText; }
+  :focus-visible { outline: 2px solid Highlight; }
 }
 
 ::selection {

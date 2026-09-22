@@ -15,7 +15,7 @@ export function ChromeGate({ settings, children }: { settings: SiteSettings; chi
 
   return (
     <>
-      <Navbar phone={settings.phone} />
+      <Navbar />
       <main id="main-content" className="flex-1">
         {children}
       </main>

@@ -113,20 +113,20 @@ function ReservationRow({
   return (
     <Link
       href={`/account/reservations/${r.id}`}
-      className="flex items-center gap-4 rounded-xl border border-white/10 bg-card p-4 transition-colors hover:border-gold/30"
+      className="grid grid-cols-[4rem_minmax(0,1fr)] items-center gap-3 rounded-xl border border-white/10 bg-card p-4 transition-colors hover:border-gold/30 sm:grid-cols-[6rem_minmax(0,1fr)_auto] sm:gap-4"
     >
-      <div className="relative h-16 w-24 shrink-0 overflow-hidden rounded-md bg-surface">
+      <div className="relative h-16 w-full overflow-hidden rounded-md bg-surface">
         <Image src={r.vehicle.images[0]?.url || "/images/vehicles/sedan.svg"} alt="" fill className="object-cover" />
       </div>
-      <div className="flex-1">
+      <div className="min-w-0">
         <p className="font-medium text-white">
           {r.vehicle.year} {r.vehicle.make} {r.vehicle.model}
         </p>
-        <p className="text-xs text-muted">
+        <p className="break-words text-sm text-muted">
           {r.pickupAt.toLocaleDateString()} — {r.returnAt.toLocaleDateString()} &middot; {r.confirmationNumber}
         </p>
       </div>
-      <div className="text-right">
+      <div className="col-span-2 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 sm:col-span-1 sm:block sm:border-0 sm:pt-0 sm:text-right">
         <Badge variant={statusVariant}>{RESERVATION_STATUS_LABELS[r.status]}</Badge>
         <p className="mt-1 text-sm font-semibold text-gold-bright">{formatCurrency(r.totalCents)}</p>
       </div>

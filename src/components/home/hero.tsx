@@ -1,53 +1,22 @@
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ArrowUpRight } from "lucide-react";
 import { SearchWidget } from "@/components/home/search-widget";
 
 export function Hero() {
-  return (
-    <section className="relative overflow-hidden bg-background pb-16 pt-16 sm:pb-24 sm:pt-20">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-40"
-        style={{
-          backgroundImage:
-            "radial-gradient(ellipse 60% 50% at 50% 0%, rgba(212,175,55,0.18), transparent 70%)",
-        }}
-      />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,transparent_0%,#050505_95%)]" />
-
-      <div className="relative mx-auto flex max-w-7xl flex-col items-center px-4 text-center sm:px-6 lg:px-8">
-        <span className="animate-fade-up mb-6 inline-flex items-center rounded-full border border-gold/30 bg-gold/5 px-4 py-1.5 text-xs font-medium uppercase tracking-[0.2em] text-gold-bright opacity-0 [animation-delay:0ms]">
-          Dallas, Texas
-        </span>
-
-        <h1 className="animate-fade-up font-display text-5xl font-bold uppercase leading-[0.95] tracking-tight text-white opacity-0 [animation-delay:80ms] sm:text-7xl lg:text-8xl">
-          Drive More.
-          <br />
-          <span className="text-gradient-gold">Pay Less.</span>
-        </h1>
-
-        <p className="animate-fade-up mt-6 max-w-2xl text-lg font-medium text-silver opacity-0 [animation-delay:160ms] sm:text-xl">
-          Daily, Weekly &amp; Monthly Car Rentals in Dallas
-        </p>
-        <p className="animate-fade-up mt-3 max-w-xl text-sm text-muted opacity-0 [animation-delay:220ms] sm:text-base">
-          Clean, reliable vehicles with flexible rental options and competitive rates.
-        </p>
-
-        <div className="animate-fade-up mt-8 flex flex-col gap-3 opacity-0 [animation-delay:280ms] sm:flex-row">
-          <Button asChild size="lg" className="text-base">
-            <Link href="/vehicles">
-              Find a Car <ArrowRight className="h-4 w-4" />
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="lg" className="text-base">
-            <Link href="/vehicles">View Vehicles</Link>
-          </Button>
+  return <section className="relative border-b border-white/10 bg-surface pb-10 pt-12 sm:pb-16 sm:pt-20">
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div className="grid items-end gap-8 lg:grid-cols-[1.3fr_1fr] lg:gap-16">
+        <div>
+          <p className="mb-5 text-sm font-medium tracking-wide text-gold">Cars from independent hosts</p>
+          <h1 className="max-w-3xl font-display text-5xl font-medium leading-[1.05] tracking-tight text-white sm:text-7xl lg:text-8xl">Drive More <span className="text-gold">Possibilities</span></h1>
         </div>
-
-        <div className="animate-fade-up mt-12 w-full opacity-0 [animation-delay:360ms]">
-          <SearchWidget />
+        <div className="max-w-md pb-2">
+          <p className="text-lg leading-relaxed text-silver">A car for the plans you make. Explore available vehicles, choose your dates and see your trip costs before payment.</p>
+          <Link href="/how-it-works" className="mt-4 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-white underline underline-offset-4">How car sharing works <ArrowUpRight aria-hidden="true" className="h-4 w-4" /></Link>
         </div>
       </div>
-    </section>
-  );
+      <div className="mt-10 sm:mt-14"><SearchWidget /></div>
+      <p className="mt-4 text-sm text-muted">Availability, eligibility and approved terms depend on the vehicle and operating state.</p>
+    </div>
+  </section>;
 }
