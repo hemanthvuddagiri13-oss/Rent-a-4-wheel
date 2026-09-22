@@ -53,7 +53,7 @@ export default async function ContactPage() {
 
           <p className="mt-6 text-sm text-muted">
             Have a general question?{" "}
-            <Link href="/faq" className="text-gold hover:underline">
+            <Link href="/faq" className="text-gold underline underline-offset-4">
               Check our FAQ
             </Link>
             .

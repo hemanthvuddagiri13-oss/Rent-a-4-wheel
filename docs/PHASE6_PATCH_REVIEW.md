@@ -21,3 +21,7 @@ The attachment contains no document-upload hunk. Camera selection, preview/retak
 The Google Fonts build dependency was removed separately as requested. System UI body fonts and a condensed-first display stack retain the existing typography scale and black/gold visual tokens without font downloads. Cross-platform font metrics still require the six-width visual review.
 
 No migrations or financial authorization/provider-operation changes are included. Live-finance flags and release controls are unchanged. This integration does not constitute Phase 6 acceptance: the complete journey, visual, accessibility, Lighthouse and exact-SHA CI requirements remain mandatory.
+
+## Secure evidence review decision
+
+Inline previews of retained identity and trip evidence are intentionally omitted. Existing endpoints enforce current authorization and private storage and return attachment downloads with `nosniff`; no public optimizer, URL, or alternate renderer was added. The trip workspace explains private downloads, hides scan-pending identity download actions, and offers trip support. Local pre-upload previews remain marked `data-sensitive` and must be masked in every CI screenshot. This is a secure download-based review alternative, not a claim that on-device downloads can be remotely revoked.

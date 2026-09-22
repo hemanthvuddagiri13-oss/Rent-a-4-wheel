@@ -26,7 +26,7 @@ export default async function AdminMaintenancePage() {
         </Button>
       </div>
 
-      <div className="mt-6 overflow-x-auto rounded-xl border border-white/10">
+      <div role="region" aria-label="Maintenance records" tabIndex={0} className="mt-6 overflow-x-auto rounded-xl border border-white/10">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-surface/60 text-xs uppercase tracking-wide text-muted">
             <tr>

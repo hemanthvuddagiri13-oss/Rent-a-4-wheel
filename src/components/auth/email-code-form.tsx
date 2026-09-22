@@ -56,6 +56,8 @@ export function EmailCodeForm({ callbackUrl, onSuccess }: { callbackUrl?: string
           return c - 1;
         });
       }, 1000);
+    } catch {
+      setError("We could not confirm the code request. Check your email before requesting another code.");
     } finally {
       setLoading(false);
     }
@@ -65,18 +67,13 @@ export function EmailCodeForm({ callbackUrl, onSuccess }: { callbackUrl?: string
     e.preventDefault();
     setLoading(true);
     setError(null);
-    const res = await signIn("email-code", { email, code, redirect: false });
-    setLoading(false);
-    if (res?.error) {
-      setError("Invalid or expired code. Please try again.");
-      return;
-    }
-    if (onSuccess) {
-      onSuccess();
-      return;
-    }
-    router.push(callbackUrl || "/account");
-    router.refresh();
+    try {
+      const res = await signIn("email-code", { email, code, redirect: false });
+      if (res?.error) { setError("Invalid or expired code. Please try again."); return; }
+      if (onSuccess) { onSuccess(); return; }
+      router.push(callbackUrl || "/account"); router.refresh();
+    } catch { setError("Sign-in could not be confirmed. Please try again or request a new code."); }
+    finally { setLoading(false); }
   }
 
   if (stage === "email") {
@@ -94,7 +91,7 @@ export function EmailCodeForm({ callbackUrl, onSuccess }: { callbackUrl?: string
             className="mt-1.5"
           />
         </div>
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p role="alert" className="text-sm text-negative">{error}</p>}
         <Button type="submit" className="w-full" size="lg" disabled={loading || !email}>
           {loading && <Loader2 className="h-4 w-4 animate-spin" />} Continue with Email
         </Button>
@@ -125,8 +122,8 @@ export function EmailCodeForm({ callbackUrl, onSuccess }: { callbackUrl?: string
           className="mt-1.5 tracking-[0.5em] text-center text-lg"
         />
       </div>
-      {info && <p className="text-sm text-muted">{info}</p>}
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {info && <p data-sensitive role="status" className="text-sm text-muted">{info}</p>}
+      {error && <p role="alert" className="text-sm text-negative">{error}</p>}
       <Button type="submit" className="w-full" size="lg" disabled={loading || code.length !== 6}>
         {loading && <Loader2 className="h-4 w-4 animate-spin" />} Verify &amp; Continue
       </Button>
@@ -134,7 +131,7 @@ export function EmailCodeForm({ callbackUrl, onSuccess }: { callbackUrl?: string
         type="button"
         onClick={() => requestCode()}
         disabled={cooldown > 0 || loading}
-        className="w-full text-center text-sm text-gold hover:underline disabled:cursor-not-allowed disabled:text-muted disabled:no-underline"
+        className="min-h-11 w-full text-center text-sm text-gold hover:underline disabled:cursor-not-allowed disabled:text-muted disabled:no-underline"
       >
         {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
       </button>
@@ -145,7 +142,7 @@ export function EmailCodeForm({ callbackUrl, onSuccess }: { callbackUrl?: string
           setCode("");
           setError(null);
         }}
-        className="w-full text-center text-xs text-muted hover:underline"
+        className="min-h-11 w-full text-center text-sm text-muted hover:underline"
       >
         Use a different email
       </button>

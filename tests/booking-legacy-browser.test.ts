@@ -56,7 +56,7 @@ describe("previous schema checkout resumed by real Next/PostgreSQL/Chromium", ()
       const fields = { "First Name": "Synthetic", "Last Name": "Driver", "Date of Birth": "1990-01-01", "Email": "mig-test-1@example.com", "Phone": "5551234567", "Address": "100 Test Street", "City": "Dallas", "State": "TX", "ZIP": "75001", "Country": "US", "License Number": "SYNTHETIC_ONLY", "License State/Country": "TX", "License Expiration": "2035-01-01" };
       for (const [label, value] of Object.entries(fields)) await page.getByLabel(label, { exact: true }).fill(value);
       const buffer = await sharp({ create: { width: 20, height: 20, channels: 3, background: "white" } }).png().toBuffer();
-      for (let i = 0; i < 3; i++) await uploadBookingDocument(page,i,buffer);
+      for (let i = 0; i < 3; i++) await uploadBookingDocument(page,i,buffer,"QUARANTINED");
       const submitted = page.waitForResponse(r => r.url().endsWith("/api/reservations/hold"));
       await page.getByRole("button", { name: "Continue", exact: true }).click();
       const response = await submitted; expect(response.status(), await response.text()).toBe(200); expect((await response.json()).id).toBe(id);

@@ -19,7 +19,7 @@ async function setup(page:Page){
  await page.route('**/api/**',async route=>{
   const url=new URL(route.request().url());let data:unknown={};
   if(url.pathname==='/api/reservations/hold'){counts.holds++;data={id:'browser-reservation',confirmationNumber:'TEST-BROWSER',expiresAt:new Date(Date.now()+60000).toISOString(),bookingFingerprint:'fixed',breakdown}}
-  else if(url.pathname==='/api/documents/upload')data={id:'SYNTHETIC_DOCUMENT_'+Math.random()};
+  else if(url.pathname==='/api/documents/upload')data={id:'SYNTHETIC_DOCUMENT_'+Math.random(),malwareScanStatus:'CLEAN'};
   else if(url.pathname.endsWith('/checkout')){counts.checkouts++;complete=true;data={success:true}}
   else if(url.pathname.endsWith('/payment-intent')){counts.payments++;data={devMode:true}}
   else if(url.pathname.endsWith('/status'))data={status:complete?'AWAITING_PAYMENT':'CHECKOUT_HOLD',outcome:'processing',paidCents:0};

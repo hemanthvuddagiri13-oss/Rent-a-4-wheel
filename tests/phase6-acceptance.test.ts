@@ -25,7 +25,7 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
  const employee=otherRoles.find(u=>u.role==="HOST_EMPLOYEE")!;
  await prisma.hostEmployee.create({data:{hostId:host.hostProfile.id,userId:employee.id,role:"STAFF"}});
  const vehicle=await createTestVehicle({hostId:host.hostProfile.id,make:"Toyota",model:"Corolla",location:"Dallas, TX",description:"Synthetic staging listing. This vehicle is not offered for rental.",images:{create:{url:"/images/vehicles/sedan.svg",alt:"Illustrated staging sedan",isPrimary:true}}});
- const reservation=await createTestReservation({customerId:customer.id,vehicleId:vehicle.id,pickupAt:new Date(Date.now()+86400000),returnAt:new Date(Date.now()+4*86400000),status:"CONFIRMED"});
+ const reservation=await createTestReservation({customerId:customer.id,vehicleId:vehicle.id,pickupAt:new Date(Date.now()+10*86400000),returnAt:new Date(Date.now()+13*86400000),status:"CONFIRMED"});
  const conversation=await prisma.conversation.create({data:{reservationId:reservation.id,vehicleId:vehicle.id,customerId:customer.id,retainUntil:new Date("2099-01-01"),messages:{create:{senderId:customer.id,body:"Synthetic staging message: where should we meet for pickup?"}}}});
  const serviceCase=await prisma.serviceCase.create({data:{kind:"TICKET",reservationId:reservation.id,vehicleId:vehicle.id,openedById:customer.id,category:"BOOKING",title:"Synthetic pickup question",details:{description:"Staging support conversation; no private attachments."},dueAt:new Date(Date.now()+86400000),retainUntil:new Date("2099-01-01")}});
  const earning=await prisma.hostEarning.create({data:{reservationId:reservation.id,hostId:host.hostProfile.id,grossCents:15000,commissionCents:1500,hostDiscountCents:0,netCents:13500}});
@@ -45,15 +45,15 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
   }
   const files=await pages(),specs=files.map(file=>{
    let route=file.replace(/^src\/app/,"").replace(/\/page\.tsx$/,"")||"/";
-   const role=route.startsWith("/admin")||route.startsWith("/finance/admin")?"admin":route.startsWith("/host")||route.startsWith("/finance")?"host":route.startsWith("/account")||route.startsWith("/book")||route.startsWith("/connect")?"customer":"visitor";
+   const role=route.startsWith("/admin")||route.startsWith("/finance/admin")?"admin":(route==="/host"||route.startsWith("/host/"))||route.startsWith("/finance")?"host":route.startsWith("/account")||route.startsWith("/book")||route.startsWith("/connect")?"customer":"visitor";
    route=route.replace("[slug]",vehicle.slug).replace("[vehicleId]",vehicle.id).replace("[type]","terms-and-conditions");
-   if(route.includes("[id]"))route=route.replace("[id]",route.includes("/conversations/")?conversation.id:route.includes("/cases/")?serviceCase.id:route.includes("/payouts/")?payout.id:route.includes("/vehicles/")?vehicle.id:reservation.id);
+   if(route.includes("[id]"))route=route.replace("[id]",route.startsWith("/hosts/")?host.hostProfile.id:route.includes("/conversations/")?conversation.id:route.includes("/cases/")?serviceCase.id:route.includes("/payouts/")?payout.id:route.includes("/vehicles/")?vehicle.id:reservation.id);
    return {file,route,role,name:file.replace(/^src\/app\//,"").replace(/\/page\.tsx$/,"").replace("page.tsx","home").replace(/[^a-z0-9]+/gi,"-")};
   });
   for(const view of ["notifications","reviews","support","cases"])specs.push({file:"src/app/connect/page.tsx",route:"/connect?view="+view,role:"customer",name:"connect-"+view});
   for(const role of Object.keys(users).filter(r=>r===r.toUpperCase()))specs.push({file:"role-navigation",route:role==="HOST_EMPLOYEE"?"/host":role==="FINANCE_AGENT"?"/finance/admin":role==="SUPPORT_AGENT"||role==="CLAIMS_AGENT"?"/connect":"/admin",role,name:"role-"+role.toLowerCase()});
   for(const spec of specs){
-   const page=await contexts[spec.role].newPage();const consoleErrors:string[]=[];page.on("pageerror",error=>consoleErrors.push(error.name));page.on("console",message=>{if(message.type()==="error")consoleErrors.push("browser-console-error");});const response=await page.goto(base+spec.route,{waitUntil:"networkidle",timeout:90000});await page.evaluate(()=>document.fonts.ready);
+   const page=await contexts[spec.role].newPage();const consoleErrors:string[]=[];page.on("pageerror",error=>consoleErrors.push(error.name));page.on("console",message=>{if(message.type()==="error")consoleErrors.push(message.text().replace(/https?:\/\/[^\s]+/g,"[URL]").slice(0,240));});const response=await page.goto(base+spec.route,{waitUntil:"networkidle",timeout:90000});await page.evaluate(()=>document.fonts.ready);
    // Do not put private image/document contents or payment credentials in artifacts.
    const sensitive=page.locator('img[src*="/api/documents"],img[src*="/api/host/files"],img[src*="/photos/"],img[src*="/api/community/files"],iframe,canvas,video,input[type="password"],input[autocomplete="cc-number"],[data-sensitive]');
    for(const [width,height] of sizes){
@@ -65,7 +65,21 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
     });
     const axe=await new AxeBuilder({page}).withTags(["wcag2a","wcag2aa","wcag21aa","wcag22aa"]).analyze();
     const accessibility=axe.violations.map(v=>({id:v.id,impact:v.impact,description:v.description,nodes:v.nodes.map(n=>({target:n.target,failureSummary:n.failureSummary}))}));
-    const image=spec.name+"-"+width+".png";await page.screenshot({path:output+"/"+image,fullPage:true,animations:"disabled",mask:[sensitive]});captures.push({...spec,width,height,status:response?.status(),image,scenario:"initial",consoleErrors:[...consoleErrors],accessibility,...metrics});
+    const keyboard:string[]=[];
+    if(["home","account","host","connect"].includes(spec.name)){
+      const menu=page.getByRole("button",{name:"Open menu",exact:true});
+      await menu.focus();await page.keyboard.press("Enter");
+      const dialog=page.getByRole("dialog");await dialog.waitFor();
+      for(let tab=0;tab<12;tab++){await page.keyboard.press("Tab");expect(await dialog.evaluate(e=>e.contains(document.activeElement)),"Dialog keeps keyboard focus").toBe(true);}
+      await page.keyboard.press("Escape");await dialog.waitFor({state:"hidden"});
+      expect(await menu.evaluate(e=>e===document.activeElement),"Closing dialog restores trigger focus").toBe(true);
+      expect(await menu.evaluate(e=>getComputedStyle(e).outlineStyle!=="none"),"Keyboard focus is visible").toBe(true);
+      keyboard.push("Enter opens navigation","Tab remains in dialog","Escape closes","Focus restored with visible outline");
+      await page.evaluate(()=>{document.documentElement.style.zoom="2";});await page.waitForTimeout(300);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"200% CSS zoom reflow").toBe(true);
+      await page.evaluate(()=>{document.documentElement.style.zoom="";});await page.waitForTimeout(300);await menu.blur();
+    }
+    const image=spec.name+"-"+width+".png";await page.screenshot({path:output+"/"+image,fullPage:true,animations:"disabled",mask:[sensitive]});captures.push({...spec,width,height,status:response?.status(),image,keyboard,scenario:"initial",consoleErrors:[...consoleErrors],accessibility,...metrics});
    }
    await page.close();
   }

@@ -26,7 +26,7 @@ beforeAll(async()=>{
 },150000);
 afterAll(async()=>{
  await browser?.close();child?.kill();
- await cleanupReservationsForVehicles(vehicles);await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.extra.deleteMany({where:{id:{in:extras}}});await prisma.coupon.deleteMany({where:{id:{in:coupons}}});await prisma.user.deleteMany({where:{id:{in:users}}});
+ await cleanupReservationsForVehicles(vehicles);await prisma.vehicle.deleteMany({where:{id:{in:vehicles}}});await prisma.extra.deleteMany({where:{id:{in:extras}}});await prisma.coupon.deleteMany({where:{id:{in:coupons}}});await prisma.driverDocument.deleteMany({where:{userId:{in:users},reservationId:null}});await prisma.user.deleteMany({where:{id:{in:users}}});
  if(priorLegal)await prisma.legalDocument.update({where:{type:"RENTAL_AGREEMENT"},data:{needsAttorneyReview:priorLegal.needsAttorneyReview}});else await prisma.legalDocument.deleteMany({where:{type:"RENTAL_AGREEMENT"}});
  if(priorZone)await prisma.siteSetting.update({where:{key:"bookingTimezone"},data:{value:priorZone.value!}});else await prisma.siteSetting.deleteMany({where:{key:"bookingTimezone"}});
  await prisma.$disconnect();
@@ -53,7 +53,7 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   const fields={"First Name":"Synthetic","Last Name":"Driver","Date of Birth":"1990-01-01","Email":u.email,"Phone":"5551234567","Address":"100 Test Street","City":"Dallas","State":"TX","ZIP":"75001","Country":"US","License Number":"SYNTHETIC_ONLY","License State/Country":"TX","License Expiration":"2035-01-01"};
   for(const [name,value]of Object.entries(fields))await page.getByLabel(name,{exact:true}).fill(value);
   const buffer=await sharp({create:{width:20,height:20,channels:3,background:"white"}}).png().toBuffer();
-  for(let i=0;i<3;i++)await uploadBookingDocument(page,i,buffer);
+  for(let i=0;i<3;i++)await uploadBookingDocument(page,i,buffer,"QUARANTINED");
   await page.getByRole("button",{name:"Continue",exact:true}).click();await page.getByRole("heading",{name:"Review Your Booking"}).waitFor();
   await page.getByLabel("Promo Code").fill(coupon.code);const applied=page.waitForResponse(r=>r.url().endsWith("/api/reservations/hold"));await page.getByRole("button",{name:"Apply",exact:true}).click();expect((await applied).status()).toBe(200);
   await page.getByRole("checkbox").check();await page.getByRole("button",{name:"Continue to Payment"}).click();await page.getByRole("button",{name:"Simulate Successful Payment"}).waitFor();
@@ -76,6 +76,12 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
    expect(bookingLocal(resumed.pickupAt,resumed.bookingTimezone)).toBe("2030-03-09T10:00");
    await page.getByRole("button",{name:"Continue to Payment"}).click();
   }
+  const paymentResponse=page.waitForResponse(r=>r.url().endsWith("/confirm-dev-payment")&&r.request().method()==="POST");
+  await page.getByRole("button",{name:"Simulate Successful Payment",exact:true}).click();
+  expect((await paymentResponse).status()).toBe(200);
+  await page.getByRole("heading",{name:"Confirmed",exact:true}).waitFor();
+  expect(await prisma.payment.count({where:{reservationId:id,type:"RENTAL",status:"SUCCEEDED"}})).toBe(1);
+  expect(await prisma.reservation.findUnique({where:{id}})).toMatchObject({status:"DOCUMENTS_REQUIRED",expiresAt:null});
  },180000);
  it("refreshes revoked roles and disabled accounts on real authenticated HTTP requests",async()=>{
    const isolated=await browser.newContext();

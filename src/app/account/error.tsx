@@ -1,0 +1,3 @@
+"use client";
+import Link from "next/link";
+export default function ErrorState({reset}:{reset:()=>void}) { return <section className="mx-auto max-w-2xl px-4 py-12"><h1 className="text-3xl">Your account could not load</h1><p role="alert" className="mt-4 text-silver">Please try again. If you were making a payment or saving a booking, check your account before starting another reservation.</p><div className="mt-6 flex flex-wrap gap-4"><button className="min-h-11 rounded-lg bg-gold px-5 py-3 font-semibold text-black" onClick={reset}>Try again</button><Link className="inline-flex min-h-11 items-center underline" href="/account">Return to your account</Link><Link className="inline-flex min-h-11 items-center underline" href="/contact">Contact support</Link></div></section>; }

@@ -71,7 +71,7 @@ beforeAll(async () => {
     });
   });
   await new Promise<void>(resolve => scanner.listen(0, "127.0.0.1", resolve));
-  child = spawn(process.execPath, ["tests/helpers/app-server.mjs"], { stdio: "inherit", env: { ...process.env, CLAMAV_HOST: "127.0.0.1", CLAMAV_PORT: String((scanner.address() as { port: number }).port), BROWSER_TEST_PORT: "3201", NODE_ENV: "development", AUTH_SECRET: secret, AUTH_TRUST_HOST: "true", NEXTAUTH_URL: base, AUTH_URL: base, STRIPE_SECRET_KEY: "", NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "", STRIPE_WEBHOOK_SECRET: "", ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV: "true" } });
+  child = spawn(process.execPath, ["tests/helpers/app-server.mjs"], { stdio: "inherit", env: { ...process.env, CLAMAV_HOST: "127.0.0.1", CLAMAV_PORT: String((scanner.address() as { port: number }).port), BROWSER_TEST_PORT: "3201", NODE_ENV: "development", RESEND_API_KEY: "", AUTH_SECRET: secret, AUTH_TRUST_HOST: "true", NEXTAUTH_URL: base, AUTH_URL: base, STRIPE_SECRET_KEY: "", NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "", STRIPE_WEBHOOK_SECRET: "", ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV: "true" } });
   let ready = false;
   for (let i = 0; i < 240; i++) { try { await fetch(`${base}/api/auth/session`); ready = true; break; } catch { await new Promise(r => setTimeout(r, 500)); } }
   if (!ready) throw new Error("Real Next.js server unavailable");
@@ -280,3 +280,20 @@ it("renders discovery and account pages at all requested widths with labeled for
   }
   await context.close();
 }, 120000);
+
+// Controlled local email boundary: real issuance, hashed PostgreSQL code, Auth.js verification and device session.
+it("customer signs in through the controlled email-code UI and consumes the code once", async()=>{
+ const context=await browser.newContext(),page=await context.newPage();
+ const email=`phase6-signin-${crypto.randomUUID()}@example.test`;
+ try {
+  await page.goto(base+"/sign-in");await page.getByLabel("Email",{exact:true}).fill(email);
+  const issued=page.waitForResponse(r=>r.url().endsWith("/api/auth/request-code")&&r.request().method()==="POST");
+  await page.getByRole("button",{name:"Continue with Email"}).click();
+  const response=await issued;expect(response.status()).toBe(200);const body=await response.json();expect(body.devCode).toMatch(/^\d{6}$/);
+  await page.getByLabel("6-digit code").fill(body.devCode);await page.getByRole("button",{name:"Verify & Continue"}).click();
+  await page.waitForURL(/\/account$/);const user=await prisma.user.findUniqueOrThrow({where:{email}});users.push(user.id);
+  expect((await (await context.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
+  expect(await prisma.authCode.findFirst({where:{email}})).toMatchObject({consumedAt:expect.any(Date)});
+  expect(await prisma.session.count({where:{userId:user.id,revokedAt:null}})).toBe(1);
+ }finally{await context.close();}
+},90000);
