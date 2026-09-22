@@ -1,7 +1,7 @@
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { uploadBookingDocument } from "./helpers/booking-document";
 import { createDeviceSession } from "@/lib/device-sessions";
-import { beforeAll, afterAll, it, expect } from "vitest";
+import { beforeAll, afterAll, it, expect, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -23,13 +23,15 @@ async function login(user: { id: string; email: string; role: string }) {
   await context.addCookies([{ name: "authjs.session-token", value: token, url: base, httpOnly: true, sameSite: "Lax" }]);
   return context;
 }
-async function screenshot(page: Page, name: string, widths = [375, 390, 430, 768, 1024, 1440]) {
-  // Streamed navigation can temporarily retain hidden/duplicate headings.
-  // Wait for the final single visible heading without relaxing uniqueness.
-  await page.waitForFunction(() => {
+async function waitForHeading(page: Page, expectedHeading: string) {
+  await page.waitForFunction(expected => {
     const headings = document.querySelectorAll("h1");
-    return headings.length === 1 && headings[0].checkVisibility();
-  });
+    return headings.length === 1 && headings[0].checkVisibility()
+      && headings[0].textContent?.replace(/\s+/g, " ").trim() === expected;
+  }, expectedHeading);
+}
+async function screenshot(page: Page, name: string, expectedHeading: string, widths = [375, 390, 430, 768, 1024, 1440], ready = waitForHeading) {
+  await ready(page, expectedHeading);
   for (const loading of ["Loading your trip…", "Loading payment status…"]) await page.getByText(loading, { exact: true }).waitFor({ state: "hidden" });
   await page.evaluate(() => document.fonts.ready);
   for (const width of widths) {
@@ -38,6 +40,8 @@ async function screenshot(page: Page, name: string, widths = [375, 390, 430, 768
     await page.screenshot({ path: `${captures}/${name}-${width}.png`, fullPage: true, mask:[page.locator('[data-sensitive],img[src*="/api/documents"],img[src*="/photos/"],img[src*="/api/community/files"],iframe,canvas,video,input[type="password"],input[autocomplete="cc-number"]')], animations: "disabled" });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${name} overflows at ${width}px`).toBe(true);
     expect(await page.locator("h1").count()).toBe(1);
+    expect((await page.locator("h1").textContent())?.replace(/\s+/g, " ").trim()).toBe(expectedHeading);
+    expect(await page.locator("h1").isVisible()).toBe(true);
   }
 }
 it("waits for streamed headings to become unique and visible before capturing", async () => {
@@ -53,39 +57,57 @@ it("waits for streamed headings to become unique and visible before capturing", 
         return result;
       }) as typeof document.querySelectorAll;
     });
-    let completed = false;
-    const capture = screenshot(page, "streamed-heading-regression", [375]).then(() => { completed = true; });
+    let started = false, completed = false;
+    const realCapture = page.screenshot.bind(page);
+    vi.spyOn(page, "screenshot").mockImplementation(async options => { started = true; return realCapture(options); });
+    const capture = screenshot(page, "streamed-heading-regression", "My Account", [375]).then(() => { completed = true; });
     // Keep a rejected strict locator promise handled until the final assertion.
     void capture.catch(() => {});
     await page.waitForFunction(() => document.documentElement.dataset.headingPolled === "true");
+    expect(started).toBe(false);
     expect(completed).toBe(false);
     await page.evaluate(() => {
       document.querySelector("h1")!.hidden = false;
       delete document.documentElement.dataset.headingPolled;
     });
     await page.waitForFunction(() => document.documentElement.dataset.headingPolled === "true");
+    expect(started).toBe(false);
     expect(completed).toBe(false);
     await page.evaluate(() => document.querySelector("h1[hidden]")!.remove());
     await capture;
+    expect(started).toBe(true);
     expect(completed).toBe(true);
     expect(await page.locator("h1").count()).toBe(1);
   } finally {
     await page.close();
   }
 });
+it("capture-entry control detects a readiness gate that omits uniqueness", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<h1>My Account</h1><h1 hidden>My Account</h1>');
+    const capture = vi.spyOn(page, "screenshot").mockResolvedValue(Buffer.alloc(0));
+    // Deliberately broken gate: visibility without uniqueness. It crosses the
+    // capture boundary, which the positive barrier test explicitly forbids.
+    const withoutUniqueness = async (p: Page) => { await p.waitForFunction(() => document.querySelector("h1")!.checkVisibility()); };
+    await expect(screenshot(page, "negative-control", "My Account", [375], withoutUniqueness)).rejects.toThrow();
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(await page.locator("h1").count()).toBe(2);
+  } finally { await page.close(); }
+});
 it("uses real session revocation, private responses, origin enforcement and the operations dashboard",async()=>{
  const user=await createTestCustomer(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(user.id,admin.id);
  const current=await login(user),other=await login(user),page=await current.newPage();
  expect((await(await other.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
  const response=await page.goto(base+"/account/security");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["cache-control"]).not.toMatch(/public|s-maxage/);expect((await current.request.get(base+"/api/account/security")).headers()["cache-control"]).toContain("no-store");
- await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await screenshot(page,"account-security");
+ await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await screenshot(page,"account-security", "Account security");
  await page.locator("li").filter({hasNotText:"this device"}).getByRole("button",{name:"Revoke session",exact:true}).click();
  await page.getByRole("status").filter({hasText:"Security action saved"}).waitFor();
  expect((await(await other.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
  expect((await current.request.post(base+"/api/account/security",{headers:{origin:"https://untrusted.invalid"},data:{action:"revokeAll"}})).status()).toBe(403);
  expect((await current.request.get(base+"/api/admin/operations")).status()).toBe(403);
  const health=await current.request.get(base+"/api/health/ready");expect(Object.keys(await health.json())).toEqual(["ready"]);
- const privileged=await login(admin),operator=await privileged.newPage();await operator.goto(base+"/admin/operations");await operator.getByRole("heading",{name:"State release controls"}).waitFor();expect(await operator.getByText("No state is approved for production.",{exact:false}).count()).toBe(1);await screenshot(operator,"production-readiness");
+ const privileged=await login(admin),operator=await privileged.newPage();await operator.goto(base+"/admin/operations");await operator.getByRole("heading",{name:"State release controls"}).waitFor();expect(await operator.getByText("No state is approved for production.",{exact:false}).count()).toBe(1);await screenshot(operator,"production-readiness", "Production readiness");
  await Promise.all([current.close(),other.close(),privileged.close()]);
 },120000);
 beforeAll(async () => {
@@ -145,13 +167,13 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   await page.getByRole("button", { name: "Submit for review" }).click(); await page.waitForURL(`${base}/host`);
   const host = await prisma.hostProfile.findUniqueOrThrow({ where: { userId: user.id } }); hosts.push(host.id);
   expect(host.onboardingStatus).toBe("SUBMITTED");
-  await screenshot(page, "host-overview", [375, 390, 430, 768, 1024, 1440]);
+  await screenshot(page, "host-overview", "Browser Fleet", [375, 390, 430, 768, 1024, 1440]);
   await page.goto(`${base}/host/vehicles/new`);
   await page.getByLabel("Pickup city",{exact:true}).fill("Dallas");
   await page.getByLabel("Vehicle operating state",{exact:true}).selectOption("TX");
   const fields = { "VIN (17 characters)": "1HGCM82633A123456", "License plate": "BROWSER", Make: "Honda", Model: "Accord", "Registration expiration": "2035-01-01", "Insurance expiration": "2035-01-01", "Describe your vehicle": "Synthetic browser listing with comfortable seating and practical storage." };
   for (const [label, value] of Object.entries(fields)) await page.getByLabel(label, { exact: true }).fill(value);
-  await screenshot(page, "host-listing-form");
+  await screenshot(page, "host-listing-form", "Add a vehicle");
   await page.getByRole("button", { name: "Save listing for review" }).click();
   await page.waitForURL(/\/host\/vehicles\/(?!new)[^/]+$/);
   const vehicle = await prisma.vehicle.findFirstOrThrow({ where: { hostId: host.id } }); vehicles.push(vehicle.id);
@@ -161,7 +183,7 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   await page.getByRole("button", { name: "Block dates", exact: true }).click();
   await page.getByText("2035-02-01 → 2035-02-03", { exact: false }).waitFor();
   expect(await prisma.vehicleBlock.count({ where: { vehicleId: vehicle.id } })).toBe(1);
-  await screenshot(page, "host-vehicle");
+  await screenshot(page, "host-vehicle", `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? " " + vehicle.trim : ""}`);
   const admin = await createTestCustomer({ role: "ADMIN" }); users.push(admin.id); const ac = await login(admin);
   const image = await sharp({ create: { width: 32, height: 32, channels: 3, background: "silver" } }).png().toBuffer();
   async function upload(purpose: string) {
@@ -203,12 +225,12 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   await prisma.legalDocument.update({ where: { type: "HOST_AGREEMENT" }, data: { version: "browser-host-v2", content: "Changed synthetic template for stale-version rejection test" } });
   expect((await context.request.post(`${base}/api/host/vehicles/${vehicle.id}/agreement`, { data: { signerName: "Synthetic Host", version: "browser-host", accept: "yes" } })).status()).toBe(409);
   expect(await (await context.request.get(`${base}/api/host/vehicles/${vehicle.id}/agreement?acceptanceId=${acceptance.id}`)).body()).toEqual(signedBefore);
-  const ap = await ac.newPage(); await ap.goto(`${base}/admin/marketplace/vehicles/${vehicle.id}`); await screenshot(ap, "admin-listing-review");
-  await ap.goto(`${base}/admin/marketplace`); await screenshot(ap, "admin-operations"); await ac.close();
+  const ap = await ac.newPage(); await ap.goto(`${base}/admin/marketplace/vehicles/${vehicle.id}`); await screenshot(ap, "admin-listing-review", `Review ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+  await ap.goto(`${base}/admin/marketplace`); await screenshot(ap, "admin-operations", "Marketplace operations"); await ac.close();
   await page.goto(`${base}/host/team`);
   await page.getByLabel("Owner name").fill("Synthetic Owner"); await page.getByLabel("Owner email").fill("owner@synthetic.test"); await page.getByLabel("Owner phone").fill("5551234567");
   await page.getByRole("button", { name: "Add vehicle owner" }).click(); await page.getByText("Synthetic Owner · owner@synthetic.test").waitFor();
-  await screenshot(page, "host-team");
+  await screenshot(page, "host-team", "People behind your fleet");
   const other = await createTestHost(); users.push(other.user.id); hosts.push(other.hostProfile.id);
   const unrelated = await login(other.user);
   expect((await unrelated.request.post(`${base}/api/host/workspace`, { data: { action: "availability", vehicleId: vehicle.id, isBookable: true } })).status()).toBe(404);
@@ -254,15 +276,15 @@ it("completes real customer and host inspection, handoff, start and return journ
   }
   await inspect(hp, "1000"); await inspect(cp, "1000");
   await hp.reload(); await hp.getByRole("button", { name: "Confirm keys handed over" }).click(); await hp.getByRole("button", { name: "Keys released", exact: true }).waitFor();
-  await cp.reload(); await screenshot(cp, "customer-pickup"); await screenshot(hp, "host-pickup");
+  await cp.reload(); await screenshot(cp, "customer-pickup", r.confirmationNumber); await screenshot(hp, "host-pickup", r.confirmationNumber);
   await cp.getByRole("button", { name: "Start trip", exact: true }).click(); await cp.getByRole("heading", { name: "Your trip is underway" }).waitFor();
   expect((await prisma.reservation.findUniqueOrThrow({ where: { id: r.id } })).status).toBe("ACTIVE");
-  await screenshot(cp, "active-trip");
+  await screenshot(cp, "active-trip", r.confirmationNumber);
   await cp.getByRole("button", { name: "Begin return inspection" }).click(); await cp.getByRole("heading", { name: "Your return inspection" }).waitFor();
   await hp.reload(); await inspect(cp, "1100"); await inspect(hp, "1100");
-  await screenshot(hp, "host-return");
+  await screenshot(hp, "host-return", r.confirmationNumber);
   await hp.getByRole("button", { name: "Complete return review" }).click(); await hp.getByText("Return complete.", { exact: false }).waitFor();
-  await cp.reload(); await screenshot(cp, "completed-trip");
+  await cp.reload(); await screenshot(cp, "completed-trip", r.confirmationNumber);
   expect((await prisma.reservation.findUniqueOrThrow({ where: { id: r.id } })).status).toBe("COMPLETED");
   const receipt = await cc.request.get(`${base}/api/reservations/${r.id}/receipt`); expect(receipt.status()).toBe(200); expect(receipt.headers()["content-type"]).toBe("application/pdf");
   expect((await oc.request.get(`${base}/api/reservations/${r.id}/receipt`)).status()).toBe(404);
@@ -276,7 +298,7 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
   await prisma.legalDocument.upsert({ where: { type: "RENTAL_AGREEMENT" }, create: { type: "RENTAL_AGREEMENT", title: "Synthetic rental terms", content: "Synthetic browser rental terms, not production legal language", version: "browser-rental", needsAttorneyReview: false }, update: { content: "Synthetic browser rental terms, not production legal language", version: "browser-rental", needsAttorneyReview: false } });
   const context = await login(customer), page = await context.newPage();
   await page.goto(`${base}/vehicles/${vehicle.slug}`);
-  await screenshot(page, "vehicle-details");
+  await screenshot(page, "vehicle-details", `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? " " + vehicle.trim : ""}`);
   await page.getByRole("button", { name: "Continue", exact: false }).click();
   await page.waitForURL(/\/book\//);
   for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -301,7 +323,7 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
   expect(pdf.status()).toBe(200); expect(pdf.headers()["content-type"]).toBe("application/pdf");
   expect((await (await context.request.get(`${base}/api/reservations/${id}/status`)).json()).agreementAvailable).toBe(true);
   await page.getByText("Preparing secure checkout…").waitFor({ state: "hidden" });
-  await screenshot(page, "checkout-payment");
+  await screenshot(page, "checkout-payment", "Book your rental");
   await page.reload(); await page.getByRole("heading", { name: "Payment", exact: true }).waitFor();
   expect(new URL(page.url()).searchParams.get("reservationId")).toBe(id);
   expect(await prisma.reservation.count({ where: { vehicleId: vehicle.id } })).toBe(1);
@@ -316,8 +338,8 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
 it("renders discovery and account pages at all requested widths with labeled form controls", async () => {
   const customer = await createTestCustomer(); users.push(customer.id);
   const context: BrowserContext = await login(customer), page = await context.newPage();
-  for (const [path, name] of [["/", "home"], ["/vehicles", "discovery"], ["/account", "customer-account"]]) {
-    await page.goto(base + path); await screenshot(page, name, [375, 390, 430, 768, 1024, 1440]);
+  for (const [path, name, heading] of [["/", "home", "Drive More Possibilities"], ["/vehicles", "discovery", "Find your next car"], ["/account", "customer-account", "My Account"]]) {
+    await page.goto(base + path); await screenshot(page, name, heading, [375, 390, 430, 768, 1024, 1440]);
     expect(await page.locator('input:not([type="hidden"]):not([type="checkbox"])').evaluateAll(elements => elements.filter(e => !(e as HTMLInputElement).labels?.length && !e.getAttribute("aria-label")).length)).toBe(0);
   }
   await context.close();
@@ -332,7 +354,7 @@ it("renders discovery and account pages at all requested widths with labeled for
     await search.getByRole("navigation",{name:"Active filters"}).getByText("Make: DiscoveryFixture").waitFor();
     const listing=search.locator("article").filter({has:search.getByRole("heading",{name:/DiscoveryFixture/})});
     expect(await listing.count()).toBe(1);await listing.getByRole("link",{name:"View Details"}).click();await search.waitForURL(base+"/vehicles/"+vehicle.slug);
-    await search.getByRole("heading",{name:/DiscoveryFixture/}).first().waitFor();await screenshot(search,"visitor-vehicle",[width]);
+    await search.getByRole("heading",{name:/DiscoveryFixture/}).first().waitFor();await screenshot(search,"visitor-vehicle", `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? " " + vehicle.trim : ""}`,[width]);
   }
   await visitor.close();
 }, 180000);
@@ -369,7 +391,7 @@ it("real payment status UI distinguishes processing, failure, compensation and r
   const refund=await prisma.refund.create({data:{reservationId:r.id,paymentId:payment.id,amountCents:r.totalCents,status:"PENDING",reason:"Synthetic compensation observation",idempotencyKey:"phase6-refund-"+r.id}});
   await panel.getByRole("status").filter({hasText:/^refund pending$/}).waitFor();
   expect((await context.request.post(`${base}/api/reservations/${r.id}/start-trip`)).status()).toBe(409);
-  await screenshot(page,"refund-pending",[375,390,430,768,1024,1440]);
+  await screenshot(page,"refund-pending", r.confirmationNumber,[375,390,430,768,1024,1440]);
   await prisma.refund.update({where:{id:refund.id},data:{status:"SUCCEEDED"}});await panel.getByRole("status").filter({hasText:/^refunded$/}).waitFor();
   expect((await context.request.post(`${base}/api/reservations/${r.id}/start-trip`)).status()).toBe(409);
   expect(await prisma.payment.count({where:{reservationId:r.id}})).toBe(1);
@@ -395,7 +417,7 @@ it("expired checkout hold offers recovery and cannot create a payment",async()=>
   await page.getByRole("complementary",{name:"Checkout hold"}).getByRole("alert").filter({hasText:"Your checkout hold has ended"}).waitFor();
   expect((await context.request.post(`${base}/api/reservations/${r.id}/payment-intent`)).ok()).toBe(false);
   expect(await prisma.payment.count({where:{reservationId:r.id}})).toBe(0);
-  await screenshot(page,"expired-hold",[375,390,430,768,1024,1440]);
+  await screenshot(page,"expired-hold", "Book your rental",[375,390,430,768,1024,1440]);
   await page.getByRole("link",{name:"Choose available dates",exact:true}).click();await page.waitForURL(/\/vehicles$/);
  }finally{await context.close();}
 },120000);
@@ -414,6 +436,6 @@ it("identity camera/file flow shows quarantine when the controlled scanner is un
   await uploadBookingDocument(page,0,buffer,"QUARANTINED");
   const saved=await(await response).json();expect(await prisma.driverDocument.findUnique({where:{id:saved.id}})).toMatchObject({userId:customer.id,malwareScanStatus:"QUARANTINED"});
   expect(await region.getByText("Approved",{exact:true}).count()).toBe(0);
-  await screenshot(page,"identity-quarantine",[375,390,430,768,1024,1440]);
+  await screenshot(page,"identity-quarantine", "Book your rental",[375,390,430,768,1024,1440]);
  }finally{scannerReply="stream: OK\0";await context.close();}
 },120000);

@@ -1,5 +1,5 @@
 import { workerResult } from "@/lib/worker-result";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { fingerprint,json } from "@/lib/financial-operations";
 import { freezeFinance,roundBps,type FinanceTerms,lossSchema } from "@/lib/finance-rules";
 import { lockReservation } from "@/lib/financial-locks";
@@ -34,7 +34,7 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string):
  const journalCount=await tx.ledgerJournal.count({where:{reservationId:id}});
  const r=await tx.reservation.findUniqueOrThrow({where:{id},include:{payments:true,refunds:true,deposit:true,trip:true}}),s=await freezeFinance(tx,id),a=s.amounts as FinanceTerms["amounts"];
  const rentals=r.payments.filter(p=>p.type==="RENTAL"&&p.status==="SUCCEEDED");
- if(rentals.length>1||rentals.some(p=>p.amountCents!==r.totalCents||p.amountCents!==a.totalCents||p.currency!==s.currency)){await financeIssue(tx,{key:"payment-mismatch:"+id,kind:"PAYMENT_DIFFERENCE",reservationId:id,hostId:s.hostId??undefined,reason:"Rental amount or currency differs from frozen checkout evidence"});return {status:"REVIEW"};}
+ if(rentals.length>1||rentals.some(p=>p.amountCents!==r.totalCents||p.amountCents!==a.totalCents||p.currency!==s.currency)){await financeIssue(tx,{key:"payment-mismatch:"+id,kind:"PAYMENT_DIFFERENCE",reservationId:id,hostId:s.hostId??undefined,reason:"Rental amount or currency differs from frozen checkout evidence"});await certifyAccounting(tx,id);return {status:"REVIEW"};}
  for(const p of rentals){
   const marketplace=(s.commission as {engine?:string}).engine==="MARKETPLACE_V1";
   const lines:LedgerPosting[]=marketplace?[
@@ -122,16 +122,47 @@ export async function accountReservation(tx:Prisma.TransactionClient,id:string):
  const afterCount=await tx.ledgerJournal.count({where:{reservationId:id}});
  return {status:afterCount>journalCount||afterCount>0&&before?.fingerprint!==evidence.hash?"COMMITTED":"NO_WORK"};
 }
-export async function reconcileAccounting(limit=25){
- const rows=await prisma.$queryRaw<Array<{id:string}>>`SELECT r.id FROM "Reservation" r WHERE NOT EXISTS(SELECT 1 FROM "FinanceIssue" i WHERE i."reservationId"=r.id AND i.kind IN ('PAYMENT_DIFFERENCE','ACCOUNTING_REVIEW','REFUND_DIFFERENCE') AND i.status<>'RESOLVED') AND (EXISTS(SELECT 1 FROM "ProviderFeeEvidence" f WHERE f."reservationId"=r.id AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='stripe-fee:'||f."providerId")) OR EXISTS(SELECT 1 FROM "HostEarning" e WHERE e."reservationId"=r.id) OR EXISTS(SELECT 1 FROM "Payment" p WHERE p."reservationId"=r.id AND p.type IN ('RENTAL','ADDITIONAL_CHARGE','DEPOSIT_CAPTURE') AND p.status='SUCCEEDED' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='payment:'||p.id)) OR EXISTS(SELECT 1 FROM "Refund" f WHERE f."reservationId"=r.id AND f.status='SUCCEEDED' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='refund:'||f.id)) OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND o.kind='DEPOSIT' AND o."providerId" IS NOT NULL AND o.result->>'status'='requires_capture' AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-auth:'||o."providerId")) OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND o.kind='DEPOSIT_RELEASE' AND o.state='OBSERVED' AND o.result->>'status'='canceled' AND EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-auth:'||o."providerId") AND NOT EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j.key='deposit-release:'||o."providerId"))) ORDER BY (SELECT c."updatedAt" FROM "AccountingCheckpoint" c WHERE c."reservationId"=r.id) ASC NULLS FIRST,r.id LIMIT ${limit}`;
+export async function reconcileAccounting(limit=25,db:PrismaClient=prisma){
+ // Re-certify retained financial evidence, not just missing journal keys.
+ // An EXISTS selector emits each reservation once even when several sources
+ // require review. Do not maintain a kind allowlist: every unresolved
+ // reservation FinanceIssue is already a hold at the accounting boundary.
+ const rows=await db.$queryRaw<Array<{id:string}>>`
+  SELECT r.id FROM "Reservation" r WHERE
+   EXISTS(SELECT 1 FROM "Payment" p WHERE p."reservationId"=r.id AND p.status='SUCCEEDED')
+   OR EXISTS(SELECT 1 FROM "Refund" f WHERE f."reservationId"=r.id AND (f.status IN ('SUCCEEDED','PENDING') OR f."legacyUncertain"))
+   OR EXISTS(SELECT 1 FROM "FinancialOperation" o WHERE o."reservationId"=r.id AND (o."providerId" IS NOT NULL OR o.state IN ('REVIEW','DEAD_LETTER') OR EXISTS(SELECT 1 FROM "FinancialDispatch" d WHERE d."operationId"=o.id AND d.phase IN ('DISPATCHED','SUCCEEDED','UNCERTAIN'))))
+   OR EXISTS(SELECT 1 FROM "SecurityDeposit" d WHERE d."reservationId"=r.id AND d."stripePaymentIntentId" IS NOT NULL)
+   OR EXISTS(SELECT 1 FROM "ProviderFeeEvidence" f WHERE f."reservationId"=r.id)
+   OR EXISTS(SELECT 1 FROM "ProviderDispute" d WHERE d."reservationId"=r.id)
+   OR EXISTS(SELECT 1 FROM "FinanceAdjustment" a WHERE a."reservationId"=r.id AND a.state='APPROVED')
+   OR EXISTS(SELECT 1 FROM "HostEarning" e WHERE e."reservationId"=r.id)
+   OR EXISTS(SELECT 1 FROM "LedgerJournal" j WHERE j."reservationId"=r.id)
+   OR EXISTS(SELECT 1 FROM "AccountingCheckpoint" c WHERE c."reservationId"=r.id)
+   OR EXISTS(SELECT 1 FROM "FinanceIssue" i WHERE i."reservationId"=r.id AND i.status<>'RESOLVED')
+  ORDER BY GREATEST(
+   (SELECT c."updatedAt" FROM "AccountingCheckpoint" c WHERE c."reservationId"=r.id),
+   (SELECT i."checkedAt" FROM "FinanceIssue" i WHERE i.key='accounting-error:'||r.id)
+  ) ASC NULLS FIRST,r.id LIMIT ${limit}`;
  let processed=0,review=0,failed=0,skipped=0;
  for(const r of rows)try{
-  const outcome=await prisma.$transaction(async tx=>{await lockReservation(tx,r.id);return accountReservation(tx,r.id);},{timeout:15000});
+  const outcome=await db.$transaction(async tx=>{await lockReservation(tx,r.id);return accountReservation(tx,r.id);},{timeout:15000});
   switch(outcome.status){case "COMMITTED":processed++;break;case "REVIEW":review++;break;case "NO_WORK":skipped++;break;}
- }catch{failed++;await financeIssue(prisma,{key:"accounting-error:"+r.id,kind:"ACCOUNTING_REVIEW",reservationId:r.id,reason:"Accounting projection requires investigation"});}
- // Blocked reservations must remain visible on replay. Count distinct
- // reservations, excluding this batch, without rewriting issues or journals.
- const held=(await prisma.financeIssue.findMany({where:{reservationId:{not:null,notIn:rows.map(r=>r.id)},kind:{in:["PAYMENT_DIFFERENCE","ACCOUNTING_REVIEW","REFUND_DIFFERENCE","REFUND_COMPATIBILITY_REVIEW"]},status:{not:"RESOLVED"}},select:{reservationId:true},distinct:["reservationId"]})).length;
+ }catch{
+  failed++;
+  const issue=await financeIssue(db,{key:"accounting-error:"+r.id,kind:"ACCOUNTING_REVIEW",reservationId:r.id,reason:"Accounting projection requires investigation"});
+  // Failed transactions cannot advance a checkpoint. Rotate their existing
+  // review record so an error backlog cannot monopolize the bounded selector.
+  await db.financeIssue.update({where:{id:issue.id},data:{checkedAt:new Date()}});
+ }
+ // Reviews outside this bounded batch also remain operationally visible.
+ // UNION deduplicates multiple issues and an incomplete checkpoint; exclude
+ // processed IDs so one reservation contributes exactly one outcome per run.
+ const outstanding=await db.$queryRaw<Array<{id:string}>>`
+  SELECT "reservationId" AS id FROM "FinanceIssue" WHERE "reservationId" IS NOT NULL AND status<>'RESOLVED'
+  UNION SELECT "reservationId" AS id FROM "AccountingCheckpoint" WHERE fingerprint='INCOMPLETE'`;
+ const selected=new Set(rows.map(r=>r.id));
+ const held=outstanding.filter(r=>!selected.has(r.id)).length;
  review+=held;
  return {processed,worker:workerResult({attempted:rows.length,checked:rows.length+held,committed:processed,review,skipped,failed,actionable:review+failed})};
 }
