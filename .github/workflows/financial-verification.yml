@@ -1,7 +1,7 @@
 name: Financial verification
 on:
   push:
-    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims, codex/phase-4-payouts-finance, codex/phase-5-production-readiness]
+    branches: [main, codex/phase-6-ui-ux-staging, claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims, codex/phase-4-payouts-finance, codex/phase-5-production-readiness]
   pull_request:
   workflow_dispatch:
 permissions:

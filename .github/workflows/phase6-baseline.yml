@@ -1,0 +1,59 @@
+name: Phase 6 approved UX baseline
+on:
+  push:
+    branches: [codex/phase-6-ui-ux-staging]
+    paths: [tests/phase6-baseline.test.ts, .github/workflows/phase6-baseline.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: phase6_baseline_test
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
+      PHASE6_BASELINE: 'true'
+      BASELINE_APPLICATION_SHA: 82bfea4648d86386a1b4be51c76935512bacd0f1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+      - uses: actions/checkout@v4
+        with:
+          ref: 82bfea4648d86386a1b4be51c76935512bacd0f1
+          path: application
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: application/package-lock.json
+      - name: Verify approved application and install observation harness
+        run: |
+          test "$(git -C application rev-parse HEAD)" = "$BASELINE_APPLICATION_SHA"
+          cp harness/tests/phase6-baseline.test.ts application/tests/phase6-baseline.test.ts
+      - run: npm ci
+        working-directory: application
+      - run: npx playwright install --with-deps chromium
+        working-directory: application
+      - run: npm run db:deploy
+        working-directory: application
+      - run: npm test -- tests/phase6-baseline.test.ts
+        working-directory: application
+      - name: Baseline gallery and route metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase6-approved-baseline
+          path: application/test-artifacts/phase6/baseline
+          retention-days: 14
+          if-no-files-found: error
