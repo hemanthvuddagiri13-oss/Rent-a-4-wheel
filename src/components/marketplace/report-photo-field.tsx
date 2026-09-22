@@ -3,14 +3,14 @@
 import { useEffect, useId, useRef, useState, type ChangeEvent } from "react";
 
 /** Keep the native file in FormData; previews are local and never publicly optimized. */
-export function ReportPhotoField({ category, label }: { category: string; label: string }) {
+export function ReportPhotoField({ category, label, onSelected }: { category: string; label: string; onSelected?: (selected:boolean)=>void }) {
   const id = useId(), input = useRef<HTMLInputElement>(null), url = useRef<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => () => { if (url.current) URL.revokeObjectURL(url.current); }, []);
   function clear() {
     if (url.current) URL.revokeObjectURL(url.current);
-    url.current = null; setPreview(null);
+    url.current = null; setPreview(null); onSelected?.(false);
   }
   function select(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -20,7 +20,7 @@ export function ReportPhotoField({ category, label }: { category: string; label:
       event.target.value = "";
       setError("Choose a JPG, PNG or WEBP image no larger than 8 MB."); return;
     }
-    url.current = URL.createObjectURL(file); setPreview(url.current);
+    url.current = URL.createObjectURL(file); setPreview(url.current); onSelected?.(true);
   }
   return <div className="min-w-0 space-y-2 text-sm text-silver">
     <label htmlFor={id}>{label}</label>

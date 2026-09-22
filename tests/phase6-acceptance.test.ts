@@ -73,7 +73,7 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
       const dialog=page.getByRole("dialog");await dialog.waitFor();
       for(let tab=0;tab<12;tab++){await page.keyboard.press("Tab");expect(await dialog.evaluate(e=>e.contains(document.activeElement)),"Dialog keeps keyboard focus").toBe(true);}
       await page.keyboard.press("Escape");await dialog.waitFor({state:"hidden"});
-      expect(await menu.evaluate(e=>e===document.activeElement),"Closing dialog restores trigger focus").toBe(true);
+      await expect.poll(()=>menu.evaluate(e=>e===document.activeElement),{message:"Closing dialog restores trigger focus",timeout:3000}).toBe(true);
       expect(await menu.evaluate(e=>getComputedStyle(e).outlineStyle!=="none"),"Keyboard focus is visible").toBe(true);
       keyboard.push("Enter opens navigation","Tab remains in dialog","Escape closes","Focus restored with visible outline");
       await page.evaluate(()=>{document.documentElement.style.zoom="2";});await page.waitForTimeout(300);

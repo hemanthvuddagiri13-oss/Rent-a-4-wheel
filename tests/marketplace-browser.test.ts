@@ -88,6 +88,7 @@ afterAll(async () => {
   await prisma.vehicle.deleteMany({ where: { id: { in: vehicles } } });
   await prisma.vehicleOwner.deleteMany({ where: { hostId: { in: hosts } } });
   await prisma.hostProfile.deleteMany({ where: { id: { in: hosts } } });
+  await prisma.driverDocument.deleteMany({where:{userId:{in:users},reservationId:null}});
   await prisma.user.deleteMany({ where: { id: { in: users } } });
   if (priorHostLegal) await prisma.legalDocument.update({ where: { type: "HOST_AGREEMENT" }, data: { content: priorHostLegal.content, version: priorHostLegal.version, needsAttorneyReview: priorHostLegal.needsAttorneyReview } });
   else await prisma.legalDocument.deleteMany({ where: { type: "HOST_AGREEMENT" } });
@@ -341,4 +342,22 @@ it("expired checkout hold offers recovery and cannot create a payment",async()=>
   await screenshot(page,"expired-hold",[375,390,430,768,1024,1440]);
   await page.getByRole("link",{name:"Choose available dates",exact:true}).click();await page.waitForURL(/\/vehicles$/);
  }finally{await context.close();}
+},120000);
+
+it("identity camera/file flow shows quarantine when the controlled scanner is unavailable",async()=>{
+ const customer=await createTestCustomer(),vehicle=await createTestVehicle();users.push(customer.id);vehicles.push(vehicle.id);
+ const context=await login(customer),page=await context.newPage();scannerReply="stream: scanner unavailable ERROR\0";
+ try{
+  await page.goto(`${base}/book/${vehicle.id}`);for(let step=0;step<3;step++)await page.getByRole("button",{name:"Continue",exact:true}).click();
+  await page.getByRole("heading",{name:"Driver Information",exact:true}).waitFor();
+  const region=page.locator("[data-document-upload]").first();
+  expect(await region.locator('input[capture="environment"]').count()).toBe(1);
+  await region.getByRole("button",{name:"Take photo",exact:true}).waitFor();
+  const buffer=await sharp({create:{width:24,height:24,channels:3,background:"silver"}}).png().toBuffer();
+  const response=page.waitForResponse(r=>r.url().endsWith("/api/documents/upload")&&r.request().method()==="POST");
+  await uploadBookingDocument(page,0,buffer,"QUARANTINED");
+  const saved=await(await response).json();expect(await prisma.driverDocument.findUnique({where:{id:saved.id}})).toMatchObject({userId:customer.id,malwareScanStatus:"QUARANTINED"});
+  expect(await region.getByText("Approved",{exact:true}).count()).toBe(0);
+  await screenshot(page,"identity-quarantine",[375,390,430,768,1024,1440]);
+ }finally{scannerReply="stream: OK\0";await context.close();}
 },120000);

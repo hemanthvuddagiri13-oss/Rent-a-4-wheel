@@ -2,7 +2,7 @@ import { WorkspaceNavigation } from "@/components/layout/workspace-navigation";
 import type { ReactNode } from "react";
 
 export function Workspace({ eyebrow, title, description, children }: { eyebrow: string; title: string; description?: string; children: ReactNode }) {
-  return <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
+  return <div className="mx-auto min-w-0 max-w-7xl [overflow-wrap:anywhere] px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
     <p className="text-xs font-semibold uppercase tracking-[.22em] text-gold-bright">{eyebrow}</p>
     <h1 className="mt-3 font-display text-3xl font-semibold text-white sm:text-4xl">{title}</h1>
     {description && <p className="mt-3 max-w-2xl text-silver">{description}</p>}

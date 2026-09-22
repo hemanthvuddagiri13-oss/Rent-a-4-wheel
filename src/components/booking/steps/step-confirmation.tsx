@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, Download, MessageCircle } from "lucide-react";
+import { CheckCircle2, Clock3, Download, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { BookingState, BookingVehicle } from "@/components/booking/types";
 import { formatCurrency } from "@/lib/utils";
@@ -20,10 +20,11 @@ export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; 
   }, [state.reservationId]);
   return (
     <div className="flex flex-col items-center py-8 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/30">
-        <CheckCircle2 className="h-8 w-8 text-emerald-400" />
+      <div aria-hidden="true" className={`flex h-16 w-16 items-center justify-center rounded-full border ${outcome === "confirmed" ? "bg-emerald-500/10 border-emerald-500/30" : "bg-white/5 border-white/20"}`}>
+        {outcome === "confirmed" ? <CheckCircle2 className="h-8 w-8 text-emerald-400" /> : <Clock3 className="h-8 w-8 text-silver" />}
       </div>
       <h2 className="mt-6 font-display text-3xl font-bold uppercase tracking-tight text-white">{outcome === "confirmed" ? "Confirmed" : outcome.replaceAll("_", " ")}</h2>
+      <p role="status" className="mt-3 max-w-md text-sm text-silver">{outcome === "confirmed" ? "Payment confirmed. Check your reservation for verification and pickup requirements." : "Check your reservation for the latest payment status and available actions. Avoid starting another payment while this one is being checked."}</p>
       <p className="mt-2 text-muted">Reservation Number</p>
       <p className="mt-1 font-display text-2xl font-semibold text-gold-bright">{state.confirmationNumber}</p>
 
@@ -61,9 +62,9 @@ export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; 
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between border-b border-white/5 py-2 text-sm last:border-0">
+    <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 border-b border-white/5 py-2 text-sm last:border-0">
       <span className="text-muted">{label}</span>
-      <span className="font-medium text-white">{value}</span>
+      <span className="min-w-0 break-words font-medium text-white">{value}</span>
     </div>
   );
 }
