@@ -1,0 +1,8 @@
+{
+  "name": "@rent-a-4wheel/mobile-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "description": "Generated Phase 7A client contract; no credential persistence or automatic refresh retries"
+}

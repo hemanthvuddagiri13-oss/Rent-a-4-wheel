@@ -7,6 +7,7 @@ import { caseAccess } from "@/lib/service-cases";
 import { visibleJurisdictions, requireVehicleJurisdiction } from "@/lib/jurisdiction";
 import { requireReleaseFeature } from "@/lib/release-control";
 import { evaluateTripStartGate } from "@/lib/trip-gate";
+import { financialProjection } from "@/lib/financial-projection";
 import { authenticateMobile, MobileError } from "./auth";
 import { pageInput } from "./http";
 
@@ -25,8 +26,11 @@ export async function mobileQuery(req: Request, parts: string[]) {
   const { limit, cursor } = pageInput(req);
   const page = { take: limit + 1, orderBy: { id: "asc" as const }, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) };
   if (resource === "vehicles" && !action && parts.length <= 2) {
-    await requireReleaseFeature("booking");
-    const codes = await visibleJurisdictions();
+    const codes: string[] = [];
+    for (const code of await visibleJurisdictions()) {
+      try { await requireReleaseFeature("booking", prisma, code); codes.push(code); }
+      catch { /* Incomplete release approval must not make inventory visible. */ }
+    }
     const where = { status: "ACTIVE" as const, isDemo: false, listingApproval: "APPROVED", jurisdictionCode: { in: codes } };
     if (!id) return collection(await prisma.vehicle.findMany({ where, select: mobileVehicleSelect, ...page }), limit);
     return prisma.$transaction(async tx => {
@@ -45,9 +49,15 @@ export async function mobileQuery(req: Request, parts: string[]) {
     return prisma.$transaction(async tx => {
       await mobileReservationAccess(tx, actor.userId, id);
       if (!action) return tx.reservation.findUniqueOrThrow({ where: { id }, select: mobileReservationSelect });
+      if (action === "payment-status") {
+        await mobileReservationAccess(tx, actor.userId, id, true);
+        const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, deposit: { include: { operation: true } }, refunds: true } });
+        return { status: r.status, depositRequired: r.depositCents > 0, ...financialProjection(r) };
+      }
       if (action === "agreements") return { items: await tx.agreementAcceptance.findMany({ where: { reservationId: id }, select: { id: true, type: true, documentVersion: true, contentHash: true, signedAt: true }, take: 20, orderBy: { signedAt: "desc" } }) };
       if (action === "trip") return { trip: await tx.trip.findUnique({ where: { reservationId: id }, select: { startedAt: true, endedAt: true, startMileage: true, endMileage: true, startFuelLevel: true, endFuelLevel: true } }), gate: await evaluateTripStartGate(id, tx) };
       if (action === "documents") return { items: await tx.driverDocument.findMany({ where: { reservationId: id, deletedAt: null }, select: { id: true, type: true, status: true, malwareScanStatus: true }, take: 20, orderBy: { createdAt: "desc" } }) };
+      if (action === "reports") return { items: await tx.conditionReport.findMany({ where: { reservationId: id }, select: { id: true, phase: true, submittedByRole: true, mileage: true, fuelLevel: true, damageNotes: true, acceptedAt: true, photos: { select: { id: true, category: true } } }, take: 4, orderBy: { createdAt: "asc" } }) };
       throw new MobileError("NOT_FOUND", 404);
     });
   }

@@ -11,6 +11,8 @@ import { enqueueOutboxNotification } from "@/lib/outbox";
 
 export async function cancelCustomerReservation(userId: string, id: string, db: DomainDatabase = prisma) {
   return withReservationLock(id, async tx => {
+    const owner = await tx.reservation.findUniqueOrThrow({ where: { id }, select: { customerId: true } });
+    if (owner.customerId !== userId) throw new MarketplaceError("Customer access required.", 403);
     const { reservation, role } = await tripParticipant(tx, userId, id);
     if (role !== "CUSTOMER") throw new MarketplaceError("Customer access required.", 403);
     if (reservation.status === "CANCELLED_BY_CUSTOMER") return { success: true };
@@ -27,6 +29,8 @@ export async function cancelCustomerReservation(userId: string, id: string, db: 
 const PRE_TRIP_CHAIN: ReservationStatus[] = ["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START", "ACTIVE"];
 export async function startCustomerTrip(userId: string, id: string, db: DomainDatabase = prisma) {
   return withReservationLock(id, async tx => {
+    const owner = await tx.reservation.findUniqueOrThrow({ where: { id }, select: { customerId: true } });
+    if (owner.customerId !== userId) throw new MarketplaceError("Customer access required.", 403);
     const { reservation, role } = await tripParticipant(tx, userId, id);
     if (role !== "CUSTOMER") throw new MarketplaceError("Customer access required.", 403);
     const index = PRE_TRIP_CHAIN.indexOf(reservation.status);

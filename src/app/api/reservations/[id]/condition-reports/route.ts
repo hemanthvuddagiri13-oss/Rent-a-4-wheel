@@ -1,4 +1,4 @@
-import { withReservationLock } from "@/lib/financial-locks";
+import { saveConditionReport } from "@/lib/condition-reports";
 import { safeLog } from "@/lib/safe-log";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
@@ -7,7 +7,6 @@ import { validateAndSanitizeDocument, scanForMalware, InvalidDocumentError, MAX_
 import { storePrivateDocument } from "@/lib/storage";
 import { getHostContext, hostOwnsReservation } from "@/lib/host-access";
 import type { ConditionPhotoCategory, ConditionReportPhase } from "@prisma/client";
-import { tripParticipant } from "@/lib/trip-experience";
 import { MarketplaceError, marketplaceLimit } from "@/lib/marketplace";
 
 const VALID_PHASES: ConditionReportPhase[] = ["PRE_TRIP", "POST_TRIP"];
@@ -35,7 +34,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!isCustomer && !isHost) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const role = isCustomer ? "CUSTOMER" : "HOST";
 
   const formData = await req.formData();
   const phase = formData.get("phase");
@@ -83,31 +81,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       storedPhotos.push({ category: photoCategories[i] as ConditionPhotoCategory, storageKey });
     }
 
-    const report = await withReservationLock(reservationId, async tx => {
-      const fresh = await tripParticipant(tx, session.user.id, reservationId);
-      const allowed = phase === "PRE_TRIP" ? ["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START"] : ["RETURN_IN_PROGRESS"];
-      if (!allowed.includes(fresh.reservation.status)) throw new MarketplaceError("Inspection is not open for this trip phase.", 409);
-      if (await tx.conditionReport.findFirst({ where: { reservationId, phase: phase as ConditionReportPhase, submittedByRole: fresh.role } })) throw new MarketplaceError("A report already exists for this party and phase. Review the saved report.", 409);
-      return tx.conditionReport.create({
-      data: {
-        reservationId,
-        phase: phase as ConditionReportPhase,
-        submittedByRole: role,
-        submittedById: session.user.id,
-        mileage,
-        fuelLevel,
-        damageNotes: typeof damageNotes === "string" && damageNotes ? damageNotes : null,
-        photos: { create: storedPhotos },
-      },
-    }); });
-
-    await prisma.tripEvent.create({
-      data: {
-        reservationId,
-        type: "CONDITION_REPORT_SUBMITTED",
-        actorId: session.user.id,
-        metadata: { phase, role, conditionReportId: report.id },
-      },
+    const report = await saveConditionReport(session.user.id, reservationId, {
+      phase: phase as ConditionReportPhase, mileage, fuelLevel,
+      damageNotes: typeof damageNotes === "string" ? damageNotes : null, photos: storedPhotos,
     });
 
     return NextResponse.json({ id: report.id });

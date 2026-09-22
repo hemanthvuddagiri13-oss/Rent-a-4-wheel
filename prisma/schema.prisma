@@ -125,6 +125,21 @@ model MobileMutation {
   @@index([userId, createdAt])
 }
 
+model MobileUpload {
+  id String @id @default(uuid())
+  userId String
+  reservationId String?
+  type String
+  storageKey String?
+  mimeType String
+  expectedSha256 String
+  expectedSize Int
+  expiresAt DateTime
+  finalizedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([userId, expiresAt])
+}
+
 // Six-digit, single-use, short-lived, hashed sign-in codes. Never store the
 // plaintext code — only a bcrypt hash. One row per code requested; the most
 // recent non-consumed, non-expired row for an email is the "live" code.

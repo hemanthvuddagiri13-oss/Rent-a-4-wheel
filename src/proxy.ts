@@ -12,7 +12,8 @@ const { auth } = NextAuth(authConfig);
 export default auth(async (req) => {
   const { pathname } = req.nextUrl;
   const deployed = !localDevelopment(), requestId = newRequestId();
-  const reject = (status: number, error: string, extra: Record<string,string> = {}) => NextResponse.json({error,requestId},{status,headers:{...extra,"Cache-Control":"private, no-store","x-request-id":requestId,"Content-Security-Policy":"default-src 'none'; frame-ancestors 'none'",...(deployed?{"Strict-Transport-Security":"max-age=31536000; includeSubDomains"}:{})}});
+  const nativeApi = pathname.startsWith("/api/v1/mobile/");
+  const reject = (status: number, error: string, extra: Record<string,string> = {}) => NextResponse.json(nativeApi ? {data:null,error:{code:status===429?"RATE_LIMITED":status===413?"INVALID_REQUEST":status===403?"FORBIDDEN":"UNAVAILABLE"},requestId} : {error,requestId},{status,headers:{...extra,...(nativeApi?{"X-API-Version":"1"}:{}),"Cache-Control":"private, no-store","x-request-id":requestId,"Content-Security-Policy":"default-src 'none'; frame-ancestors 'none'",...(deployed?{"Strict-Transport-Security":"max-age=31536000; includeSubDomains"}:{})}});
   const health = pathname === "/api/health/live" || pathname === "/api/health/ready";
   if (deployed && !health && !productionConfiguration().ready) return reject(503,"Service configuration unavailable");
   if (pathname.startsWith("/api/") && !health) {

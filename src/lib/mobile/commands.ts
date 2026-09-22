@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { createHoldSchema } from "@/lib/validations/reservation";
+import { checkoutSchema } from "@/lib/validations/reservation";
+import { checkoutReservation } from "@/lib/checkout-service";
+import { lockReservation } from "@/lib/financial-locks";
+import { requireCheckoutAdmission } from "@/lib/admission-authority";
+import { saveConditionReport, acceptConditionReport } from "@/lib/condition-reports";
 import { getSiteSettings } from "@/lib/settings";
 import { bookingInstant } from "@/lib/booking-time";
 import { createOrRefreshHold } from "@/lib/checkout-hold";
@@ -17,11 +22,50 @@ import { mobileBody } from "./http";
 export async function mobileCommand(req: Request, parts: string[]) {
   const actor = await authenticateMobile(req.headers);
   await marketplaceLimit(actor.userId);
-  const input = await mobileBody(req), [resource, id, action] = parts;
+  const [resource, id, action] = parts;
+  if (resource === "uploads" && id && action === "finalize" && parts.length === 3) {
+    const { finalizeMobileUpload } = await import("./uploads"); return finalizeMobileUpload(req, id);
+  }
+  const input = await mobileBody(req);
+  if (resource === "uploads" && !id) {
+    const { initializeMobileUpload } = await import("./uploads"); return initializeMobileUpload(req, input);
+  }
   if (resource === "files" && id === "access" && parts.length === 2) {
     const { issueDocumentAccess } = await import("./files"); return issueDocumentAccess(req, input);
   }
   const active = async (tx: Parameters<typeof marketplaceActor>[0], userId: string) => { await marketplaceActor(tx, userId); };
+  if (resource === "reservations" && id && action === "reports" && parts.length === 3) {
+    const data = z.object({ phase: z.enum(["PRE_TRIP", "POST_TRIP"]), mileage: z.number().int().min(0).max(10000000), fuelLevel: z.number().int().min(0).max(100), damageNotes: z.string().max(2000).optional(), photos: z.array(z.object({ uploadId: z.uuid(), category: z.enum(["EXTERIOR", "INTERIOR", "ODOMETER", "FUEL_GAUGE", "DAMAGE"]) }).strict()).min(2).max(10) }).strict().parse(input);
+    if (!data.photos.some(p => p.category === "EXTERIOR") || !data.photos.some(p => p.category === "INTERIOR") || new Set(data.photos.map(p => p.uploadId)).size !== data.photos.length) throw new MobileError("INVALID_REQUEST", 400);
+    return mobileMutation(req, "report.submit", { id, ...data }, async (tx, userId) => { await mobileReservationAccess(tx, userId, id); }, async (tx, userId) => {
+      const photos = [];
+      for (const p of data.photos) {
+        const upload = await tx.mobileUpload.findFirst({ where: { id: p.uploadId, userId, reservationId: id, type: "INSPECTION", finalizedAt: { not: null } } });
+        if (!upload?.storageKey) throw new MobileError("NOT_FOUND", 404);
+        const object = await tx.privateObject.findUnique({ where: { key: upload.storageKey } });
+        if (!object || object.deletedAt || object.state !== "CLEAN" || object.writeState !== "STORED") throw new MobileError("CONFLICT", 409);
+        photos.push({ category: p.category, storageKey: upload.storageKey });
+      }
+      return saveConditionReport(userId, id, { ...data, photos }, tx);
+    });
+  }
+  if (resource === "reservations" && id && action === "reports" && parts.length === 5 && parts[4] === "accept") {
+    z.object({}).strict().parse(input); const reportId = parts[3];
+    return mobileMutation(req, "report.accept", { id, reportId }, async (tx, userId) => { await mobileReservationAccess(tx, userId, id); }, async (tx, userId) => { await acceptConditionReport(userId, id, reportId, tx); return { success: true }; });
+  }
+  if (resource === "reservations" && id && action === "checkout" && parts.length === 3) {
+    const data = checkoutSchema.parse(input);
+    return mobileMutation(req, "reservation.checkout", { id, ...data }, async (tx, userId) => {
+      await mobileReservationAccess(tx, userId, id, true);
+      const current = await lockReservation(tx, id);
+      if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new MobileError("CONFLICT", 409);
+      await requireCheckoutAdmission(tx, id);
+    }, async (tx, userId) => {
+      const response = await checkoutReservation(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(data) }), id, userId, tx);
+      if (!response.ok) throw new MobileError(response.status === 403 ? "FORBIDDEN" : "CONFLICT", response.status);
+      return { id, success: true };
+    });
+  }
   if (resource === "reservations" && id === "hold" && parts.length === 2) {
     const data = createHoldSchema.parse(input), timezone = (await getSiteSettings()).bookingTimezone;
     const pickupAt = bookingInstant(data.pickupAt, timezone), returnAt = bookingInstant(data.returnAt, timezone);

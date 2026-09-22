@@ -4,7 +4,12 @@ import { z, ZodError } from "zod";
 import { boundedBody } from "@/lib/bounded-request";
 import { sharedRequestLimit } from "@/lib/security-request";
 import { MarketplaceError } from "@/lib/marketplace";
+import { HoldError } from "@/lib/checkout-hold";
+import { JurisdictionUnavailable } from "@/lib/jurisdiction";
+import { ReleaseGateError } from "@/lib/release-control";
+import { InvalidDocumentError } from "@/lib/documents";
 import { MobileError } from "./auth";
+import { mobileOperation } from "./contract";
 
 export const MOBILE_VERSION = "1";
 export function mobileIp(headers: Headers) {
@@ -14,7 +19,7 @@ export function mobileIp(headers: Headers) {
 }
 export async function mobileBody(req: Request) {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) throw new MobileError("INVALID_REQUEST", 415);
-  try { return JSON.parse((await boundedBody(req, 24_000)).toString("utf8")) as unknown; }
+  try { const data: unknown = JSON.parse((await boundedBody(req, 24_000)).toString("utf8")); return mobileOperation(req)?.body?.parse(data) ?? data; }
   catch (error) { if (error instanceof MarketplaceError) throw error; throw new MobileError("INVALID_REQUEST", 400); }
 }
 export const pageSchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20), cursor: z.string().max(128).optional() });
@@ -30,12 +35,18 @@ export async function mobileHandler(req: Request, operation: string, run: (reque
   try {
     const requested = req.headers.get("x-api-version");
     if (requested && requested !== MOBILE_VERSION) throw new MobileError("INVALID_REQUEST", 400);
+    const contract = mobileOperation(req);
+    if (!contract) throw new MobileError("NOT_FOUND", 404);
     if (!await sharedRequestLimit(req.headers, operation.startsWith("auth.") ? "mobile-auth" : "mobile-api", operation.startsWith("auth.") ? 30 : 120)) throw new MobileError("RATE_LIMITED", 429);
     const data = await run(requestId);
     if (data instanceof Response) { status = data.status; for (const [key, value] of Object.entries(mobileHeaders(requestId))) data.headers.set(key, value); return data; }
-    return mobileResponse(data, requestId);
+    // Validate serialized DTOs against the same schemas used to generate the
+    // contract. Strict response objects fail closed on accidental extra fields.
+    const result = contract.response.safeParse(JSON.parse(JSON.stringify(data)));
+    if (!result.success) throw new MobileError("UNAVAILABLE", 500);
+    return mobileResponse(result.data, requestId);
   } catch (error) {
-    status = error instanceof MobileError || error instanceof MarketplaceError ? error.status : error instanceof ZodError ? 400 : 500;
+    status = error instanceof MobileError || error instanceof MarketplaceError || error instanceof HoldError ? error.status : error instanceof ZodError || error instanceof InvalidDocumentError ? 400 : error instanceof JurisdictionUnavailable ? 409 : error instanceof ReleaseGateError ? 503 : 500;
     const code = error instanceof MobileError ? error.code : status === 400 || status === 413 ? "INVALID_REQUEST" : status === 403 ? "FORBIDDEN" : status === 404 ? "NOT_FOUND" : status === 409 ? "CONFLICT" : status === 429 ? "RATE_LIMITED" : "UNAVAILABLE";
     return Response.json({ data: null, error: { code }, requestId }, { status, headers: { ...mobileHeaders(requestId), ...(status === 429 ? { "Retry-After": "60" } : {}) } });
   } finally {

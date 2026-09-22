@@ -43,9 +43,20 @@ jobs:
       - run: npm run db:seed
       - run: npx prisma generate && npx next typegen && npm run typecheck
       - run: npm run lint
+      - name: OpenAPI validation and generated-client drift
+        run: npx tsx scripts/generate-mobile-contract.ts --check && node scripts/validate-mobile-openapi.mjs
+      - name: Dependency security audit
+        run: npm audit --audit-level=low
       - name: Mobile security and HTTP suites five times
         run: |
           for run in 1 2 3 4 5; do
             echo "Mobile security repetition $run"
-            npx vitest run tests/mobile-security.test.ts || exit 1
+            npx vitest run tests/mobile-security.test.ts tests/mobile-contract.test.ts || exit 1
           done
+      - name: OpenAPI and client artifacts (no runtime payloads)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-contract-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            docs/api/mobile-v1.openapi.json
+            packages/mobile-client/src
