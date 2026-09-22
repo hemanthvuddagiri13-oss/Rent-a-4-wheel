@@ -24,7 +24,12 @@ async function login(user: { id: string; email: string; role: string }) {
   return context;
 }
 async function screenshot(page: Page, name: string, widths = [375, 390, 430, 768, 1024, 1440]) {
-  await page.locator("h1").waitFor();
+  // Streamed navigation can temporarily retain hidden/duplicate headings.
+  // Wait for the final single visible heading without relaxing uniqueness.
+  await page.waitForFunction(() => {
+    const headings = document.querySelectorAll("h1");
+    return headings.length === 1 && headings[0].checkVisibility();
+  });
   for (const loading of ["Loading your trip…", "Loading payment status…"]) await page.getByText(loading, { exact: true }).waitFor({ state: "hidden" });
   await page.evaluate(() => document.fonts.ready);
   for (const width of widths) {
@@ -35,6 +40,39 @@ async function screenshot(page: Page, name: string, widths = [375, 390, 430, 768
     expect(await page.locator("h1").count()).toBe(1);
   }
 }
+it("waits for streamed headings to become unique and visible before capturing", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<h1 hidden>My Account</h1><h1 hidden>My Account</h1>');
+    // Observe actual readiness polls, rather than relying on elapsed time.
+    await page.evaluate(() => {
+      const query = document.querySelectorAll.bind(document);
+      document.querySelectorAll = ((selector: string) => {
+        const result = query(selector);
+        if (selector === "h1") document.documentElement.dataset.headingPolled = "true";
+        return result;
+      }) as typeof document.querySelectorAll;
+    });
+    let completed = false;
+    const capture = screenshot(page, "streamed-heading-regression", [375]).then(() => { completed = true; });
+    // Keep a rejected strict locator promise handled until the final assertion.
+    void capture.catch(() => {});
+    await page.waitForFunction(() => document.documentElement.dataset.headingPolled === "true");
+    expect(completed).toBe(false);
+    await page.evaluate(() => {
+      document.querySelector("h1")!.hidden = false;
+      delete document.documentElement.dataset.headingPolled;
+    });
+    await page.waitForFunction(() => document.documentElement.dataset.headingPolled === "true");
+    expect(completed).toBe(false);
+    await page.evaluate(() => document.querySelector("h1[hidden]")!.remove());
+    await capture;
+    expect(completed).toBe(true);
+    expect(await page.locator("h1").count()).toBe(1);
+  } finally {
+    await page.close();
+  }
+});
 it("uses real session revocation, private responses, origin enforcement and the operations dashboard",async()=>{
  const user=await createTestCustomer(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(user.id,admin.id);
  const current=await login(user),other=await login(user),page=await current.newPage();

@@ -1,6 +1,6 @@
 import { beforeAll,afterAll,expect,it,vi } from "vitest";
 import { createServer,type Server } from "node:http";
-import { prisma,createTestCustomer } from "./helpers/factories";
+import { prisma,createTestCustomer,createTestVehicle,createTestReservation } from "./helpers/factories";
 const identity=vi.hoisted(()=>({id:""}));
 vi.mock("@/auth",()=>({auth:async()=>identity.id?{user:{id:identity.id}}:null}));
 import { POST } from "@/app/api/finance/route";
@@ -14,4 +14,22 @@ it.each(["accounting","recovery","schedule","reconciliation","historical-audit"]
 it("HTTP cron rejects unknown work even with valid authentication",async()=>{expect((await fetch(base+"/cron/not-a-worker",{method:"POST",headers:{authorization:"Bearer finance-http-only-secret"}})).status).toBe(404);});
 it("HTTP rule approval cannot elevate an ordinary administrator",async()=>{const admin=await createTestCustomer({role:"ADMIN"});users.push(admin.id);identity.id=admin.id;const r=await post({action:"rule",kind:"COMMISSION",scope:"DEFAULT",scopeId:"*",effectiveAt:"2049-01-01T00:00:00Z",approve:"yes",stepUpCode:"123456",basisPoints:1000,fixedCents:0,minimumCents:0,maximumCents:100000,hostDiscountBps:0});expect(r.status).toBe(403);expect(await prisma.financeRule.count({where:{createdById:admin.id}})).toBe(0);});
 
-it("authenticated HTTP accounting cron executes the real database worker",async()=>{const response=await fetch(base+"/cron/accounting",{method:"POST",headers:{authorization:"Bearer finance-http-only-secret"}});expect(response.status).toBe(200);expect(await response.json()).toMatchObject({processed:expect.any(Number)});});
+it("authenticated HTTP accounting cron exposes persisted review from the real database worker",async()=>{
+ // The shared database contains retained financial fixtures. Authentication
+ // never guarantees 200: explicit unresolved evidence must remain actionable.
+ const customer=await createTestCustomer(),vehicle=await createTestVehicle();
+ const reservation=await createTestReservation({vehicleId:vehicle.id,customerId:customer.id,pickupAt:new Date("2056-01-01"),returnAt:new Date("2056-01-02"),status:"COMPLETED"});
+ const issue=await prisma.financeIssue.create({data:{key:"http-accounting-review:"+reservation.id,reservationId:reservation.id,kind:"PAYMENT_DIFFERENCE",reason:"Persisted unmatched payment requires independent review"}});
+ try{
+  const response=await fetch(base+"/cron/accounting",{method:"POST",headers:{authorization:"Bearer finance-http-only-secret"}});
+  expect(response.status).toBe(503);
+  const result=await response.json();
+  expect(result.worker.review).toBeGreaterThanOrEqual(1);
+  expect(result.worker.actionable).toBe(result.worker.review+result.worker.failed);
+  expect(result.processed).toBe(result.worker.committed);
+  expect(result.worker.status).toBe(result.worker.committed>0?"PARTIAL_FAILURE":"FAILED");
+  expect(await prisma.financeIssue.findUnique({where:{id:issue.id}})).toEqual(issue);
+  expect(await prisma.ledgerJournal.count({where:{reservationId:reservation.id}})).toBe(0);
+  expect(await prisma.reservation.findUnique({where:{id:reservation.id}})).toEqual(reservation);
+ }finally{await prisma.financeIssue.delete({where:{id:issue.id}});}
+});

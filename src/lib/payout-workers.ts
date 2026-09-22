@@ -52,7 +52,7 @@ export async function auditFinanceHistory(){
   const intent=await stripe.paymentIntents.retrieve(p.stripePaymentIntentId!,{expand:["latest_charge.balance_transaction"]});
   if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded")){difference=true;await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});}
   const charge=typeof intent.latest_charge==="object"?intent.latest_charge:null,balance=charge&&typeof charge.balance_transaction==="object"?charge.balance_transaction:null;
-  if(balance&&p.status==="SUCCEEDED"&&p.type!=="DEPOSIT_AUTH"){await retainProcessingFee(p.id,balance);await withReservationLock(r.id,tx=>accountReservation(tx,r.id));}
+  if(balance&&p.status==="SUCCEEDED"&&p.type!=="DEPOSIT_AUTH"){await retainProcessingFee(p.id,balance);const accounting=await withReservationLock(r.id,tx=>accountReservation(tx,r.id));if(accounting.status==="REVIEW")difference=true;}
   if(difference)actionable++;
   }catch{failed++;/* Report unavailable verification; do not alter financial eligibility or provider state. */}
  }

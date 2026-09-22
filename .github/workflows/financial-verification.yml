@@ -111,6 +111,11 @@ jobs:
           npm test
       - name: Full suite, second run
         run: npm test
+      - name: Accounting outcome regression (five consecutive runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/accounting-outcomes.test.ts tests/finance-http.test.ts || exit 1
+          done
       - name: Phase 5 corrections and actual deployment upgrades (five consecutive runs)
         run: |
           for run in 1 2 3 4 5; do
