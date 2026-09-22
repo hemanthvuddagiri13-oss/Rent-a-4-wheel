@@ -1,13 +1,10 @@
 import type { Metadata } from "next";
-import { Inter, Oswald } from "next/font/google";
 import { Toaster } from "sonner";
 import { AuthSessionProvider } from "@/components/auth/session-provider";
 import { SiteChrome } from "@/components/layout/site-chrome";
 import { SITE_URL } from "@/lib/constants";
 import "./globals.css";
 
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"], display: "swap" });
-const oswald = Oswald({ variable: "--font-oswald", subsets: ["latin"], weight: ["400", "500", "600", "700"], display: "swap" });
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -45,7 +42,7 @@ const marketplaceJsonLd = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${inter.variable} ${oswald.variable} h-full`}>
+    <html lang="en" className="h-full">
       <body className="min-h-full flex flex-col bg-background text-foreground antialiased">
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(marketplaceJsonLd) }} />
         <a

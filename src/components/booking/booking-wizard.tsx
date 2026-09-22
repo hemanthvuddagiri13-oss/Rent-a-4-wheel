@@ -3,7 +3,10 @@
 import { bookingLocal, bookingInstant, DEFAULT_BOOKING_TIMEZONE } from "@/lib/booking-time";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { ProgressSteps } from "@/components/booking/progress-steps";
+import { BookingSummary } from "@/components/booking/booking-summary";
 import { StepVehicle } from "@/components/booking/steps/step-vehicle";
 import { StepDates } from "@/components/booking/steps/step-dates";
 import { StepExtras } from "@/components/booking/steps/step-extras";
@@ -111,12 +114,30 @@ export function BookingWizard({ vehicle, extras, bookingTimezone = DEFAULT_BOOKI
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  if (resuming) return <p role="status">{resumeError ?? "Resuming reservation…"}</p>;
+  if (resuming) {
+    if (resumeError) {
+      return (
+        <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+          <div role="alert" aria-live="assertive" className="rounded-2xl border border-red-500/30 bg-red-500/5 p-6">
+            <p className="font-semibold text-white">We couldn&apos;t resume this reservation</p>
+            <p className="mt-2 text-sm text-silver">{resumeError}</p>
+            <p className="mt-2 text-sm text-muted">We couldn&apos;t verify the current status. Check your account before starting another booking, or sign in as the reservation&apos;s owner.</p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Button asChild variant="outline"><Link href="/sign-in">Sign in</Link></Button>
+              <Button asChild><Link href="/account">Check my trips</Link></Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return <p role="status" className="mx-auto max-w-3xl px-4 py-10 sm:px-6">Resuming reservation…</p>;
+  }
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
       <h1 className="mb-6 font-display text-3xl font-semibold text-white">Book your rental</h1>
       <ProgressSteps current={step} />
       <p className="text-sm text-muted">All booking times: {state.bookingTimezone}</p>
+      {step > 1 && step < 7 && <div className="mt-4"><BookingSummary vehicle={vehicle} state={state} /></div>}
 
       <div className="rounded-2xl border border-white/10 bg-background p-6 sm:p-8">
         {step === 1 && <StepVehicle vehicle={vehicle} onNext={goNext} />}
