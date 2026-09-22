@@ -17,7 +17,10 @@ export default auth(async (req) => {
   if (deployed && !health && !productionConfiguration().ready) return reject(503,"Service configuration unavailable");
   if (pathname.startsWith("/api/") && !health) {
     const machine = pathname === "/api/webhooks/stripe" || pathname === "/api/community/sms" || pathname.startsWith("/api/cron/");
-    if (!["GET","HEAD","OPTIONS"].includes(req.method) && !machine && !requestOriginAllowed(req)) return reject(403,"Invalid request origin");
+    // Native routes exclusively authenticate explicit bearer credentials and
+    // never consult cookies. Keep cookie CSRF checks on every other web API.
+    const native = pathname.startsWith("/api/v1/mobile/");
+    if (!["GET","HEAD","OPTIONS"].includes(req.method) && !machine && !native && !requestOriginAllowed(req)) return reject(403,"Invalid request origin");
     const limit=requestBodyLimit(pathname,req.headers.get("content-type"),machine);
     if (req.body) {
       const reader=req.clone().body!.getReader();let length=0;

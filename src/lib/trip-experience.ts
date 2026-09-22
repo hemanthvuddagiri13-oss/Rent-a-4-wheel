@@ -1,3 +1,4 @@
+import type { DomainDatabase } from "@/lib/domain-transaction";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { marketplaceActor, marketplaceHost, MarketplaceError } from "@/lib/marketplace";
@@ -17,7 +18,7 @@ export async function tripParticipant(tx: Prisma.TransactionClient, userId: stri
   return { reservation, role: "HOST" as const };
 }
 
-export async function tripCommand(userId: string, id: string, action: "keys" | "return" | "complete") {
+export async function tripCommand(userId: string, id: string, action: "keys" | "return" | "complete", db: DomainDatabase = prisma) {
   return withReservationLock(id, async tx => {
     const { reservation: r, role } = await tripParticipant(tx, userId, id);
     if (action === "keys") {
@@ -55,7 +56,7 @@ export async function tripCommand(userId: string, id: string, action: "keys" | "
     }
     await tx.tripEvent.create({ data: { reservationId: id, actorId: userId, type: `TRIP_${action.toUpperCase()}` } });
     return { success: true };
-  });
+  }, db);
 }
 
 export async function tripExperience(userId: string, id: string) {

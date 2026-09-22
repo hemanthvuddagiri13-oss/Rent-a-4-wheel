@@ -1,93 +1,15 @@
-import { safeLog } from "@/lib/safe-log";
-import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
-import { evaluateTripStartGate } from "@/lib/trip-gate";
-import { withReservationLock } from "@/lib/financial-locks";
-import { transitionReservation } from "@/lib/reservation-state-machine";
-import type { ReservationStatus } from "@prisma/client";
-import { tripParticipant } from "@/lib/trip-experience";
-
-// The chain a reservation walks through, one legal transition at a time,
-// once every trip-start precondition is independently satisfied and
-// audited (document approval, identity handoff, condition-report
-// acceptance by both parties, agreement signature, pickup window). Each
-// intermediate status has no additional gate of its own in this phase —
-// they exist in the state machine so the lifecycle is fully modeled and
-// auditable, and a future phase can add per-step UI/endpoints without a
-// schema change.
-const PRE_TRIP_CHAIN: ReservationStatus[] = [
-  "CONFIRMED",
-  "DOCUMENTS_REQUIRED",
-  "READY_FOR_CHECK_IN",
-  "CHECK_IN_PROGRESS",
-  "READY_TO_START",
-  "ACTIVE",
-];
-
-/**
- * Starts the trip: only the customer on the reservation may call this
- * (the host cannot start it alone — see README "Trip-Start Rule"), and
- * only once every precondition in evaluateTripStartGate() passes.
- */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+import { startCustomerTrip } from "@/lib/customer-reservation";
+import { MarketplaceError } from "@/lib/marketplace";
+import { safeLog } from "@/lib/safe-log";
+export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const reservation = await prisma.reservation.findUnique({ where: { id } });
-  if (!reservation) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (reservation.customerId !== session.user.id) {
-    return NextResponse.json({ error: "Only the customer on this reservation can start the trip." }, { status: 403 });
+  if (!session?.user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const { id } = await ctx.params;
+  try { return Response.json(await startCustomerTrip(session.user.id, id)); }
+  catch (error) {
+    if (error instanceof MarketplaceError) return Response.json({ error: error.message }, { status: error.status });
+    safeLog("CUSTOMER_RESERVATION_ACTION_FAILED", error);
+    return Response.json({ error: "Reservation unavailable. Refresh and try again." }, { status: 409 });
   }
-
-  const gate = await evaluateTripStartGate(id);
-  if (!gate.canStart) {
-    return NextResponse.json({ error: "Trip cannot start yet.", reasons: gate.reasons }, { status: 409 });
-  }
-
-  const startIndex = PRE_TRIP_CHAIN.indexOf(reservation.status);
-  if (startIndex === -1 || startIndex === PRE_TRIP_CHAIN.length - 1) {
-    return NextResponse.json({ error: `Reservation is not in a pre-trip status (currently ${reservation.status}).` }, { status: 409 });
-  }
-
-  try {
-    await withReservationLock(id, async (tx) => {
-      const participant = await tripParticipant(tx, session.user.id, id);
-      if (participant.role !== "CUSTOMER") throw new Error("Customer access required");
-      const freshGate = await evaluateTripStartGate(id, tx);
-      if (!freshGate.canStart) throw new Error(freshGate.reasons.join("; "));
-      const preTripReport = await tx.conditionReport.findFirst({ where: { reservationId: id, phase: "PRE_TRIP", submittedByRole: "HOST" } });
-      let current = participant.reservation.status;
-      for (let i = PRE_TRIP_CHAIN.indexOf(current); i < PRE_TRIP_CHAIN.length - 1; i++) {
-        const next = PRE_TRIP_CHAIN[i + 1]!;
-        await transitionReservation(tx, { id, from: current, to: next });
-        current = next;
-      }
-
-      await tx.trip.upsert({
-        where: { reservationId: id },
-        create: {
-          reservationId: id,
-          startedAt: new Date(),
-          startedByUserId: session.user.id,
-          startMileage: preTripReport?.mileage,
-          startFuelLevel: preTripReport?.fuelLevel,
-        },
-        update: {
-          startedAt: new Date(),
-          startedByUserId: session.user.id,
-          startMileage: preTripReport?.mileage,
-          startFuelLevel: preTripReport?.fuelLevel,
-        },
-      });
-
-      await tx.tripEvent.create({ data: { reservationId: id, type: "TRIP_STARTED", actorId: session.user.id } });
-    });
-  } catch (err) {
-    safeLog("FAILED_TO_START_TRIP", err);
-    return NextResponse.json({ error: "Something went wrong starting the trip. Please try again." }, { status: 409 });
-  }
-
-  return NextResponse.json({ success: true });
 }

@@ -1,5 +1,6 @@
+import { domainTransaction, type DomainDatabase } from "@/lib/domain-transaction";
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { financialProjection } from "@/lib/financial-projection";
 import { requireReservationJurisdiction } from "@/lib/jurisdiction";
@@ -30,8 +31,8 @@ export async function lockReservation(tx: Prisma.TransactionClient, id: string) 
   return tx.reservation.findUniqueOrThrow({ where: { id } });
 }
 
-export function withReservationLock<T>(id: string, run: (tx: Prisma.TransactionClient) => Promise<T>, db: PrismaClient = prisma) {
-  return db.$transaction(async tx => {
+export function withReservationLock<T>(id: string, run: (tx: Prisma.TransactionClient) => Promise<T>, db: DomainDatabase = prisma) {
+  return domainTransaction(db, async tx => {
     await lockReservation(tx, id);
     return run(tx);
   }, { maxWait: 15000, timeout: 15000 });

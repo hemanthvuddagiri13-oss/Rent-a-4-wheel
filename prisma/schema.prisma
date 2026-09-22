@@ -45,6 +45,7 @@ model User {
 
   accounts Account[]
   sessions Session[]
+  mobileSessions MobileSession[]
 
   customer             Customer?
   hostProfile          HostProfile?
@@ -71,10 +72,57 @@ model User {
 // ---------------------------------------------------------------------------
 
 enum AuthCodePurpose {
+  MOBILE_SIGN_IN
   SECURITY_STEP_UP
   FINANCE_STEP_UP
   SIGN_IN
   EMERGENCY_OVERRIDE_STEP_UP
+}
+
+// Native bearer credentials never share the web cookie/session namespace.
+model MobileSession {
+  id String @id @default(cuid())
+  userId String
+  deviceId String
+  platform String
+  appVersion String
+  generation Int @default(0)
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  revocationReason String?
+  reuseDetectedAt DateTime?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentials MobileCredential[]
+  @@index([userId, revokedAt])
+  @@index([userId, deviceId])
+}
+
+model MobileCredential {
+  id String @id @default(cuid())
+  sessionId String
+  generation Int
+  accessHash String @unique
+  refreshHash String @unique
+  accessExpiresAt DateTime
+  refreshExpiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  session MobileSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@unique([sessionId, generation])
+}
+
+// Completed domain effects and their result are committed in one transaction.
+// No credential, signed URL or private payload is stored in result.
+model MobileMutation {
+  id String @id
+  userId String
+  operation String
+  fingerprint String
+  result Json
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
 }
 
 // Six-digit, single-use, short-lived, hashed sign-in codes. Never store the
