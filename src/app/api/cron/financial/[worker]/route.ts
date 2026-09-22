@@ -1,3 +1,4 @@
+import {observeWorker,failedWorkerBatch} from "@/lib/observability";
 import { collectReleases } from "@/lib/release-outcomes";
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
@@ -12,8 +13,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ worker
   const { worker } = await context.params;
   if (!Object.hasOwn(financialWorkers, worker)) return NextResponse.json({ error: "Unknown worker" }, { status: 404 });
   try {
-    const { result, releases, releaseOperations } = await collectReleases<Record<string, unknown>>(() => financialWorkers[worker as keyof typeof financialWorkers]());
-    return NextResponse.json({ ...result, releases, releaseOperations });
+    const observed=await observeWorker("financial/"+worker,async()=>{
+      const {result,releases,releaseOperations}=await collectReleases<Record<string,unknown>>(()=>financialWorkers[worker as keyof typeof financialWorkers]());
+      return {...result,releases,releaseOperations};
+    });
+    return NextResponse.json(observed,{status:failedWorkerBatch(observed)?503:200});
   } catch {
     return NextResponse.json({ error: "Recovery failed; retry required" }, { status: 503 });
   }

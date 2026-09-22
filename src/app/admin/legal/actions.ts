@@ -2,24 +2,27 @@
 
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
-import { canManageSettings } from "@/lib/rbac";
-import type { LegalDocumentType } from "@prisma/client";
+import {headers} from "next/headers";
+import {LegalDocumentType} from "@prisma/client";
+import {z} from "zod";
+import {adminExecution,formAdminProof,protectedAdminMutation} from "@/lib/protected-admin";
 import { createHash } from "node:crypto";
 
 export async function updateLegalDocument(formData: FormData) {
+ try {
   const session = await auth();
-  if (!session?.user || !canManageSettings(session.user.role)) throw new Error("Forbidden");
+  if (!session?.user) throw new Error("Forbidden");
+  const execution=adminExecution(session,new Headers(await headers()));
 
-  const type = String(formData.get("type")) as LegalDocumentType;
-  const content = String(formData.get("content"));
-  const version = String(formData.get("version"));
+  const type = z.nativeEnum(LegalDocumentType).parse(formData.get("type"));
+  const content = z.string().trim().min(1).max(100000).parse(formData.get("content"));
+  const version = z.string().trim().min(1).max(100).parse(formData.get("version"));
   const needsAttorneyReview = formData.get("needsAttorneyReview") === "on";
-  const reviewReference = String(formData.get("reviewReference") || "").trim();
+  const reviewReference = z.string().trim().max(500).parse(String(formData.get("reviewReference") || ""));
   if (!version.trim() || !content.trim() || content.length > 100000) throw new Error("A version and legal text are required.");
-  if (!needsAttorneyReview && (reviewReference.length < 10 || content.includes("NOT APPROVED FOR PRODUCTION") || content.includes("PLACEHOLDER"))) throw new Error("Replace draft text and record the Texas attorney approval reference before enabling signing.");
+  if (!needsAttorneyReview && (reviewReference.length < 10 || content.includes("NOT APPROVED FOR PRODUCTION") || content.includes("PLACEHOLDER"))) throw new Error("Replace draft text and record the applicable attorney approval reference before enabling signing.");
 
-  await prisma.$transaction(async tx => {
+  await protectedAdminMutation(session.user.id,formAdminProof(formData),execution,"legal",async tx => {
   await tx.$queryRaw`SELECT "id" FROM "LegalDocument" WHERE "type"::text=${type} FOR UPDATE`;
   const prior = await tx.legalDocument.findUniqueOrThrow({ where: { type } });
   if (prior.content !== content && prior.version === version) throw new Error("Changed legal text requires a new version.");
@@ -36,4 +39,5 @@ export async function updateLegalDocument(formData: FormData) {
 
   revalidatePath("/admin/legal");
   revalidatePath("/legal/[type]", "page");
+ } catch { throw new Error("ADMIN_MUTATION_REFUSED"); }
 }

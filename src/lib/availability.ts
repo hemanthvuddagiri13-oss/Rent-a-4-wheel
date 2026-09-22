@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import {requireVehicleJurisdiction,visibleJurisdictions} from "@/lib/jurisdiction";
 import { DURABLE_BLOCKING_STATUSES, TRANSIENT_HOLD_STATUSES } from "@/lib/reservation-state-machine";
 import type { Prisma } from "@prisma/client";
 
@@ -24,6 +25,7 @@ export async function isVehicleAvailable(
   opts: { excludeReservationId?: string; tx?: Prisma.TransactionClient } = {}
 ): Promise<boolean> {
   const client = opts.tx ?? prisma;
+  try{await requireVehicleJurisdiction(client,vehicleId,"SEARCH");}catch{return false;}
   const now = new Date();
   if (await client.serviceCase.count({ where: { vehicleId, safetyBlock: true } })) return false;
 
@@ -92,6 +94,7 @@ export async function getAvailableVehicleIds(
 
   const vehicles = await prisma.vehicle.findMany({
     where: {
+      jurisdictionCode:{in:await visibleJurisdictions()},
       status: "ACTIVE",
       listingApproval: "APPROVED",
       isDemo: false,

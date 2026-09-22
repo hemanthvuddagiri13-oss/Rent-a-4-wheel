@@ -8,6 +8,7 @@ import { encode } from "next-auth/jwt";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { fingerprint } from "@/lib/financial-operations";
+import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 const root = path.resolve(__dirname, ".."), cutoff = "20260917010000_financial_recovery_generations";
 function url(name: string) { const u = new URL(process.env.DATABASE_URL!); u.pathname = "/" + name; return u.toString(); }
 function sql(db: string, args: string[]) { execFileSync("psql", [db, "-v", "ON_ERROR_STOP=1", ...args], { stdio: "inherit" }); }
@@ -33,6 +34,11 @@ describe("previous schema checkout resumed by real Next/PostgreSQL/Chromium", ()
         UPDATE "Reservation" SET "bookingFingerprint"='finalized-original',"checkoutFingerprint"='finalized-checkout' WHERE "id"='mig_test_res_confirmed';`]);
       // These records really existed before either timezone or version columns.
       for (const migration of migrations.filter(m => m > cutoff)) sql(db, ["-f", path.join(root, "prisma/migrations", migration, "migration.sql")]);
+      // Migration must not guess geography or approve a market. Explicit test-only release follows migration.
+      expect(await client.jurisdiction.count({where:{mode:"DISABLED"}})).toBe(51);
+      expect((await client.vehicle.findUniqueOrThrow({where:{id:vehicleId}})).jurisdictionCode).toBeNull();
+      await fixtureJurisdiction(client);
+      await client.vehicle.update({where:{id:vehicleId},data:{jurisdictionCode:"TX"}});
       const before = await client.reservation.findUniqueOrThrow({ where: { id }, include: { extras: true, payments: true } });
       const finalized = await client.reservation.findUniqueOrThrow({ where: { id: "mig_test_res_confirmed" } });
       expect(before.bookingFingerprintVersion).toBe(1); expect(before.bookingFingerprint).toBe(old);
@@ -41,7 +47,8 @@ describe("previous schema checkout resumed by real Next/PostgreSQL/Chromium", ()
       while (Date.now() < deadline) { try { await fetch(base + "/api/auth/session"); ready = true; break; } catch { await new Promise(resolve => setTimeout(resolve, 500)); } }
       if (!ready) throw new Error("Real Next application did not start");
       browser = await chromium.launch({ headless: true }); const context = await browser.newContext({ timezoneId: "America/Los_Angeles" });
-      const token = await encode({ token: { id: customerId, sub: customerId, email: "mig-test-1@example.com", role: "CUSTOMER" }, secret, salt: "authjs.session-token" });
+      const device = await client.session.create({data:{userId:customerId,sessionToken:randomUUID(),expires:new Date(Date.now()+3600000)}});
+      const token = await encode({ token: { sid:device.id,rotation:0,id: customerId, sub: customerId, email: "mig-test-1@example.com", role: "CUSTOMER" }, secret, salt: "authjs.session-token" });
       await context.addCookies([{ name: "authjs.session-token", value: token, url: base, httpOnly: true, sameSite: "Lax" }]);
       const page = await context.newPage(); await page.goto(base + "/book/" + vehicleId + "?reservationId=" + id);
       await page.getByRole("heading", { name: "Driver Information" }).waitFor();

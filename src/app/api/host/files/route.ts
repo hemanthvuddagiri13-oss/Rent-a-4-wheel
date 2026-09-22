@@ -1,3 +1,4 @@
+import { localDevelopment } from "@/lib/deployment-environment";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -19,7 +20,7 @@ export async function POST(req: Request) {
     const sanitized = await validateAndSanitizeDocument(Buffer.from(await file.arrayBuffer()), file.type);
     const scan = await scanForMalware(sanitized.buffer);
     if (scan.status === "INFECTED") throw new MarketplaceError("File rejected by the security scanner.");
-    if (scan.status !== "CLEAN" && (process.env.NODE_ENV === "production" || process.env.ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV !== "true")) throw new MarketplaceError("Uploads are temporarily unavailable while the security scanner is offline.", 503);
+    if (scan.status !== "CLEAN" && (!localDevelopment() || process.env.ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV !== "true")) throw new MarketplaceError("Uploads are temporarily unavailable while the security scanner is offline.", 503);
     const stored = await storePrivateDocument(sanitized.buffer, sanitized.mimeType);
     const result = await prisma.$transaction(async tx => {
       const { host } = await marketplaceVehicle(tx, session.user.id, vehicleId, true);

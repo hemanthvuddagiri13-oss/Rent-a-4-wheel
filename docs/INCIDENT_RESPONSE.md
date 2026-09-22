@@ -1,0 +1,13 @@
+# Incident response
+
+Use an approved restricted incident channel and assign an incident owner. This document specifies technical containment; notification, retention and legal deadlines require the relevant jurisdiction's approved professional guidance. Do not infer deadlines from this runbook.
+
+1. Record UTC start time, affected environment, sanitized request/operation identifiers, symptoms and evidence location. Do not copy credentials, identity images, addresses or raw Stripe payloads into tickets or telemetry.
+2. Stop new admissions with the affected state/release controls. Keep refunds, returns, claims and recovery available where safe. If provider/database integrity is uncertain, stop the affected dispatch process and record which work is paused. Never delete intent, receipt, journal or snapshot records.
+3. For credential compromise, revoke affected device sessions, suspend affected accounts and rotate compromised provider/ingress secrets through the secret manager. Verify old credentials fail. Preserve security audit records. Code rotation alone does not revoke already issued sessions unless the session controls are also used.
+4. For private-file exposure, contain the affected object/account/IAM access, preserve evidence and block reads. Scan failure never permits release. Do not use deletion to conceal an incident or override a legal/security hold. Uncertain uploads require provider-side inventory before erasure can be asserted.
+5. For a stuck payment/refund/payout, inspect immutable intent, provider identity, receipts, lease and accounting completeness. Reconcile the existing operation; never issue a replacement provider operation to make a dashboard green. Disabling a jurisdiction cannot erase an existing obligation.
+6. For database loss, isolate dispatch, restore into a separate environment, verify journals and provider reconciliation, revoke restored sessions and assess object consistency. No restored environment resumes admissions until the incident owner and appropriate financial/security reviewers approve the evidence.
+7. Verify containment through actual HTTP/provider checks and preserved audit records. Resume narrowly, monitor backlog and reconcile all interrupted operations. Record root cause, affected scope, correction, tests and follow-up owners.
+
+Critical alerts include uncertain provider operations, excessive/unreconciled refunds, accounting mismatch, unauthorized private reads, exhausted scan/delete jobs and database unavailability. Consult the operations runbook for schedules and retry semantics. Application logs alone are not sufficient evidence of provider success or erasure. External communication and any mandatory notices require authorized legal/privacy review.

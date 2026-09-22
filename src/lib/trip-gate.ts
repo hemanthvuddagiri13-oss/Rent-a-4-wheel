@@ -1,4 +1,5 @@
 import { financialProjection } from "@/lib/financial-projection";
+import {requireReservationJurisdiction} from "@/lib/jurisdiction";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { getSiteSettings } from "@/lib/settings";
@@ -19,6 +20,7 @@ const REQUIRED_DOCUMENT_TYPES = ["LICENSE_FRONT", "LICENSE_BACK", "SELFIE_WITH_L
  */
 export async function evaluateTripStartGate(reservationId: string, db: Prisma.TransactionClient = prisma, stage: "START" | "KEY_RELEASE" = "START"): Promise<TripStartGateResult> {
   const reasons: string[] = [];
+  try{await requireReservationJurisdiction(db,reservationId,"TRIP_START");}catch{reasons.push("Jurisdiction is not released for trip start.");}
 
   const reservation = await db.reservation.findUnique({
     where: { id: reservationId },

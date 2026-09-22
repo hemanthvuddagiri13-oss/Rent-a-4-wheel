@@ -4,6 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { isDevPaymentSimulationAllowed } from "@/lib/stripe";
 import { queueNotification } from "@/lib/notifications";
 import { transitionReservation } from "@/lib/reservation-state-machine";
+import { requireConfirmationAdmission } from "@/lib/admission-authority";
+import { withReservationLock } from "@/lib/financial-locks";
+import { freezeFinance } from "@/lib/finance-rules";
 
 /**
  * Development-only endpoint that simulates a successful payment, so the
@@ -34,7 +37,11 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "This reservation is not awaiting payment." }, { status: 409 });
   }
 
-  await prisma.$transaction(async (tx) => {
+  await withReservationLock(id,async (tx) => {
+    const current=await tx.reservation.findUniqueOrThrow({where:{id}});
+    if(current.financialDisposition!=="OPEN"||current.status!=="AWAITING_PAYMENT"||!current.expiresAt||current.expiresAt<=new Date())throw new Error("Checkout unavailable");
+    await requireConfirmationAdmission(tx,id);
+    await freezeFinance(tx,id);
     await tx.payment.create({
       data: {
         reservationId: reservation.id,

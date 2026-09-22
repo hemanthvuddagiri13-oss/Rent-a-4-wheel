@@ -1,15 +1,49 @@
 name: Financial verification
 on:
   push:
-    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims, codex/phase-4-payouts-finance]
+    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims, codex/phase-4-payouts-finance, codex/phase-5-production-readiness]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  approved-baseline:
+    if: github.ref == 'refs/heads/codex/phase-5-production-readiness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rent_a_4wheel_test
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rent_a_4wheel_test
+      AUTH_SECRET: ci-only-not-a-deployment-secret
+      NEXTAUTH_URL: http://localhost:3000
+      CRON_SECRET: ci-only-cron-secret
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: c68b12200a36bd3e45f94292047dc03538908a29
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx prisma migrate deploy
+      - run: npm run db:seed
+      - run: npx next typegen && npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:17
@@ -23,11 +57,21 @@ jobs:
           --health-timeout 5s --health-retries 12
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rent_a_4wheel_test
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/rent_a_4wheel_test
+      MIGRATION_CONNECTION_MODE: direct
       AUTH_SECRET: ci-only-not-a-deployment-secret
       NEXTAUTH_URL: http://localhost:3000
       CRON_SECRET: ci-only-cron-secret
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact commit checkout
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Verified correction commit: $EXPECTED_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -36,24 +80,53 @@ jobs:
       - name: Browser test runtime
         run: npx playwright install --with-deps chromium
       - name: Fresh database migrations
-        run: npx prisma migrate deploy
+        run: npm run db:deploy
       - name: Seed
         run: npm run db:seed
       - name: Typecheck
         run: npx next typegen && npm run typecheck
       - name: Lint
         run: npm run lint
+      - name: Production build
+        run: npm run build
+      - name: Server secrets absent from client artifacts
+        run: node scripts/verify-release.mjs --client
+      - name: Disposable staging TLS
+        env:
+          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: node scripts/configure-ci-tls.mjs
+      - name: Production-build staging browser journeys (twice)
+        env:
+          STAGING_BROWSER: 'true'
+        run: |
+          npm test -- tests/staging-browser.test.ts
+          npm test -- tests/staging-browser.test.ts
       - name: Full suite including populated migration, first run
-        run: npm test
+        # Read-only security checks run before exercising the application.
+        run: |
+          git fetch origin c68b12200a36bd3e45f94292047dc03538908a29
+          git fetch origin f0255dc67c3af670c60df9d3238695e5f4d573fb
+          node scripts/verify-release.mjs
+          npm audit --audit-level=high
+          npm test
       - name: Full suite, second run
         run: npm test
+      - name: Phase 5 corrections and actual deployment upgrades (five consecutive runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/historical-refund-upgrade.test.ts tests/refund-compatibility.test.ts tests/worker-aggregation.test.ts tests/checkout-retry-authority.test.ts || exit 1
+            npm test -- tests/phase5-accounting-corrections.test.ts tests/phase5-admin-corrections.test.ts tests/phase5-admission-corrections.test.ts tests/phase5-authority-races.test.ts tests/phase5-worker-corrections.test.ts tests/phase5-content-validation.test.ts tests/phase5-proxy-limit.test.ts tests/phase5-upload-http.test.ts tests/direct-migration.test.ts tests/migration-phase5-exact.test.ts || exit 1
+          done
+      - name: National authority and financial policy stability (five runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/national-jurisdiction.test.ts tests/marketplace-pricing.test.ts tests/production-security.test.ts tests/private-storage-provider.test.ts tests/retention-policy.test.ts tests/agreement-artifact.test.ts || exit 1
+          done
       - name: Dispatch concurrency stability (five consecutive runs)
         run: |
           for run in 1 2 3 4 5; do
             npm test -- tests/phase1-dispatch-concurrency.test.ts tests/batch1f-release-worker.test.ts tests/finance-ledger.test.ts tests/payout-finance.test.ts || exit 1
           done
-      - name: Production build
-        run: npm run build
       - name: Refund accounting and payout races (five runs)
         run: |
           for run in 1 2 3 4 5; do
@@ -86,6 +159,14 @@ jobs:
           name: community-screenshots
           path: test-artifacts/community
           if-no-files-found: warn
+
+      - name: Verify unchanged checkout after all tests
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
       - name: Marketplace screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -100,4 +181,11 @@ jobs:
         with:
           name: finance-screenshots
           path: test-artifacts/finance
+          if-no-files-found: warn
+      - name: Staging screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-screenshots
+          path: test-artifacts/staging
           if-no-files-found: warn

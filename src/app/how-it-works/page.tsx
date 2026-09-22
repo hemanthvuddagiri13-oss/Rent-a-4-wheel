@@ -5,16 +5,16 @@ import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = {
   title: "How It Works",
-  description: "Renting a car from Rent A 4Wheel in Dallas is simple — here's how it works from booking to pickup.",
+  description: "Book with independent vehicle hosts through Rent A 4Wheel. Learn about verification, transparent pricing and host handoffs.",
   alternates: { canonical: "/how-it-works" },
 };
 
 const steps = [
-  { icon: CarFront, title: "Choose Your Car", desc: "Browse our fleet of sedans, SUVs, luxury vehicles, and trucks. Filter by dates, category, and price to find the right fit." },
+  { icon: CarFront, title: "Choose Your Car", desc: "Browse vehicles offered by independent hosts in available markets. Filter by dates, category, and price to find the right fit." },
   { icon: ListChecks, title: "Select Your Dates", desc: "Pick your pickup and return dates. Renting for a week or a month? We'll automatically apply the best weekly or monthly rate." },
   { icon: FileCheck2, title: "Verify Your Information", desc: "Create an account, provide your driver information, and securely upload your license — front and back." },
   { icon: CreditCard, title: "Pay & Reserve", desc: "Review a fully transparent price breakdown — rental, taxes, fees, and deposit — then complete secure checkout." },
-  { icon: KeyRound, title: "Pick Up & Drive", desc: "Meet us at pickup, complete a quick vehicle walkthrough, and hit the road." },
+  { icon: KeyRound, title: "Pick Up & Drive", desc: "Arrange pickup with your host, verify the handoff and record the vehicle condition before starting your trip." },
 ];
 
 export default function HowItWorksPage() {
@@ -23,6 +23,7 @@ export default function HowItWorksPage() {
       <div className="text-center">
         <h1 className="font-display text-4xl font-bold uppercase tracking-tight text-white">How It Works</h1>
         <p className="mt-3 text-muted">From browsing to driving — here&apos;s what to expect.</p>
+        <p className="mt-5 text-sm text-muted">Hosts are independent vehicle providers. They store, maintain, deliver and retrieve their vehicles and handle physical handoffs. Rent A 4Wheel provides booking, payments, verification, agreements, support and claims workflows.</p>
       </div>
 
       <div className="mt-14 space-y-8">

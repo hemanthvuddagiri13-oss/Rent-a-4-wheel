@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import {fixtureJurisdiction} from "./jurisdiction-fixture";
 
 export const prisma = new PrismaClient();
 
@@ -9,10 +10,12 @@ function unique() {
 }
 
 export async function createTestVehicle(overrides: Partial<Parameters<typeof prisma.vehicle.create>[0]["data"]> = {}) {
+  await fixtureJurisdiction(prisma);
   const id = unique();
   return prisma.vehicle.create({
     data: {
       slug: `test-vehicle-${id}`,
+      jurisdictionCode: "TX",
       vin: `V${id}`.toUpperCase(),
       licensePlate: `T${id}`.toUpperCase(),
       year: 2024,
@@ -36,11 +39,12 @@ export async function createTestCustomer(overrides: Partial<Parameters<typeof pr
 }
 
 export async function createTestHost() {
+  await fixtureJurisdiction(prisma);
   const user = await prisma.user.create({
     data: { email: `test-host-${unique()}@example.com`, role: "HOST" },
   });
   const hostProfile = await prisma.hostProfile.create({
-    data: { userId: user.id, legalName: "Test Host LLC", onboardingStatus: "APPROVED" },
+    data: { userId: user.id, legalName: "Test Host LLC", onboardingStatus: "APPROVED",jurisdictionCode:"TX" },
   });
   return { user, hostProfile };
 }

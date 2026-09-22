@@ -71,6 +71,7 @@ model User {
 // ---------------------------------------------------------------------------
 
 enum AuthCodePurpose {
+  SECURITY_STEP_UP
   FINANCE_STEP_UP
   SIGN_IN
   EMERGENCY_OVERRIDE_STEP_UP
@@ -124,8 +125,84 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  revokedAt    DateTime?
+  rotation     Int      @default(0)
+  device       String   @default("Browser")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ReleaseFeature {
+  key       String @id
+  enabled   Boolean @default(false)
+  version   Int @default(1)
+  updatedAt DateTime @updatedAt
+}
+
+model PolicyApproval {
+  id String @id @default(cuid())
+  kind String
+  version String
+  contentHash String
+  status String @default("DRAFT")
+  jurisdiction String
+  professionalReviewRequired Boolean @default(true)
+  professionalReference String?
+  approvedById String?
+  approvedAt DateTime?
+  effectiveAt DateTime?
+  supersedesId String? @unique
+  createdAt DateTime @default(now())
+  @@unique([kind, jurisdiction, version])
+  @@index([kind, jurisdiction, status, effectiveAt])
+}
+
+model OperationalEvent {
+  id String @id @default(cuid())
+  category String
+  severity String
+  requestId String?
+  count Int @default(1)
+  source String?
+  durationMs Int?
+  createdAt DateTime @default(now())
+  @@index([category, createdAt])
+}
+
+model OperationsJob {
+  payload Json?
+  key String @id
+  kind String
+  state String @default("PENDING")
+  resourceId String?
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastErrorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([kind, state, nextAttemptAt])
+}
+
+model PrivateObject {
+  writeState String @default("PREPARED")
+  key String @id
+  sha256 String
+  size Int
+  mimeType String
+  state String @default("UPLOADED")
+  scanEngine String?
+  scanVersion String?
+  scannedAt DateTime?
+  retainedUntil DateTime?
+  hold Boolean @default(false)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([state, updatedAt])
 }
 
 model VerificationToken {
@@ -190,6 +267,7 @@ enum StripeConnectStatus {
 // and receives payouts. Distinct from `VehicleOwner`, which tracks a purely
 // financial/legal ownership arrangement for company-managed vehicles.
 model HostProfile {
+  jurisdictionCode String?
   files         MarketplaceFile[]
   vehicleOwners VehicleOwner[]
   id            String            @id @default(cuid())
@@ -284,6 +362,7 @@ enum OwnershipType {
 }
 
 model Vehicle {
+  jurisdictionCode String?
   marketplaceFiles MarketplaceFile[]
   listingRevision  Int               @default(1)
   listingApproval  String            @default("APPROVED")
@@ -494,6 +573,8 @@ enum RateType {
 }
 
 model Reservation {
+  jurisdictionCode String?
+  jurisdictionSnapshot Json?
   bookingTimezone           String    @default("America/Chicago")
   financialCheckedAt        DateTime?
   // Terminal financial disposition is independent of captured payment status.
@@ -1053,6 +1134,7 @@ enum LegalDocumentType {
 // Creating one is refused server-side while the source LegalDocument is
 // still flagged `needsAttorneyReview` (see src/lib/agreements.ts).
 model AgreementAcceptance {
+  artifact AgreementArtifact?
   subjectSnapshot Json?
   id              String            @id @default(cuid())
   type            LegalDocumentType
@@ -1083,6 +1165,15 @@ model AgreementAcceptance {
   @@index([reservationId])
   @@index([vehicleId])
   @@index([signedByUserId])
+}
+
+model AgreementArtifact {
+  acceptanceId String @id
+  acceptance AgreementAcceptance @relation(fields: [acceptanceId], references: [id], onDelete: Cascade)
+  storageId String @unique
+  sha256 String
+  pdf Bytes
+  createdAt DateTime @default(now())
 }
 
 // Admin-editable legal content. Content flagged `needsAttorneyReview` must
@@ -1890,6 +1981,33 @@ model FinanceGrant {
  createdAt DateTime @default(now())
  @@id([hostId,userId])
 }
+model PrivateValidation {
+ sourceKey String @id
+ targetKey String @unique
+ resourceType String
+ resourceId String
+ sourceSha256 String
+ targetSha256 String
+ mimeType String
+ bytes Bytes
+ evidence Json
+ createdAt DateTime @default(now())
+}
+
+model ProviderFeeEvidence {
+ providerId String @id
+ paymentId String @unique
+ reservationId String
+ currency String
+ amountCents Int
+ feeCents Int
+ netCents Int
+ evidence Json
+ fingerprint String
+ createdAt DateTime @default(now())
+ @@index([reservationId])
+}
+
 model LedgerJournal {
  id String @id @default(cuid())
  key String @unique
@@ -1901,6 +2019,7 @@ model LedgerJournal {
  providerId String?
  reversalOf String? @unique
  description String
+ allocationEvidence Json?
  fingerprint String
  createdAt DateTime @default(now())
  lines LedgerLine[]
@@ -2041,6 +2160,19 @@ model FinanceAdjustment {
  journalId String? @unique
  createdAt DateTime @default(now())
 }
+model RefundCompatibilityEvidence {
+ journalId String @id
+ reservationId String
+ refundId String @unique
+ paymentId String
+ version Int
+ evidenceHash String
+ validationResult String
+ inputs Json
+ openingAllocation Json
+ createdAt DateTime @default(now())
+ @@index([reservationId])
+}
 model FinanceDocument {
  id String @id @default(cuid())
  key String @unique
@@ -2073,4 +2205,51 @@ model FinanceQuote {
  reservationId String @id
  terms Json
  createdAt DateTime @default(now())
+}
+
+model Jurisdiction {
+  code String @id
+  mode String @default("DISABLED")
+  version Int @default(1)
+  updatedAt DateTime @updatedAt
+}
+model JurisdictionApproval {
+  id String @id @default(cuid())
+  jurisdictionCode String
+  category String
+  version Int
+  status String @default("SAMPLE")
+  contentHash String
+  reviewedById String?
+  reviewedAt DateTime?
+  effectiveAt DateTime
+  endsAt DateTime?
+  evidenceReference String
+  createdAt DateTime @default(now())
+  @@unique([jurisdictionCode, category, version])
+  @@index([jurisdictionCode, category, effectiveAt])
+}
+model MarketplacePricingPolicy {
+  id String @id @default(cuid())
+  jurisdictionCode String
+  version Int
+  status String @default("SAMPLE")
+  config Json
+  contentHash String
+  effectiveAt DateTime
+  endsAt DateTime?
+  createdById String?
+  reviewedById String?
+  reviewedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([jurisdictionCode, version])
+  @@index([jurisdictionCode, effectiveAt])
+}
+model HostSubscription {
+  hostId String @id
+  plan String
+  jurisdictionCode String
+  activeUntil DateTime
+  providerReference String?
+  updatedAt DateTime @updatedAt
 }

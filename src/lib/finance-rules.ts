@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { marketplacePolicyQuote } from "@/lib/marketplace-pricing";
 import type { Prisma, Vehicle } from "@prisma/client";
 import { fingerprint,json } from "@/lib/financial-operations";
 import { type PricingBreakdown } from "@/lib/pricing";
@@ -11,13 +12,15 @@ export const commissionSchema=z.object({basisPoints:bps.default(0),fixedCents:ce
 export const taxSchema=z.object({jurisdiction:z.string().min(2).max(120),rentalBps:bps,feeBps:bps.default(0),extrasTaxable:z.boolean().default(true),exemptionsAllowed:z.boolean().default(false),provider:z.enum(["CONFIGURED","EXTERNAL"]).default("CONFIGURED")});
 export const payoutSchema=z.object({delayDays:z.coerce.number().int().min(0).max(365),minimumCents:cents.min(1),allowedSchedules:z.array(z.enum(["MANUAL","WEEKLY","TWICE_MONTHLY","MONTHLY"])).min(1),hostMaySelect:z.boolean().default(false),timezone:z.string().refine(v=>{try{new Intl.DateTimeFormat("en",{timeZone:v});return true;}catch{return false;}})});
 export const lossSchema=z.object({refundHostBps:bps,chargebackHostBps:bps,reverseTransfers:z.boolean().default(false)});
-export type FinanceTerms={commission:Record<string,unknown>;tax:Record<string,unknown>;settlement:Record<string,unknown>;amounts:{grossCents:number;hostDiscountCents:number;platformDiscountCents:number;commissionCents:number;hostNetCents:number;rentalTaxCents:number;feeTaxCents:number;feesCents:number;totalCents:number};approved:boolean};
+export type FinanceTerms={commission:Record<string,unknown>;tax:Record<string,unknown>;settlement:Record<string,unknown>;amounts:{guestServiceCents?:number;protectionCents?:number;guestProcessingCents?:number;hostProcessingCents?:number;platformProcessingCents?:number;riskReserveCents?:number;depositCents?:number;extrasCents?:number;discountCents?:number;grossCents:number;hostDiscountCents:number;platformDiscountCents:number;commissionCents:number;hostNetCents:number;rentalTaxCents:number;feeTaxCents:number;feesCents:number;totalCents:number};approved:boolean};
 export const roundBps=(amount:number,rate:number)=>Number((BigInt(amount)*BigInt(rate)+BigInt(5000))/BigInt(10000));
 export async function selectedRule(tx:Prisma.TransactionClient,kind:string,scopes:Array<{scope:string;scopeId:string}>,now=new Date()){
  for(const scope of scopes){const r=await tx.financeRule.findFirst({where:{kind,...scope,approvedAt:{not:null},effectiveAt:{lte:now},OR:[{endsAt:null},{endsAt:{gt:now}}]},orderBy:[{effectiveAt:"desc"},{version:"desc"}]});if(r)return r;}
  return null;
 }
 export async function financeQuote(tx:Prisma.TransactionClient,vehicle:Vehicle,base:PricingBreakdown,customerId?:string):Promise<{breakdown:PricingBreakdown;terms:FinanceTerms}> {
+ const marketplace = await marketplacePolicyQuote(tx,vehicle,base);
+ if(marketplace)return marketplace;
  const scopes=[{scope:"VEHICLE",scopeId:vehicle.id},...(vehicle.hostId?[{scope:"HOST",scopeId:vehicle.hostId}]:[]),{scope:"CATEGORY",scopeId:vehicle.category},{scope:"DEFAULT",scopeId:"*"}];
  const commission=await selectedRule(tx,"COMMISSION",scopes),tax=await selectedRule(tx,"TAX",[{scope:"JURISDICTION",scopeId:vehicle.location}]),settlement=await selectedRule(tx,"PAYOUT",scopes),loss=await selectedRule(tx,"LOSS",scopes);
  const c=commissionSchema.parse(commission?.config??{}),t=tax?taxSchema.parse(tax.config):null;

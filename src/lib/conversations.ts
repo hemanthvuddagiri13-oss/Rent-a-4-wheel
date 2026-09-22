@@ -3,6 +3,8 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MarketplaceError } from "@/lib/marketplace";
 import { participant, reservationScope, safeText, policy, afterDays, audit } from "@/lib/collaboration-access";
+import {releaseAuthorityFence} from "@/lib/admission-authority";
+import {requireVehicleJurisdiction} from "@/lib/jurisdiction";
 
 export async function conversationAccess(tx: Prisma.TransactionClient, userId: string, id: string) {
   const conversation = await tx.conversation.findUnique({ where: { id } });
@@ -13,6 +15,11 @@ export async function conversationAccess(tx: Prisma.TransactionClient, userId: s
 export async function openConversation(userId: string, input: { reservationId?: string; vehicleId?: string }, db: PrismaClient = prisma) {
   return db.$transaction(async tx => {
     const r = input.reservationId ? await reservationScope(tx, input.reservationId) : null;
+    if(!r){
+      await releaseAuthorityFence(tx);
+      await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+(input.vehicleId??"")})`;
+      await requireVehicleJurisdiction(tx,input.vehicleId??"","SEARCH");
+    }
     const vehicle = await tx.vehicle.findUnique({ where: { id: r?.vehicleId ?? input.vehicleId ?? "" } });
     if (!vehicle || (!r && (vehicle.status !== "ACTIVE" || vehicle.listingApproval !== "APPROVED" || vehicle.isDemo))) throw new MarketplaceError("Vehicle unavailable.", 404);
     const customerId = r?.customerId ?? userId;

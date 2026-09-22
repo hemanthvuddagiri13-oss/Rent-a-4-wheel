@@ -5,6 +5,8 @@ import { eventFence } from "@/lib/financial-locks";
 import { OperationPendingError, UncertainOutcomeError } from "@/lib/financial-errors";
 import { safeErrorCode } from "@/lib/safe-log";
 import { assertDepositReleaseReviewClear } from "@/lib/return-financial-authority";
+import { requireReleaseFeature } from "@/lib/release-control";
+import {requireReservationJurisdiction,jurisdictionDecision} from "@/lib/jurisdiction";
 
 function json(value: unknown): Prisma.InputJsonValue { return JSON.parse(JSON.stringify(value)); }
 
@@ -15,14 +17,15 @@ export async function withOperationGuard<T>(operation: FinancialOperation, token
   const reservation = operation.reservationId ? await prisma.reservation.findUniqueOrThrow({ where: { id: operation.reservationId } }) : null;
   const scope = reservation ? "vehicle:" + reservation.vehicleId : "operation:" + operation.id;
   const fence = eventFence.getStore();
-  const scopes = [...(fence ? ["event:" + fence.id] : []), ...(operation.kind.startsWith("FINANCE_") ? await financeOperationScopes(prisma,operation) : [scope])];
+  const scopes = [ ...(fence ? ["event:" + fence.id] : []), ...(operation.kind.startsWith("FINANCE_") ? await financeOperationScopes(prisma,operation) : [scope])];
   const url = new URL(process.env.DIRECT_DATABASE_URL || process.env.DATABASE_URL!);
   if (url.searchParams.get("pgbouncer") === "true") throw new Error("Dispatch requires a direct PostgreSQL session");
   url.searchParams.set("connection_limit", "1"); url.searchParams.set("pool_timeout", "15");
   const db = createSafePrismaClient(url.toString());
-  const held: string[] = [];
+  const held: string[] = []; let releaseHeld = false;
   try {
     await db.$connect(); await db.$executeRawUnsafe("SET lock_timeout='12s'");
+    await db.$queryRaw`SELECT pg_advisory_lock_shared(hashtextextended('release-control',0))::text`; releaseHeld = true;
     for (const key of scopes) { await db.$queryRaw`SELECT financial_guard_session(${key},true)`; held.push(key); }
     const current = await assertCurrentLease(db, operation, token);
     if (reservation && (await db.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).vehicleId !== reservation.vehicleId) throw new OperationPendingError("Reservation guard identity changed");
@@ -33,7 +36,7 @@ export async function withOperationGuard<T>(operation: FinancialOperation, token
     return await run(db, current);
   } finally {
     try { for (const key of held.reverse()) await db.$queryRaw`SELECT financial_guard_session(${key},false)`; }
-    finally { await db.$disconnect(); }
+    finally { if(releaseHeld) await db.$queryRaw`SELECT pg_advisory_unlock_shared(hashtextextended('release-control',0))`; await db.$disconnect(); }
   }
 }
 
@@ -45,6 +48,10 @@ export async function assertCurrentLease(db: PrismaClient, operation: FinancialO
 }
 
 async function assertDispatchAuthority(db: PrismaClient, op: FinancialOperation) {
+  // Admission gates do not block compensating refunds, deposit releases or reversals.
+  if(op.kind==="RENTAL"||op.kind==="DEPOSIT"){const jurisdiction=await requireReservationJurisdiction(db,op.reservationId!,"PAYMENT");await requireReleaseFeature(op.kind==="RENTAL"?"booking":"deposits",db,jurisdiction.code);}
+  if(op.kind==="FINANCE_CONNECT"){const host=await db.hostProfile.findUniqueOrThrow({where:{id:(op.payload as {hostId:string}).hostId}});const jurisdiction=await jurisdictionDecision(db,host.jurisdictionCode,"HOSTING");await requireReleaseFeature("connect",db,jurisdiction.code);}
+  if(op.kind==="FINANCE_TRANSFER"||op.kind==="FINANCE_PAYOUT"){const items=await db.payoutItem.findMany({where:{batchId:(op.payload as {batchId:string}).batchId}});for(const item of items){const jurisdiction=await requireReservationJurisdiction(db,item.reservationId,"PAYOUT");await requireReleaseFeature(op.kind==="FINANCE_TRANSFER"?"transfers":"payouts",db,jurisdiction.code);}}
   if (op.kind.startsWith("FINANCE_")) { await assertFinanceDispatch(db,op); return; }
   if (!op.reservationId) { if (op.kind !== "CUSTOMER") throw new UncertainOutcomeError("Provider operation has no release authority"); return; }
   const r = await db.reservation.findUniqueOrThrow({ where: { id: op.reservationId }, include: { deposit: true, trip: true } });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { pricingSummary } from "@/lib/reservation-summary";
+import { pricingSummary, frozenMarketplaceSummary } from "@/lib/reservation-summary";
 import { withReservationLock } from "@/lib/financial-locks";
 import { upgradeBookingFingerprint } from "@/lib/booking-fingerprint";
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -18,6 +18,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   return NextResponse.json({ reservationId: id, vehicleId: r.vehicleId, confirmationNumber: r.confirmationNumber,
     bookingTimezone: r.bookingTimezone, pickupAt: r.pickupAt, returnAt: r.returnAt, selectedExtraIds: r.extras.map(e => e.extraId), couponCode: r.coupon?.code ?? "",
     checkoutComplete: Boolean(r.checkoutFingerprint), bookingFingerprint: r.bookingFingerprint, holdExpiresAt: r.expiresAt,
-    breakdown: pricingSummary(r), draftId: draft?.id, revision: draft?.revision, status: r.status },
+    breakdown: {...pricingSummary(r),marketplace:await frozenMarketplaceSummary(r.id)}, draftId: draft?.id, revision: draft?.revision, status: r.status },
     { headers: { "Cache-Control": "private, no-store" } });
 }

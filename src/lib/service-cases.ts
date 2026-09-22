@@ -1,3 +1,4 @@
+import { requireReleaseFeature } from "@/lib/release-control";
 import { independentCaseActor } from "@/lib/case-decision-authority";
 import { verifyAuthCode } from "@/lib/auth-code";
 import { enqueueNoticeEmail } from "@/lib/notice-center";
@@ -30,6 +31,7 @@ export async function caseAccess(tx: Prisma.TransactionClient, userId: string, i
 }
 export async function createServiceCase(userId: string, input: unknown, db: PrismaClient = prisma) {
   const data = createCaseSchema.parse(input);
+  if(data.kind==="CLAIM")await requireReleaseFeature("claims",db);
   const categories = {
     CLAIM: ["DAMAGE"],
     DISPUTE: ["DAMAGE", "MILEAGE", "FUEL", "LATE_RETURN", "CLEANING", "CANCELLATION", "REFUND", "UNAUTHORIZED_USE", "OTHER_CHARGES"],

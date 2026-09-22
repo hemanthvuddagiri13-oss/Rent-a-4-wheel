@@ -1,0 +1,21 @@
+# Example /etc/cron.d/r4w: install only on an isolated, approved environment.
+# /etc/r4w/scheduler.env must be owned by r4w, mode 0600, and contain only SITE_URL and CRON_SECRET.
+# Configure the scheduler to alert on nonzero exit and missed monitor calls.
+# Replace /opt/r4w/current and the node path with the actual deployment paths.
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs financial/stripe-events
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs financial/refunds
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs financial/deposits
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs financial/reconciliation
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs financial/outbox
+*/15 * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs financial/historical-audit
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs community
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs payouts/accounting
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs payouts/recovery
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs payouts/schedule
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs payouts/reconciliation
+*/15 * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs payouts/historical-audit
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs expire-holds
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs operations/scan
+* * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs operations/delete
+*/2 * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs operations/agreements
+*/5 * * * * r4w /usr/bin/node --env-file=/etc/r4w/scheduler.env /opt/r4w/current/scripts/dispatch-cron.mjs operations/monitor

@@ -1,3 +1,6 @@
+import {JurisdictionUnavailable} from "@/lib/jurisdiction";
+import {ReleaseGateError} from "@/lib/release-control";
+import {requireConfirmationAdmission} from "@/lib/admission-authority";
 import type Stripe from "stripe";
 import type { Payment, Reservation, SecurityDeposit, Prisma, ReconciliationReason } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -51,6 +54,7 @@ export async function confirmAfterRentalPaymentSuccess(
       return false;
     }
     if (current.financialDisposition !== "OPEN" || !FULFILLMENT_RECOVERY_STATES.includes(current.status)) return false;
+    try{await requireConfirmationAdmission(tx,current.id);}catch(error){if(!(error instanceof JurisdictionUnavailable)&&!(error instanceof ReleaseGateError))throw error;await requireRefund(tx,current.id,payment,"Admission authority closed before confirmation");return false;}
     if (current.status === "PAYMENT_FAILED" && current.expiresAt && current.expiresAt <= new Date()) {
       await requireRefund(tx, current.id, payment, "Deposit recovery deadline elapsed");
       await tx.reservation.update({ where: { id: current.id }, data: { status: "EXPIRED", expiresAt: null } });
@@ -80,6 +84,7 @@ export async function confirmAfterRentalPaymentSuccess(
   const confirmed = await withReservationLock(reservation.id, async tx => {
     const current = await tx.reservation.findUniqueOrThrow({ where: { id: reservation.id }, include: { deposit: { include: { operation: true } }, payments: true, refunds: true } });
     if (current.financialDisposition !== "OPEN" || current.status !== "PAYMENT_FAILED") return false;
+    try{await requireConfirmationAdmission(tx,current.id);}catch(error){if(!(error instanceof JurisdictionUnavailable)&&!(error instanceof ReleaseGateError))throw error;await requireRefund(tx,current.id,payment,"Admission authority closed before confirmation");return false;}
     if (!current.expiresAt || current.expiresAt <= new Date()) {
       await requireRefund(tx, current.id, payment, "Deposit recovery deadline elapsed");
       await tx.reservation.update({ where: { id: current.id }, data: { status: "EXPIRED", expiresAt: null } });

@@ -1,3 +1,6 @@
+import { requireReleaseFeature } from "@/lib/release-control";
+import { releaseAuthorityFence } from "@/lib/admission-authority";
+import {requireVehicleJurisdiction} from "@/lib/jurisdiction";
 import { financeQuote } from "@/lib/finance-rules";
 import { bookingDays } from "@/lib/booking-time";
 import { upgradeBookingFingerprint } from "@/lib/booking-fingerprint";
@@ -44,8 +47,11 @@ export async function createOrRefreshHold(params: {
   try {
     const result = await db.$transaction(
       async (tx) => {
+        await releaseAuthorityFence(tx);
         await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + vehicleId})`;
         await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${vehicleId} FOR UPDATE`;
+        const jurisdiction=await requireVehicleJurisdiction(tx,vehicleId,"CHECKOUT");
+        await requireReleaseFeature("booking",tx,jurisdiction.code);
         if (params.draftId) {
           let draft = await tx.bookingDraft.upsert({ where: { id: params.draftId }, update: {}, create: { id: params.draftId, customerId, vehicleId } });
           if (draft.customerId !== customerId || draft.vehicleId !== vehicleId) throw new HoldError("Booking draft unavailable", 403);
@@ -123,6 +129,7 @@ export async function createOrRefreshHold(params: {
 
         const reservation = await tx.reservation.create({
           data: {
+            jurisdictionCode:jurisdiction.code,jurisdictionSnapshot:json(jurisdiction),
             bookingFingerprint,
             bookingTimezone,
             confirmationNumber: generateConfirmationNumber(),

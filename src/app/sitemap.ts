@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { prisma } from "@/lib/prisma";
+import { visibleJurisdictions } from "@/lib/jurisdiction";
 import { SITE_URL } from "@/lib/constants";
 
 const STATIC_ROUTES = [
@@ -28,7 +29,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   let vehicleEntries: MetadataRoute.Sitemap = [];
   try {
     const vehicles = await prisma.vehicle.findMany({
-      where: { status: "ACTIVE" },
+      where: { status: "ACTIVE", listingApproval: "APPROVED", isDemo: false, jurisdictionCode: {in: await visibleJurisdictions()}, OR: [{hostId: null}, {host: {onboardingStatus: "APPROVED"}}] },
       select: { slug: true, updatedAt: true },
     });
     vehicleEntries = vehicles.map((v) => ({

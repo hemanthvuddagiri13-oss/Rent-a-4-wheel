@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { visibleJurisdictions } from "@/lib/jurisdiction";
 import type { Prisma } from "@prisma/client";
 import { getAvailableVehicleIds } from "@/lib/availability";
 import type { VehicleCardData } from "@/components/vehicles/vehicle-card";
@@ -65,7 +66,7 @@ const cardSelect = {
 export async function getFeaturedVehicles(limit = 9): Promise<VehicleCardData[]> {
   try {
     const vehicles = await prisma.vehicle.findMany({
-      where: publicInventory,
+      where: { ...publicInventory, jurisdictionCode: { in: await visibleJurisdictions() } },
       select: cardSelect,
       orderBy: { createdAt: "desc" },
       take: limit,
@@ -91,7 +92,7 @@ export interface VehicleSearchFilters {
 
 export async function searchVehicles(filters: VehicleSearchFilters): Promise<VehicleCardData[]> {
   try {
-    const where: Prisma.VehicleWhereInput = { ...publicInventory };
+    const where: Prisma.VehicleWhereInput = { ...publicInventory, jurisdictionCode: { in: await visibleJurisdictions() } };
 
     if (filters.location) where.location = { contains: filters.location, mode: "insensitive" };
     if (filters.category && filters.category !== "ALL") {
@@ -130,7 +131,7 @@ export async function searchVehicles(filters: VehicleSearchFilters): Promise<Veh
 
 export async function getVehicleBySlug(slug: string) {
   return prisma.vehicle.findFirst({
-    where: { ...publicInventory, slug },
+    where: { ...publicInventory, slug, jurisdictionCode: { in: await visibleJurisdictions() } },
     include: {
       images: { orderBy: { position: "asc" } },
       features: { include: { feature: true } },
@@ -141,7 +142,7 @@ export async function getVehicleBySlug(slug: string) {
 export async function getDistinctMakes(): Promise<string[]> {
   try {
     const rows = await prisma.vehicle.findMany({
-      where: publicInventory,
+      where: { ...publicInventory, jurisdictionCode: { in: await visibleJurisdictions() } },
       select: { make: true },
       distinct: ["make"],
       orderBy: { make: "asc" },

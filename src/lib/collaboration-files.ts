@@ -24,7 +24,7 @@ async function scopeAccess(tx: Prisma.TransactionClient, userId: string, scope: 
 export async function uploadCollaborationFile(userId: string, scope: { conversationId?: string; caseId?: string }, file: File, purpose: string) {
   await scopeAccess(prisma, userId, scope, true);
   if (!["MESSAGE", "DAMAGE", "ESTIMATE", "INVOICE", "POLICE_REPORT", "SUPPORT"].includes(purpose)) throw new MarketplaceError("Choose a supported attachment purpose.");
-  if (file.size > MAX_DOCUMENT_SIZE_BYTES) throw new MarketplaceError("Choose an image smaller than 8 MB.");
+  if (file.size > MAX_DOCUMENT_SIZE_BYTES) throw new MarketplaceError("Choose an image no larger than 8 MB.",413);
   const clean = await validateAndSanitizeDocument(Buffer.from(await file.arrayBuffer()), file.type);
   if ((await scanForMalware(clean.buffer)).status !== "CLEAN") throw new MarketplaceError("The security scan did not approve this file. Try again later.", 422);
   // Scanning is outside the transaction; repeat current authorization afterwards.

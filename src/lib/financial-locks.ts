@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { financialProjection } from "@/lib/financial-projection";
+import { requireReservationJurisdiction } from "@/lib/jurisdiction";
+import { releaseAuthorityFence } from "@/lib/admission-authority";
 
 export const eventFence = new AsyncLocalStorage<{ id: string; token: string }>();
 
@@ -16,9 +18,10 @@ export async function assertEventFence(tx: Prisma.TransactionClient) {
   if (!rows.length) throw new Error("Stripe event lease lost");
 }
 
-// Lock order everywhere: event (if present), vehicle, reservation, operation.
+// Lock order everywhere: release authority, event (if present), vehicle, reservation, operation.
 // READ COMMITTED ensures reads after waiting on the lock see the winning writer.
 export async function lockReservation(tx: Prisma.TransactionClient, id: string) {
+  await releaseAuthorityFence(tx);
   await assertEventFence(tx);
   const row = await tx.reservation.findUniqueOrThrow({ where: { id }, select: { vehicleId: true } });
   await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + row.vehicleId})`;
@@ -37,6 +40,7 @@ export function withReservationLock<T>(id: string, run: (tx: Prisma.TransactionC
 // Mandatory even for emergency state transitions. Caller holds the reservation
 // lock, shared with refund reservation and deposit/cancellation projections.
 export async function assertFinancialTripStart(tx: Prisma.TransactionClient, id: string) {
+  await requireReservationJurisdiction(tx,id,"TRIP_START");
   if (await tx.serviceCase.count({ where: { reservationId: id, kind: { in: ["CLAIM", "DISPUTE"] }, state: { not: "CLOSED" } } })) throw new Error("Resolve the outstanding claim or dispute before this action");
   const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, refunds: true, deposit: { include: { operation: true } } } });
   if (await tx.serviceCase.count({ where: { vehicleId: r.vehicleId, safetyBlock: true } })) throw new Error("Vehicle safety review blocks trip start");

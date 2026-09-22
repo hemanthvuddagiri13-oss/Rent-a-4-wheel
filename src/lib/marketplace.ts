@@ -1,3 +1,4 @@
+import { releaseAuthorityFence, requireHostingAdmission } from "@/lib/admission-authority";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -27,6 +28,7 @@ export async function marketplaceHost(tx: Prisma.TransactionClient, userId: stri
 }
 
 export async function marketplaceVehicle(tx: Prisma.TransactionClient, userId: string, id: string, manage = false) {
+  await releaseAuthorityFence(tx);
   // Same guard ordering as checkout; never acquire a vehicle row before its guard.
   await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + id})`;
   await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id"=${id} FOR UPDATE`;
@@ -59,6 +61,7 @@ export const listingSchema = z.object({
   dailyRateCents: cents.min(100), weeklyRateCents: cents.min(100), monthlyRateCents: cents.min(100), securityDepositCents: cents,
   mileageAllowancePerDay: z.coerce.number().int().min(1).max(10000), additionalMileageFeeCents: cents,
   description: z.string().trim().min(20).max(5000), rules: z.string().trim().max(3000), location: text,
+  jurisdictionCode: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/).optional(),
   registrationExpiresAt: date, insuranceExpiresAt: date,
   ownerId: z.string().optional(), ownershipType: z.enum(["COMPANY_OWNED", "LEASED_TO_COMPANY", "MANAGED_VEHICLE"]),
   features: z.array(text).max(30),
@@ -67,10 +70,13 @@ export const listingSchema = z.object({
 export async function saveListing(userId: string, input: unknown) {
   const data = listingSchema.parse(input);
   return prisma.$transaction(async tx => {
+    await releaseAuthorityFence(tx);
     const context = data.id ? await marketplaceVehicle(tx, userId, data.id, true) : await marketplaceHost(tx, userId, true);
+    const jurisdictionCode = data.jurisdictionCode ?? context.host.jurisdictionCode;
+    await requireHostingAdmission(tx, {code:jurisdictionCode});
     if (data.ownerId && !await tx.vehicleOwner.findFirst({ where: { id: data.ownerId, hostId: context.host.id } })) throw new MarketplaceError("Choose an owner in your business.");
     const { id, features, ownerId, registrationExpiresAt, insuranceExpiresAt, ...fields } = data;
-    const saved = { ...fields, ownerId: ownerId || null, registrationExpiresAt: new Date(registrationExpiresAt), insuranceExpiresAt: new Date(insuranceExpiresAt) };
+    const saved = { ...fields, jurisdictionCode, ownerId: ownerId || null, registrationExpiresAt: new Date(registrationExpiresAt), insuranceExpiresAt: new Date(insuranceExpiresAt) };
     const vehicle = id ? await tx.vehicle.update({ where: { id }, data: { ...saved, listingRevision: { increment: 1 }, listingApproval: "PENDING", status: "INACTIVE" } })
       : await tx.vehicle.create({ data: { ...saved, hostId: context.host.id, listingApproval: "PENDING", status: "INACTIVE", slug: `${data.make}-${data.model}-${randomUUID()}`.toLowerCase(), availability: { create: { isBookable: false } } } });
     await tx.vehicleFeatureOnVehicle.deleteMany({ where: { vehicleId: vehicle.id } });
@@ -84,14 +90,15 @@ export async function saveListing(userId: string, input: unknown) {
 }
 
 export async function saveHostProfile(userId: string, input: unknown) {
-  const data = z.object({ legalName: text, businessName: text, phone: text, addressLine1: text, city: text, state: text, zip: text }).parse(input);
+  const data = z.object({ legalName: text, businessName: text, phone: text, addressLine1: text, city: text, state: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/), zip: text }).parse(input);
   return prisma.$transaction(async tx => {
+    await requireHostingAdmission(tx, {code:data.state});
     await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
     const user = await marketplaceActor(tx, userId);
     if (!["CUSTOMER", "HOST"].includes(user.role)) throw new MarketplaceError("Only an account owner can apply or edit this profile.", 403);
     const prior = await tx.hostProfile.findUnique({ where: { userId } });
     if (prior?.onboardingStatus === "SUSPENDED") throw new MarketplaceError("Contact support about your suspended account.", 403);
-    const host = await tx.hostProfile.upsert({ where: { userId }, create: { ...data, userId, onboardingStatus: "SUBMITTED" }, update: { ...data, onboardingStatus: "SUBMITTED", approvedAt: null, approvedById: null } });
+    const host = await tx.hostProfile.upsert({ where: { userId }, create: { ...data, jurisdictionCode: data.state, userId, onboardingStatus: "SUBMITTED" }, update: { ...data, jurisdictionCode: data.state, onboardingStatus: "SUBMITTED", approvedAt: null, approvedById: null } });
     await tx.user.update({ where: { id: userId }, data: { role: "HOST" } });
     await tx.auditLog.create({ data: { actorId: userId, action: "host.profile.submitted", entityType: "HostProfile", entityId: host.id } });
     return { id: host.id };
@@ -139,6 +146,7 @@ export async function hostCommand(userId: string, input: unknown) {
     }
     if (data.action === "unblock") await tx.vehicleBlock.deleteMany({ where: { id: data.id, vehicleId: data.vehicleId } });
     if (data.action === "availability") {
+      if (data.isBookable) await requireHostingAdmission(tx, {vehicleId:data.vehicleId});
       const vehicle = await tx.vehicle.findUniqueOrThrow({ where: { id: data.vehicleId } });
       if (data.isBookable && (context.host.onboardingStatus !== "APPROVED" || vehicle.listingApproval !== "APPROVED" || vehicle.status !== "ACTIVE")) throw new MarketplaceError("Host and listing approval are required before accepting bookings.", 409);
       await tx.vehicleAvailabilityConfig.upsert({ where: { vehicleId: data.vehicleId }, create: { vehicleId: data.vehicleId, isBookable: data.isBookable }, update: { isBookable: data.isBookable } });

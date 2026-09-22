@@ -1,3 +1,4 @@
+import { createDeviceSession } from "@/lib/device-sessions";
 import { beforeAll, afterAll, it, expect } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -16,7 +17,7 @@ const users: string[] = [], hosts: string[] = [], vehicles: string[] = [];
 const captures = "test-artifacts/marketplace";
 async function login(user: { id: string; email: string; role: string }) {
   const context = await browser.newContext();
-  const token = await encode({ token: { id: user.id, sub: user.id, email: user.email, role: user.role }, secret, salt: "authjs.session-token" });
+  const token = await encode({ token: { ...await createDeviceSession(user.id), id: user.id, sub: user.id, email: user.email, role: user.role }, secret, salt: "authjs.session-token" });
   await context.addCookies([{ name: "authjs.session-token", value: token, url: base, httpOnly: true, sameSite: "Lax" }]);
   return context;
 }
@@ -32,10 +33,28 @@ async function screenshot(page: Page, name: string, widths = [390, 1440]) {
     expect(await page.locator("h1").count()).toBe(1);
   }
 }
+it("uses real session revocation, private responses, origin enforcement and the operations dashboard",async()=>{
+ const user=await createTestCustomer(),admin=await createTestCustomer({role:"SUPER_ADMIN"});users.push(user.id,admin.id);
+ const current=await login(user),other=await login(user),page=await current.newPage();
+ expect((await(await other.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
+ const response=await page.goto(base+"/account/security");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["cache-control"]).not.toMatch(/public|s-maxage/);expect((await current.request.get(base+"/api/account/security")).headers()["cache-control"]).toContain("no-store");
+ await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await screenshot(page,"account-security");
+ await page.locator("li").filter({hasNotText:"this device"}).getByRole("button",{name:"Revoke session",exact:true}).click();
+ await page.getByRole("status").filter({hasText:"Security action saved"}).waitFor();
+ expect((await(await other.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
+ expect((await current.request.post(base+"/api/account/security",{headers:{origin:"https://untrusted.invalid"},data:{action:"revokeAll"}})).status()).toBe(403);
+ expect((await current.request.get(base+"/api/admin/operations")).status()).toBe(403);
+ const health=await current.request.get(base+"/api/health/ready");expect(Object.keys(await health.json())).toEqual(["ready"]);
+ const privileged=await login(admin),operator=await privileged.newPage();await operator.goto(base+"/admin/operations");await operator.getByRole("heading",{name:"State release controls"}).waitFor();expect(await operator.getByText("No state is approved for production.",{exact:false}).count()).toBe(1);await screenshot(operator,"production-readiness");
+ await Promise.all([current.close(),other.close(),privileged.close()]);
+},120000);
 beforeAll(async () => {
   await mkdir(captures, { recursive: true });
   priorHostLegal = await prisma.legalDocument.findUnique({ where: { type: "HOST_AGREEMENT" } });
   priorRentalLegal = await prisma.legalDocument.findUnique({ where: { type: "RENTAL_AGREEMENT" } });
+  // This rejection test needs an explicitly unreviewed document, independent of
+  // legal-authority fixtures retained by other suites or an earlier full run.
+  await prisma.legalDocument.upsert({where:{type:"HOST_AGREEMENT"},create:{type:"HOST_AGREEMENT",title:"Unreviewed browser fixture",content:"Controlled unreviewed terms",version:priorHostLegal?.version||"v1-draft",needsAttorneyReview:true},update:{needsAttorneyReview:true}});
   // Explicit provider-boundary fixture. The app's scanner client and all HTTP,
   // storage, authorization and database paths remain real. This is not a claim
   // that a deployed ClamAV engine or its signature database has been verified.
@@ -86,6 +105,8 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
   expect(host.onboardingStatus).toBe("SUBMITTED");
   await screenshot(page, "host-overview", [375, 390, 430, 768, 1024, 1440]);
   await page.goto(`${base}/host/vehicles/new`);
+  await page.getByLabel("Pickup city",{exact:true}).fill("Dallas");
+  await page.getByLabel("Vehicle operating state",{exact:true}).selectOption("TX");
   const fields = { "VIN (17 characters)": "1HGCM82633A123456", "License plate": "BROWSER", Make: "Honda", Model: "Accord", "Registration expiration": "2035-01-01", "Insurance expiration": "2035-01-01", "Describe your vehicle": "Synthetic browser listing with comfortable seating and practical storage." };
   for (const [label, value] of Object.entries(fields)) await page.getByLabel(label, { exact: true }).fill(value);
   await screenshot(page, "host-listing-form");
@@ -164,6 +185,7 @@ it("uses real pages and HTTP for host onboarding, listing, owner and calendar op
 }, 180000);
 
 it("completes real customer and host inspection, handoff, start and return journeys without bypassing the gate", async () => {
+  scannerReply = "stream: OK\0";
   const host = await createTestHost(), customer = await createTestCustomer(), outsider = await createTestCustomer();
   users.push(host.user.id, customer.id, outsider.id); hosts.push(host.hostProfile.id);
   const vehicle = await createTestVehicle({ hostId: host.hostProfile.id, securityDepositCents: 0 }); vehicles.push(vehicle.id);

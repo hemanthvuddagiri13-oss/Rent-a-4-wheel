@@ -12,7 +12,7 @@ it("preserves populated payout evidence, backfills owned bank generations and qu
   for(const m of readdirSync("prisma/migrations").filter(m=>/^\d/.test(m)&&m<last).sort()){
    sql(target.toString(),["-f",path.resolve("prisma/migrations",m,"migration.sql")]);if(m.endsWith("_init"))sql(target.toString(),["-f",path.resolve("tests/fixtures/legacy-schema-seed.sql")]);
   }
-  const user=await db.user.create({data:{email:"migration-payout@example.test",role:"HOST"}}),host=await db.hostProfile.create({data:{userId:user.id,legalName:"Migration Host"}}),reservations=await db.reservation.findMany({take:2});expect(reservations).toHaveLength(2);
+  const user=await db.user.create({data:{email:"migration-payout@example.test",role:"HOST"}}),host=await db.hostProfile.create({select:{id:true},data:{userId:user.id,legalName:"Migration Host"}}),reservations=await db.reservation.findMany({select:{id:true},take:2});expect(reservations).toHaveLength(2);
   for(let n=0;n<2;n++)await db.$transaction(async tx=>{
    const id="migration-batch-"+n,reservationId=reservations[n].id,providerId="po_migration_"+n,status=n?"paid":"pending";
    await tx.hostEarning.create({data:{id:"migration-earning-"+n,reservationId,hostId:host.id,grossCents:15000,commissionCents:1500,hostDiscountCents:0,netCents:13500}});

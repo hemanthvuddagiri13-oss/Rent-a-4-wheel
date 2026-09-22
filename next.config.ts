@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   // Browser suites start independent Next servers. Keep their route manifests
   // separate from each other and from the production build.
   distDir: /^\d{4,5}$/.test(process.env.BROWSER_TEST_PORT ?? "") ? `.next-browser-${process.env.BROWSER_TEST_PORT}` : ".next",
+  // Browser tooling may add generated type paths; never rewrite the checked-in
+  // production compiler configuration while validating the exact commit.
+  typescript: { tsconfigPath: /^\d{4,5}$/.test(process.env.BROWSER_TEST_PORT ?? "") ? `.next-browser-${process.env.BROWSER_TEST_PORT}.tsconfig.json` : "tsconfig.json" },
   // Optional worker threads for Windows environments without subprocess pipes.
   experimental: { workerThreads: process.env.LOCAL_BUILD_WORKER_THREADS === "true", useTypeScriptCli: process.env.LOCAL_BUILD_WORKER_THREADS !== "true" },
   images: {
@@ -23,19 +26,19 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         has: [{ type: "host", value: "rentafourwheel.com" }],
         destination: "https://renta4wheel.com/:path*",
-        permanent: true,
+        statusCode: 301,
       },
       {
         source: "/:path*",
         has: [{ type: "host", value: "www.rentafourwheel.com" }],
         destination: "https://renta4wheel.com/:path*",
-        permanent: true,
+        statusCode: 301,
       },
       {
         source: "/:path*",
         has: [{ type: "host", value: "www.renta4wheel.com" }],
         destination: "https://renta4wheel.com/:path*",
-        permanent: true,
+        statusCode: 301,
       },
     ];
   },

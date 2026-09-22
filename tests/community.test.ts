@@ -129,7 +129,9 @@ it("case overrides require an isolated one-use step-up code and never clear fina
 it("HTTP cron executes projections idempotently and never treats email acceptance as in-app authority",async()=>{
  const f=await fixture();process.env.CRON_SECRET="community-route-test";process.env.TWILIO_ACCOUNT_SID="";process.env.TWILIO_AUTH_TOKEN="";process.env.TWILIO_FROM_NUMBER="";
  const event=await prisma.tripEvent.create({data:{reservationId:f.r.id,actorId:f.h.user.id,type:"IDENTITY_HANDOFF_VERIFIED"}});const key="trip-event:"+event.id;expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
- const request=()=>new Request("http://localhost/api/cron/community",{method:"POST",headers:{authorization:"Bearer community-route-test"}});expect((await cron(request())).status).toBe(200);expect((await cron(request())).status).toBe(200);expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
+ const notice=await prisma.inboxNotice.findFirstOrThrow({where:{eventKey:key}});await prisma.channelDelivery.create({data:{noticeId:notice.id,userId:notice.userId,channel:"SMS",state:"REVIEW",errorCode:"PROVIDER_OUTCOME_UNKNOWN"}});
+ const request=()=>new Request("http://localhost/api/cron/community",{method:"POST",headers:{authorization:"Bearer community-route-test"}});
+ for(let i=0;i<2;i++){const response=await cron(request());expect(response.status).toBe(503);expect((await response.json()).worker.children.channels.review).toBeGreaterThanOrEqual(1);}expect(await prisma.inboxNotice.count({where:{eventKey:key}})).toBe(2);
 });
 
 it("a lost private-delete response resumes the exact committed key without reviving the file",async()=>{

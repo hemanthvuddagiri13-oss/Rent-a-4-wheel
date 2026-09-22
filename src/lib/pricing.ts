@@ -62,6 +62,7 @@ export interface ExtraSelection {
 }
 
 export interface PricingBreakdown {
+  marketplace?: { platformFeeCents: number; protectionCents: number; processingCents: number; hostCommissionCents: number; hostEarningsCents: number; reserveCents: number; approval: "SAMPLE_UNAPPROVED" };
   rateType: RateType;
   rateAmountCents: number;
   units: number;

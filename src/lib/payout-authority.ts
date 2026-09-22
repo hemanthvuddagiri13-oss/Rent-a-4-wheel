@@ -1,10 +1,12 @@
 import type { FinancialOperation,Prisma } from "@prisma/client";
+import {requireReservationJurisdiction} from "@/lib/jurisdiction";
 import { assertReturnFinancialAuthority } from "@/lib/return-financial-authority";
 import { lockReservation,assertEventFence } from "@/lib/financial-locks";
 import { OperationPendingError } from "@/lib/financial-errors";
 import { accountingCompleteness } from "@/lib/finance-completeness";
 import { bankMovement,recordBankMovementHold } from "@/lib/payout-movement";
 import { financeIssue } from "@/lib/finance-ledger";
+import {releaseAuthorityFence} from "@/lib/admission-authority";
 
 export async function financeOperationScopes(tx:Prisma.TransactionClient,op:FinancialOperation){
  const p=op.payload as {hostId?:string;batchId?:string};if(!p.hostId)throw new Error("Missing immutable host scope");
@@ -12,14 +14,16 @@ export async function financeOperationScopes(tx:Prisma.TransactionClient,op:Fina
  const reservations=await tx.reservation.findMany({where:{id:{in:items.map(i=>i.reservationId)}},select:{vehicleId:true}});
  return [...new Set(reservations.map(r=>"vehicle:"+r.vehicleId))].sort().concat("host-finance:"+p.hostId,"operation:"+op.id);
 }
-export async function lockFinanceOperation(tx:Prisma.TransactionClient,op:FinancialOperation){await assertEventFence(tx);for(const scope of await financeOperationScopes(tx,op))await tx.$queryRaw`SELECT financial_guard_xact(${scope})`;}
+export async function lockFinanceOperation(tx:Prisma.TransactionClient,op:FinancialOperation){await releaseAuthorityFence(tx);await assertEventFence(tx);for(const scope of await financeOperationScopes(tx,op))await tx.$queryRaw`SELECT financial_guard_xact(${scope})`;}
 export async function lockPayoutReservations(tx:Prisma.TransactionClient,ids:string[],hostId:string){
+ await releaseAuthorityFence(tx);
  const rows=await tx.reservation.findMany({where:{id:{in:ids}},orderBy:[{vehicleId:"asc"},{id:"asc"}],select:{id:true}});
  for(const r of rows)await lockReservation(tx,r.id);
  await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+hostId})`;
 }
 export async function payoutEligibility(tx:Prisma.TransactionClient,reservationId:string,options:{ignoreBatch?:string;now?:Date}={}){
  const now=options.now??new Date(),reasons:string[]=[];
+ try{await requireReservationJurisdiction(tx,reservationId,"PAYOUT");}catch{reasons.push("Jurisdiction is not released for payouts");}
  const accounting=await accountingCompleteness(tx,reservationId);
  if(!accounting.complete)reasons.push("Accounting incomplete: "+accounting.reasons.join("; "));
  const r=await tx.reservation.findUniqueOrThrow({where:{id:reservationId},include:{vehicle:{include:{host:{include:{user:true}}}},trip:true}}),snapshot=await tx.financeSnapshot.findUnique({where:{reservationId}}),earning=await tx.hostEarning.findUnique({where:{reservationId}});

@@ -1,9 +1,13 @@
-import { withReservationLock } from "@/lib/financial-locks";
+import { generateSignedAgreementArtifact } from "@/lib/agreement-artifact";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { storePrivateDocument } from "@/lib/storage";
-import { generateRentalAgreementPdf } from "@/lib/agreement-pdf";
+
+
 import type { LegalDocumentType, Prisma } from "@prisma/client";
+import { requireReservationJurisdiction, requireVehicleJurisdiction } from "@/lib/jurisdiction";
+import { requireReleaseFeature } from "@/lib/release-control";
+import {releaseAuthorityFence} from "@/lib/admission-authority";
+import {lockReservation} from "@/lib/financial-locks";
 
 export class AgreementNotReviewedError extends Error {
   constructor(type: LegalDocumentType) {
@@ -42,6 +46,12 @@ export async function recordAgreementAcceptance(
     userAgent: string | null;
   }
 ) {
+  await releaseAuthorityFence(tx);
+  if(params.reservationId)await lockReservation(tx,params.reservationId);
+  else if(params.vehicleId){await tx.$queryRaw`SELECT financial_guard_xact(${"vehicle:"+params.vehicleId})`;await tx.$queryRaw`SELECT id FROM "Vehicle" WHERE id=${params.vehicleId} FOR UPDATE`;}
+  // Approval is scoped to the subject's operating jurisdiction, never a default state.
+  if(params.reservationId){const scope=await requireReservationJurisdiction(tx,params.reservationId,"CHECKOUT");await requireReleaseFeature("booking",tx,scope.code);}
+  else if(params.vehicleId){const scope=await requireVehicleJurisdiction(tx,params.vehicleId,"HOSTING");await requireReleaseFeature("hosting",tx,scope.code);}
   await tx.$queryRaw`SELECT "id" FROM "LegalDocument" WHERE "type"::text = ${params.type} FOR UPDATE`;
   const legalDocument = await tx.legalDocument.findUnique({ where: { type: params.type } });
   if (!legalDocument) {
@@ -54,7 +64,8 @@ export async function recordAgreementAcceptance(
   const contentHash = sha256Hex(legalDocument.content);
   const vehicle = params.vehicleId ? await tx.vehicle.findUnique({ where: { id: params.vehicleId } }) : null;
   const reservation = params.reservationId ? await tx.reservation.findUnique({ where: { id: params.reservationId }, include: { vehicle: true } }) : null;
-  const subjectSnapshot = JSON.parse(JSON.stringify(reservation ? { reservation, vehicle: reservation.vehicle } : { vehicle })) as Prisma.InputJsonValue;
+  const pricingPolicy = params.reservationId ? await tx.financeQuote.findUnique({where:{reservationId:params.reservationId},select:{terms:true}}) : null;
+  const subjectSnapshot = JSON.parse(JSON.stringify(reservation ? { reservation, vehicle: reservation.vehicle, pricingPolicy: pricingPolicy?.terms??null } : { vehicle })) as Prisma.InputJsonValue;
 
   const acceptance = await tx.agreementAcceptance.create({
     data: {
@@ -72,6 +83,7 @@ export async function recordAgreementAcceptance(
     },
   });
 
+  await tx.operationsJob.create({data:{key:"agreement:"+acceptance.id,kind:"AGREEMENT",resourceId:acceptance.id}});
   return acceptance;
 }
 
@@ -95,11 +107,5 @@ export async function generateAndStoreSignedAgreementPdf(reservationId: string) 
   const acceptance = reservation.agreementAcceptances[0];
   if (!acceptance || acceptance.signedPdfStorageKey) return;
 
-  const pdfBytes = await generateRentalAgreementPdf({ reservation, vehicle: reservation.vehicle, acceptance });
-  const { storageKey } = await storePrivateDocument(Buffer.from(pdfBytes), "application/pdf");
-
-  await withReservationLock(reservationId, tx => tx.agreementAcceptance.updateMany({
-    where: { id: acceptance.id, signedPdfStorageKey: null },
-    data: { signedPdfStorageKey: storageKey },
-  }));
+  await generateSignedAgreementArtifact(acceptance.id);
 }

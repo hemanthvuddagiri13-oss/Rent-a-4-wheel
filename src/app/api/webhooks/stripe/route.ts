@@ -1,5 +1,6 @@
 import { safeFinanceEvent } from "@/lib/finance-webhooks";
 import { safeLog } from "@/lib/safe-log";
+import { reportOperationalEvent } from "@/lib/observability";
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import type { Prisma } from "@prisma/client";
@@ -22,6 +23,7 @@ export async function POST(req: NextRequest) {
     event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
   } catch (err) {
     safeLog("STRIPE_WEBHOOK_SIGNATURE_VERIFICATION_FAILED", err);
+    await reportOperationalEvent("WEBHOOK_FAILED","WARNING",req.headers.get("x-request-id")??undefined);
     return NextResponse.json({ error: "Invalid signature." }, { status: 400 });
   }
 
@@ -42,6 +44,7 @@ export async function POST(req: NextRequest) {
   const result = await dispatchClaimedStripeEvent({ eventRecordId: claim.eventRecordId, leaseToken: claim.leaseToken, event });
 
   if (!result.ok) {
+    await reportOperationalEvent("WEBHOOK_FAILED","CRITICAL",req.headers.get("x-request-id")??undefined);
     // Do NOT swallow this and return 200 — a non-2xx response tells
     // Stripe to retry per its own schedule, on top of our own ledger
     // making the next delivery (or a manual replay) retryable rather than

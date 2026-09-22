@@ -9,6 +9,7 @@ interface Owner {
 }
 
 interface VehicleDefaults {
+  jurisdictionCode?: string | null;
   vin?: string;
   licensePlate?: string;
   year?: number;
@@ -57,6 +58,7 @@ export function VehicleForm({
   return (
     <form action={action} className="space-y-8">
       <Section title="Vehicle Identity">
+        {!defaults.vin && <Field label="Operating state (two-letter code)" name="jurisdictionCode" required />}
         <Field label="VIN" name="vin" defaultValue={defaults.vin} required />
         <Field label="License Plate" name="licensePlate" defaultValue={defaults.licensePlate} required />
         <Field label="Year" name="year" type="number" defaultValue={defaults.year} required />

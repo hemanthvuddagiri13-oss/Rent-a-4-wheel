@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { prisma, createTestVehicle, createTestCustomer, cleanupReservationsForVehicles } from "./helpers/factories";
 import { bookingLocal } from "@/lib/booking-time";
+import { createDeviceSession } from "@/lib/device-sessions";
 let child:ChildProcess,browser:Browser,context:BrowserContext,page:Page;
 const base="http://127.0.0.1:3199",secret="isolated-browser-test-secret-not-a-deployment-secret";
 const vehicles:string[]=[],users:string[]=[],extras:string[]=[],coupons:string[]=[];
@@ -35,7 +36,8 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   const extra=await prisma.extra.create({data:{name:"Browser child seat",chargeType:"ONE_TIME",amountCents:1200}});extras.push(extra.id);
   const inactive=await prisma.extra.create({data:{name:"Unavailable fixture",chargeType:"ONE_TIME",amountCents:900,isActive:false}});extras.push(inactive.id);
   const coupon=await prisma.coupon.create({data:{code:"BROWSER"+Date.now(),discountType:"FIXED",amountCents:1000,startsAt:new Date(0),expiresAt:new Date("2040-01-01"),isActive:true,applicableVehicleIds:[v.id]}});coupons.push(coupon.id);
-  const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:"CUSTOMER"},secret,salt:"authjs.session-token"});
+  const device=await createDeviceSession(u.id);
+  const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:"CUSTOMER",sid:device.sid,rotation:device.rotation},secret,salt:"authjs.session-token"});
   await context.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);
   // Real HTTP requests prove rejection before the UI creates its first hold.
   const request={vehicleId:v.id,draftId:randomUUID(),revision:1,pickupAt:"2030-03-09T10:00:00",returnAt:"2030-03-12T10:00:00",extraIds:[] as string[]};
@@ -75,15 +77,18 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   }
  },180000);
  it("refreshes revoked roles and disabled accounts on real authenticated HTTP requests",async()=>{
+   const isolated=await browser.newContext();
    const u=await createTestCustomer({role:"SUPER_ADMIN"});users.push(u.id);
-   const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:"SUPER_ADMIN"},secret,salt:"authjs.session-token"});
-   await context.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);
-   expect((await (await context.request.get(base+"/api/auth/session")).json()).user.role).toBe("SUPER_ADMIN");
+   const device=await createDeviceSession(u.id);
+   const token=await encode({token:{id:u.id,sub:u.id,email:u.email,role:"SUPER_ADMIN",sid:device.sid,rotation:device.rotation},secret,salt:"authjs.session-token"});
+   await isolated.addCookies([{name:"authjs.session-token",value:token,url:base,httpOnly:true,sameSite:"Lax"}]);
+   expect((await (await isolated.request.get(base+"/api/auth/session")).json()).user.role).toBe("SUPER_ADMIN");
    await prisma.user.update({where:{id:u.id},data:{role:"CUSTOMER"}});
-   expect((await (await context.request.get(base+"/api/auth/session")).json()).user.role).toBe("CUSTOMER");
+   expect((await (await isolated.request.get(base+"/api/auth/session")).json()).user).toMatchObject({id:u.id,role:"CUSTOMER"});
    await prisma.user.update({where:{id:u.id},data:{isActive:false}});
-   expect((await (await context.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
-   expect((await context.request.get(base+"/api/reservations/missing/status")).status()).toBe(401);
+   expect((await (await isolated.request.get(base+"/api/auth/session")).json()).user).toBeUndefined();
+   expect((await isolated.request.get(base+"/api/reservations/missing/status")).status()).toBe(401);
+   await isolated.close();
  });
 
 });
