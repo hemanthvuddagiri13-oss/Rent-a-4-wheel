@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 
 interface FaqItem {
@@ -35,6 +37,7 @@ export function FaqSearch({ categories }: { categories: FaqCategoryData[] }) {
       <div className="relative mx-auto max-w-xl">
         <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
         <Input
+          aria-label="Search frequently asked questions"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search frequently asked questions…"
@@ -56,7 +59,7 @@ export function FaqSearch({ categories }: { categories: FaqCategoryData[] }) {
             </Accordion>
           </div>
         ))}
-        {filtered.length === 0 && <p className="text-center text-muted">No results found for &quot;{query}&quot;.</p>}
+        {filtered.length === 0 && <div className="rounded-xl border border-white/10 p-6 text-center"><p role="status" className="text-silver">{query ? `No questions match “${query}”.` : "Questions and answers are being prepared."}</p><div className="mt-4 flex flex-wrap justify-center gap-3">{query && <Button variant="secondary" onClick={()=>setQuery("")}>Clear search</Button>}<Button asChild variant="outline"><Link href="/contact">Contact support</Link></Button></div></div>}
       </div>
     </div>
   );
