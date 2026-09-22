@@ -1,4 +1,5 @@
 import { it, expect } from "vitest";
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import lighthouse from "lighthouse";
@@ -8,20 +9,23 @@ import { createDeviceSession } from "@/lib/device-sessions";
 import { createTestCustomer, prisma } from "./helpers/factories";
 
 it.skipIf(process.env.PHASE6_LIGHTHOUSE !== "true")("measures public and authenticated production-build pages without publishing session credentials", async () => {
-  const base="http://127.0.0.1:3220", secret="isolated-performance-fixture-only", output="test-artifacts/phase6/performance";
+  const base="https://localhost:3220", secret=randomBytes(48).toString("hex"),cron=randomBytes(48).toString("hex"), output="test-artifacts/phase6/performance";
   await mkdir(output,{recursive:true});
-  const app=spawn(process.execPath,["node_modules/next/dist/bin/next","start","-p","3220"],{stdio:"inherit",env:{...process.env,NODE_ENV:"production",BROWSER_TEST_PORT:"",AUTH_SECRET:secret,AUTH_TRUST_HOST:"true",AUTH_URL:base,NEXTAUTH_URL:base,STRIPE_SECRET_KEY:"",NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:"",FINANCE_SANDBOX_ENABLED:"false"}});
-  let browser;
+ if(!process.env.CI_TLS_CERT||!process.env.CI_TLS_KEY)throw new Error("Disposable TLS fixture required");
+ const database=new URL(process.env.DATABASE_URL!);database.searchParams.set("sslmode","require");database.searchParams.set("sslaccept","strict");database.searchParams.set("sslcert",process.env.CI_TLS_CERT);
+ const env:NodeJS.ProcessEnv={...process.env,APP_ENV:"staging",NODE_ENV:"production",STAGING_TEST_PORT:"3220",BROWSER_TEST_PORT:"",DATABASE_URL:database.toString(),DIRECT_DATABASE_URL:database.toString(),SITE_URL:base,AUTH_URL:base,NEXTAUTH_URL:base,NEXT_PUBLIC_SITE_URL:base,PRIMARY_DOMAIN:"localhost",AUTH_SECRET:secret,AUTH_TRUST_HOST:"true",CRON_SECRET:cron,STRIPE_SECRET_KEY:"sk_test_fixture",NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:"pk_test_fixture",STRIPE_WEBHOOK_SECRET:"whsec_fixture",STRIPE_CONNECT_COUNTRY:"US",RESEND_API_KEY:"re_fixture",EMAIL_FROM:"Staging <staging@renta4wheel.com>",PRIVATE_STORAGE_PROVIDER:"s3",PRIVATE_STORAGE_ENV:"staging",PRIVATE_STORAGE_BUCKET:"isolated-staging",PRIVATE_STORAGE_REGION:"us-east-1",PRIVATE_STORAGE_ENDPOINT:"https://localhost:1",PRIVATE_STORAGE_KMS_KEY_ID:"arn:aws:kms:us-east-1:000000000000:key/synthetic",PRIVATE_STORAGE_ACCESS_KEY_ID:"synthetic",PRIVATE_STORAGE_SECRET_ACCESS_KEY:"synthetic",CLAMAV_HOST:"localhost",CLAMAV_PORT:"1",CLAMAV_TLS:"true",RATE_LIMIT_STORE:"postgres",MONITORING_ALERT_URL:"https://localhost:1",MONITORING_ALERT_SECRET:randomBytes(48).toString("hex"),DEPLOYMENT_DATA_ENV:"staging",PROVIDER_ACCOUNT_ENV:"staging",ALLOW_DEV_PAYMENT_SIMULATION:"false",ALLOW_UNSCANNED_DOCUMENT_UPLOADS_IN_DEV:"false",LOCAL_BUILD_WORKER_THREADS:"false",NODE_EXTRA_CA_CERTS:process.env.CI_TLS_CERT};
+  const app=spawn(process.execPath,["tests/helpers/staging-server.mjs"],{stdio:"inherit",env});
+  const browser=await chromium.launch({headless:true,args:["--remote-debugging-port=9222","--ignore-certificate-errors"]});
+  const probe=await browser.newContext({ignoreHTTPSErrors:true});
   const results=[];
   try {
     let ready=false;
-    for(let i=0;i<120;i++){if(app.exitCode!==null)throw new Error("Production performance server exited");try{if((await fetch(base+"/api/health/live")).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,500));}
+    for(let i=0;i<120;i++){if(app.exitCode!==null)throw new Error("Production performance server exited");try{if((await probe.request.get(base+"/api/health/live")).ok()){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,500));}
     expect(ready).toBe(true);
-    browser=await chromium.launch({headless:true,args:["--remote-debugging-port=9222"]});
     const user=await createTestCustomer({name:"Synthetic performance guest"});
-    const token=await encode({token:{...await createDeviceSession(user.id),id:user.id,sub:user.id,email:user.email,role:user.role},secret,salt:"authjs.session-token"});
-    const cookie=`authjs.session-token=${token}`;
-    const account=await fetch(base+"/account",{headers:{cookie},redirect:"manual"});expect(account.status).toBe(200);
+    const token=await encode({token:{...await createDeviceSession(user.id),id:user.id,sub:user.id,email:user.email,role:user.role},secret,salt:"__Secure-authjs.session-token"});
+    const cookie=`__Secure-authjs.session-token=${token}`;
+    const account=await probe.request.get(base+"/account",{headers:{cookie},maxRedirects:0});expect(account.status()).toBe(200);
     for(const route of ["/","/vehicles","/account","/account/security"]){
       const result=await lighthouse(base+route,{port:9222,logLevel:"error",output:"json",onlyCategories:["performance","accessibility","best-practices","seo"],disableStorageReset:true,extraHeaders:route.startsWith("/account")?{Cookie:cookie}:{}});
       if(!result)throw new Error("Missing Lighthouse result");

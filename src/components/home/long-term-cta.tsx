@@ -3,9 +3,9 @@ import { CalendarDays, PiggyBank, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const perks = [
-  { icon: PiggyBank, text: "Discounted monthly rates vs. daily pricing" },
-  { icon: Wrench, text: "Maintenance handled — one less thing to manage" },
-  { icon: CalendarDays, text: "Flexible extensions as your plans change" },
+  { icon: PiggyBank, text: "Review the exact quote for your dates" },
+  { icon: Wrench, text: "Independent hosts maintain their vehicles" },
+  { icon: CalendarDays, text: "Extensions require availability and approval" },
 ];
 
 export function LongTermCta() {
@@ -22,9 +22,7 @@ export function LongTermCta() {
               Need a Car for a <span className="text-gradient-gold">Month or Longer?</span>
             </h2>
             <p className="mt-4 max-w-lg text-muted">
-              Whether you&apos;re between vehicles, relocating to Dallas, or need reliable transportation
-              for an extended project, our monthly rental plans give you the flexibility of a rental
-              with the comfort of predictable, discounted pricing.
+              Between cars, relocating or planning an extended project? Check available dates and review the itemized quote. Longer trips remain subject to eligibility and approved terms.
             </p>
             <Button asChild size="lg" className="mt-6 text-base">
               <Link href="/long-term-rentals">View Monthly Rentals</Link>

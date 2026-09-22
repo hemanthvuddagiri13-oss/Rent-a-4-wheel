@@ -1,5 +1,6 @@
 "use client";
 
+import { HoldNotice } from "./hold-notice";
 import { bookingLocal, bookingInstant, DEFAULT_BOOKING_TIMEZONE } from "@/lib/booking-time";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -139,6 +140,7 @@ export function BookingWizard({ vehicle, extras, bookingTimezone = DEFAULT_BOOKI
       <p className="text-sm text-muted">All booking times: {state.bookingTimezone}</p>
       {step > 1 && step < 7 && <div className="mt-4"><BookingSummary vehicle={vehicle} state={state} /></div>}
 
+      {state.holdExpiresAt && step >= 4 && step < 7 && <HoldNotice expiresAt={state.holdExpiresAt} checkoutComplete={Boolean(state.checkoutComplete)} />}
       <div className="rounded-2xl border border-white/10 bg-background p-6 sm:p-8">
         {step === 1 && <StepVehicle vehicle={vehicle} onNext={goNext} />}
         {step === 2 && <StepDates state={state} update={update} onNext={goNext} onBack={goBack} error={dateError} />}

@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   candidate:
     runs-on: ubuntu-latest
@@ -25,11 +26,11 @@ jobs:
       DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
       PHASE6_ACCEPTANCE: 'true'
       PHASE6_CANDIDATE: 'true'
-      BASELINE_APPLICATION_SHA: ${{ github.sha }}
+      BASELINE_APPLICATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify observed application SHA
         run: test "$(git rev-parse HEAD)" = "$BASELINE_APPLICATION_SHA"
       - uses: actions/setup-node@v4
@@ -40,11 +41,26 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run db:deploy
       - run: npm run build
+      - name: Disposable staging TLS
+        env:
+          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: node scripts/configure-ci-tls.mjs
       - name: Measured production-build Lighthouse
         run: PHASE6_LIGHTHOUSE=true npm test -- tests/phase6-lighthouse.test.ts
       - name: Six-width accessibility and layout audit
         if: ${{ !cancelled() }}
         run: npm test -- tests/phase6-acceptance.test.ts
+      - name: Approved sanitized comparison baseline
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: phase6-approved-baseline
+          run-id: 35692507729
+          github-token: ${{ github.token }}
+          path: test-artifacts/phase6/before
+      - name: Build browsable before and after gallery
+        if: ${{ !cancelled() }}
+        run: node scripts/phase6-gallery.mjs
       - name: Candidate observations, not staging acceptance
         if: always()
         uses: actions/upload-artifact@v4

@@ -45,21 +45,25 @@ export async function reconcileFinance(){
  return {...accounting,checked,imbalances:mismatches.length,metrics,worker:workerResult({}, {accounting:accounting.worker,issues:workerResult({attempted:checked,checked,committed,review,failed,actionable:review+failed}),ledger:workerResult({attempted:mismatches.length,checked:mismatches.length,review:mismatches.length,actionable:mismatches.length})})};
 }
 export async function auditFinanceHistory(){
- let checked=0,actionable=0;
+ let checked=0,actionable=0,failed=0;
  const stripe=financeStripe(),rows=await prisma.reservation.findMany({where:{payments:{some:{status:"SUCCEEDED",stripePaymentIntentId:{not:null}}}},orderBy:[{financialCheckedAt:{sort:"asc",nulls:"first"}},{id:"asc"}],take:10,include:{payments:true,refunds:true}});
  for(const r of rows){await prisma.reservation.update({where:{id:r.id},data:{financialCheckedAt:new Date()}});for(const p of r.payments.filter(p=>p.stripePaymentIntentId)){
+  let difference=false;checked++;try{
   const intent=await stripe.paymentIntents.retrieve(p.stripePaymentIntentId!,{expand:["latest_charge.balance_transaction"]});
-  if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded")){actionable++;await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});}
-  checked++;
+  if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded")){difference=true;await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});}
   const charge=typeof intent.latest_charge==="object"?intent.latest_charge:null,balance=charge&&typeof charge.balance_transaction==="object"?charge.balance_transaction:null;
   if(balance&&p.status==="SUCCEEDED"&&p.type!=="DEPOSIT_AUTH"){await retainProcessingFee(p.id,balance);await withReservationLock(r.id,tx=>accountReservation(tx,r.id));}
+  if(difference)actionable++;
+  }catch{failed++;/* Report unavailable verification; do not alter financial eligibility or provider state. */}
  }
  for(const refund of r.refunds.filter(f=>f.stripeRefundId)){
+  let difference=false;checked++;try{
   const actual=await stripe.refunds.retrieve(refund.stripeRefundId!);
-  if(actual.amount!==refund.amountCents||actual.currency!==(r.payments.find(p=>p.id===refund.paymentId)?.currency??"usd")||refund.status==="SUCCEEDED"&&actual.status!=="succeeded"){actionable++;await financeIssue(prisma,{key:"provider-refund:"+refund.id,kind:"PROVIDER_REFUND_DIFFERENCE",reservationId:r.id,reason:"Provider refund differs from retained amount, currency or terminal status",evidence:{refundId:refund.id,providerId:actual.id}});}
-  checked++;
+  if(actual.amount!==refund.amountCents||actual.currency!==(r.payments.find(p=>p.id===refund.paymentId)?.currency??"usd")||refund.status==="SUCCEEDED"&&actual.status!=="succeeded"){difference=true;await financeIssue(prisma,{key:"provider-refund:"+refund.id,kind:"PROVIDER_REFUND_DIFFERENCE",reservationId:r.id,reason:"Provider refund differs from retained amount, currency or terminal status",evidence:{refundId:refund.id,providerId:actual.id}});}
+  if(difference)actionable++;
+  }catch{failed++;/* Report unavailable verification; do not alter financial eligibility or provider state. */}
  }
- }const payouts=await auditPayoutHistory();return {checked:rows.length,payouts,worker:workerResult({}, {payments:workerResult({attempted:checked,checked,actionable,committed:checked-actionable,review:actionable}),payouts:payouts.worker})};
+ }const payouts=await auditPayoutHistory();return {checked:rows.length,payouts,worker:workerResult({}, {payments:workerResult({attempted:checked,checked,actionable:actionable+failed,failed,committed:checked-actionable-failed,review:actionable}),payouts:payouts.worker})};
 }
 export const payoutWorkers={accounting:reconcileAccounting,recovery:recoverPayoutOperations,schedule:schedulePayouts,reconciliation:reconcileFinance,"historical-audit":auditFinanceHistory};
 

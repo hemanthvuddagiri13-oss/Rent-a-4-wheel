@@ -22,14 +22,14 @@ async function login(user: { id: string; email: string; role: string }) {
   await context.addCookies([{ name: "authjs.session-token", value: token, url: base, httpOnly: true, sameSite: "Lax" }]);
   return context;
 }
-async function screenshot(page: Page, name: string, widths = [390, 1440]) {
+async function screenshot(page: Page, name: string, widths = [375, 390, 430, 768, 1024, 1440]) {
   await page.locator("h1").waitFor();
   for (const loading of ["Loading your trip…", "Loading payment status…"]) await page.getByText(loading, { exact: true }).waitFor({ state: "hidden" });
   await page.evaluate(() => document.fonts.ready);
   for (const width of widths) {
     await page.setViewportSize({ width, height: 1000 });
     await page.evaluate(() => window.scrollTo(0, 0));
-    await page.screenshot({ path: `${captures}/${name}-${width}.png`, fullPage: true, animations: "disabled" });
+    await page.screenshot({ path: `${captures}/${name}-${width}.png`, fullPage: true, mask:[page.locator('[data-sensitive],img[src*="/api/documents"],img[src*="/photos/"],img[src*="/api/community/files"],iframe,canvas,video,input[type="password"],input[autocomplete="cc-number"]')], animations: "disabled" });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${name} overflows at ${width}px`).toBe(true);
     expect(await page.locator("h1").count()).toBe(1);
   }
@@ -297,3 +297,48 @@ it("customer signs in through the controlled email-code UI and consumes the code
   expect(await prisma.session.count({where:{userId:user.id,revokedAt:null}})).toBe(1);
  }finally{await context.close();}
 },90000);
+
+it("real payment status UI distinguishes processing, failure, compensation and refund completion",async()=>{
+ const customer=await createTestCustomer(),vehicle=await createTestVehicle();users.push(customer.id);vehicles.push(vehicle.id);
+ const r=await createTestReservation({customerId:customer.id,vehicleId:vehicle.id,pickupAt:new Date(Date.now()+86400000),returnAt:new Date(Date.now()+4*86400000),status:"AWAITING_PAYMENT",expiresAt:new Date(Date.now()+600000)});
+ const context=await login(customer),page=await context.newPage();
+ // Synthetic persisted provider observations; the browser calls the real authoritative status endpoint.
+ const panel=page.locator("section").filter({has:page.getByRole("heading",{name:"Payment, refund and deposit",exact:true})});
+ try {
+  await page.goto(`${base}/account/reservations/${r.id}`);await panel.getByRole("status").filter({hasText:/^processing$/}).waitFor();
+  await prisma.reservation.update({where:{id:r.id},data:{status:"PAYMENT_FAILED"}});await panel.getByRole("status").filter({hasText:/^payment failed$/}).waitFor();
+  const payment=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents}});
+  await prisma.reservation.update({where:{id:r.id},data:{status:"CANCELLED_BY_CUSTOMER",financialDisposition:"REFUND_REQUIRED",expiresAt:null}});
+  const refund=await prisma.refund.create({data:{reservationId:r.id,paymentId:payment.id,amountCents:r.totalCents,status:"PENDING",reason:"Synthetic compensation observation",idempotencyKey:"phase6-refund-"+r.id}});
+  await panel.getByRole("status").filter({hasText:/^refund pending$/}).waitFor();
+  expect((await context.request.post(`${base}/api/reservations/${r.id}/start-trip`)).status()).toBe(409);
+  await screenshot(page,"refund-pending",[375,390,430,768,1024,1440]);
+  await prisma.refund.update({where:{id:refund.id},data:{status:"SUCCEEDED"}});await panel.getByRole("status").filter({hasText:/^refunded$/}).waitFor();
+  expect((await context.request.post(`${base}/api/reservations/${r.id}/start-trip`)).status()).toBe(409);
+  expect(await prisma.payment.count({where:{reservationId:r.id}})).toBe(1);
+ }finally{await context.close();}
+},120000);
+
+it("disabled jurisdiction hides discovery and refuses booking through the real browser",async()=>{
+ const vehicle=await createTestVehicle({jurisdictionCode:"CA",location:"Synthetic disabled jurisdiction"});vehicles.push(vehicle.id);
+ const page=await browser.newPage();
+ try{
+  await page.goto(base+"/vehicles?location="+encodeURIComponent(vehicle.location));await page.getByText("No vehicles match your search",{exact:false}).waitFor();
+  expect((await page.goto(base+"/vehicles/"+vehicle.slug))?.status()).toBe(404);
+  expect((await page.request.get(`${base}/api/vehicles/${vehicle.id}/quote?pickupDate=2030-01-01&pickupTime=10:00&returnDate=2030-01-04&returnTime=10:00`)).ok()).toBe(false);
+ }finally{await page.close();}
+},90000);
+
+it("expired checkout hold offers recovery and cannot create a payment",async()=>{
+ const customer=await createTestCustomer(),vehicle=await createTestVehicle();users.push(customer.id);vehicles.push(vehicle.id);
+ const r=await createTestReservation({customerId:customer.id,vehicleId:vehicle.id,pickupAt:new Date("2032-01-01"),returnAt:new Date("2032-01-04"),status:"CHECKOUT_HOLD",expiresAt:new Date(Date.now()-60000)});
+ const context=await login(customer),page=await context.newPage();
+ try{
+  await page.goto(`${base}/book/${vehicle.id}?reservationId=${r.id}`);
+  await page.getByRole("complementary",{name:"Checkout hold"}).getByRole("alert").filter({hasText:"Your checkout hold has ended"}).waitFor();
+  expect((await context.request.post(`${base}/api/reservations/${r.id}/payment-intent`)).ok()).toBe(false);
+  expect(await prisma.payment.count({where:{reservationId:r.id}})).toBe(0);
+  await screenshot(page,"expired-hold",[375,390,430,768,1024,1440]);
+  await page.getByRole("link",{name:"Choose available dates",exact:true}).click();await page.waitForURL(/\/vehicles$/);
+ }finally{await context.close();}
+},120000);

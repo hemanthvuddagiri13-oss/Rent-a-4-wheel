@@ -9,6 +9,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const r = await prisma.reservation.findUnique({ where: { id }, include: { payments: true, deposit: { include: { operation: true } }, refunds: true } });
   if (!r) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (r.customerId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  return NextResponse.json({ status: r.status, ...financialProjection(r) },
+  return NextResponse.json({ status: r.status, depositRequired: r.depositCents > 0, ...financialProjection(r) },
     { headers: { "Cache-Control": "private, no-store" } });
 }

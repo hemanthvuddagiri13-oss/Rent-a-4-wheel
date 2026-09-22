@@ -35,6 +35,7 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
  let child:ChildProcess|undefined,browser:Browser|undefined;
  const contexts:Record<string,BrowserContext>={};
  const captures:Array<Record<string,unknown>>=[];
+ const keyboardFailures:Array<{route:string;width:number;message:string}>=[];
  try{
   child=spawn(process.execPath,["tests/helpers/app-server.mjs"],{stdio:"inherit",env:{...process.env,BROWSER_TEST_PORT:"3214",NODE_ENV:"development",AUTH_SECRET:secret,AUTH_TRUST_HOST:"true",AUTH_URL:base,NEXTAUTH_URL:base,STRIPE_SECRET_KEY:"",NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:"",STRIPE_WEBHOOK_SECRET:"",FINANCE_SANDBOX_ENABLED:"false"}});
   let ready=false;for(let i=0;i<240;i++){if(child.exitCode!==null)throw new Error("Baseline app exited");try{const r=await fetch(base+"/api/auth/session");if(r.ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,500));}if(!ready)throw new Error("Baseline app did not start");
@@ -66,7 +67,7 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
     const axe=await new AxeBuilder({page}).withTags(["wcag2a","wcag2aa","wcag21aa","wcag22aa"]).analyze();
     const accessibility=axe.violations.map(v=>({id:v.id,impact:v.impact,description:v.description,nodes:v.nodes.map(n=>({target:n.target,failureSummary:n.failureSummary}))}));
     const keyboard:string[]=[];
-    if(["home","account","host","connect"].includes(spec.name)){
+    if(["home","account","host","connect"].includes(spec.name)){try{
       const menu=page.getByRole("button",{name:"Open menu",exact:true});
       await menu.focus();await page.keyboard.press("Enter");
       const dialog=page.getByRole("dialog");await dialog.waitFor();
@@ -76,17 +77,21 @@ it.skipIf(!enabled)("audits real application routes, roles and six viewports for
       expect(await menu.evaluate(e=>getComputedStyle(e).outlineStyle!=="none"),"Keyboard focus is visible").toBe(true);
       keyboard.push("Enter opens navigation","Tab remains in dialog","Escape closes","Focus restored with visible outline");
       await page.evaluate(()=>{document.documentElement.style.zoom="2";});await page.waitForTimeout(300);
-      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),"200% CSS zoom reflow").toBe(true);
+      const zoomOverflow=await page.evaluate(()=>({overflow:document.documentElement.scrollWidth>innerWidth,elements:[...document.querySelectorAll("body *")].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.right>innerWidth+1;}).slice(0,12).map(e=>({tag:e.tagName,classes:e.className}))}));
+      await writeFile(output+`/zoom-${spec.name}-${width}.json`,JSON.stringify(zoomOverflow,null,2));
+      await page.screenshot({path:output+`/zoom-${spec.name}-${width}.png`,fullPage:true,mask:[sensitive]});
+      expect(zoomOverflow.overflow,`200% CSS zoom reflow ${spec.name} ${width}`).toBe(false);
       await page.evaluate(()=>{document.documentElement.style.zoom="";});await page.waitForTimeout(300);await menu.blur();
-    }
+    }catch(error){keyboardFailures.push({route:spec.name,width,message:error instanceof Error?error.message.slice(0,250):"Keyboard check failed"});await page.keyboard.press("Escape");await page.evaluate(()=>{document.documentElement.style.zoom="";});}}
     const image=spec.name+"-"+width+".png";await page.screenshot({path:output+"/"+image,fullPage:true,animations:"disabled",mask:[sensitive]});captures.push({...spec,width,height,status:response?.status(),image,keyboard,scenario:"initial",consoleErrors:[...consoleErrors],accessibility,...metrics});
    }
    await page.close();
   }
-  await writeFile(output+"/manifest.json",JSON.stringify({applicationSha:process.env.BASELINE_APPLICATION_SHA??"82bfea4648d86386a1b4be51c76935512bacd0f1",fixture:"isolated synthetic PostgreSQL data; no provider calls or private document media",sizes,captures},null,2));
+  await writeFile(output+"/manifest.json",JSON.stringify({applicationSha:process.env.BASELINE_APPLICATION_SHA??"82bfea4648d86386a1b4be51c76935512bacd0f1",fixture:"isolated synthetic PostgreSQL data; no provider calls or private document media",sizes,captures,keyboardFailures},null,2));
   const html='<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Phase 6 UI observations</title><style>body{font:16px system-ui;background:#101214;color:#eee;margin:24px}a{color:#d8bd7c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}img{width:100%;height:auto;border:1px solid #555}article{min-width:0}h2{overflow-wrap:anywhere}</style><h1>Real application UI observations</h1><p>Synthetic staging data. Screenshots are observations, not acceptance.</p><a href="manifest.json">Route and viewport metrics</a><div class="grid">'+captures.map(c=>'<article><h2>'+escape(String(c.role)+" · "+String(c.route)+" · "+c.width+"×"+c.height)+'</h2><p>HTTP '+c.status+' · overflow '+c.overflow+' · small targets '+c.smallTargets+' · unlabelled fields '+c.unlabelledFields+'</p><a href="'+c.image+'"><img loading="lazy" alt="'+escape(String(c.name))+'" src="'+c.image+'"></a></article>').join("")+"</div></html>";
   await writeFile(output+"/index.html",html);
   expect(captures).toHaveLength(specs.length*sizes.length);
+  expect(keyboardFailures,"Keyboard/focus and zoom assertions").toEqual([]);
   expect(captures.filter(c=>c.overflow).map(c=>`${c.name}:${c.width}`),"Document overflow").toEqual([]);
   expect(captures.filter(c=>(c.accessibility as unknown[]).length).map(c=>({route:c.name,width:c.width,violations:c.accessibility})),"Automated accessibility violations").toEqual([]);
   expect(captures.filter(c=>(c.consoleErrors as unknown[]).length).map(c=>c.name),"Browser errors").toEqual([]);console.info(JSON.stringify({baselineScreens:specs.length,captures:captures.length,overflow:captures.filter(c=>c.overflow).length,serverErrors:captures.filter(c=>Number(c.status)>=500).length}));

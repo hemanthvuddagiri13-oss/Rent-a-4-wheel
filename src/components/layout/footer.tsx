@@ -64,15 +64,15 @@ export function Footer({ settings }: { settings: SiteSettings }) {
               Drive More Possibilities. A car-sharing marketplace connecting guests with independent vehicle hosts.
             </p>
             <div className="mt-5 flex flex-col gap-2 text-sm text-silver">
-              <a href={`tel:${settings.phone.replace(/[^0-9+]/g, "")}`} className="flex items-center gap-2 hover:text-gold-bright">
+              {settings.phone && <a href={`tel:${settings.phone.replace(/[^0-9+]/g, "")}`} className="flex items-center gap-2 hover:text-gold-bright">
                 <Phone className="h-4 w-4 text-gold" /> {settings.phone}
-              </a>
-              <a href={`mailto:${settings.email}`} className="flex items-center gap-2 hover:text-gold-bright">
+              </a>}
+              {settings.email && <a href={`mailto:${settings.email}`} className="flex items-center gap-2 hover:text-gold-bright">
                 <Mail className="h-4 w-4 text-gold" /> {settings.email}
-              </a>
-              <span className="flex items-center gap-2">
+              </a>}
+              {settings.address && <span className="flex items-center gap-2">
                 <MapPin className="h-4 w-4 text-gold" /> {settings.address}
-              </span>
+              </span>}
             </div>
             <div className="mt-5 flex gap-3">
               {settings.socialLinks?.instagram && (
