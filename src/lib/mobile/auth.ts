@@ -44,6 +44,11 @@ export async function mobileSignIn(input: unknown, ip: string, db: PrismaClient 
     const current = await lockUser(tx, user.id);
     if (!current?.isActive || !nativeRole(current.role)) throw new MobileError("UNAUTHORIZED", 401);
     await tx.mobileSession.updateMany({ where: { userId: user.id, deviceId: data.deviceId, revokedAt: null }, data: { revokedAt: new Date(), revocationReason: "REAUTHENTICATED" } });
+    const active = await tx.mobileSession.findMany({ where: { userId: user.id, revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: [{ lastUsedAt: "desc" }, { id: "desc" }], skip: 19, select: { id: true } });
+    for (const old of active) {
+      await tx.mobileSession.update({ where: { id: old.id }, data: { revokedAt: new Date(), revocationReason: "DEVICE_LIMIT" } });
+      await audit(tx, user.id, old.id, "mobile.device_limit_revoked");
+    }
     const session = await tx.mobileSession.create({ data: { userId: user.id, deviceId: data.deviceId, platform: data.platform, appVersion: data.appVersion, expiresAt: new Date(Date.now() + FAMILY_MS) } });
     await audit(tx, user.id, session.id, "mobile.signed_in");
     return issue(tx, session.id, 0, session.expiresAt);

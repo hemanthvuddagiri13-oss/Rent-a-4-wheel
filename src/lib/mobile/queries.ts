@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { marketplaceHost } from "@/lib/marketplace";
 import { participant, collaborationScopes } from "@/lib/collaboration-access";
@@ -31,7 +32,7 @@ export async function mobileQuery(req: Request, parts: string[]) {
       try { await requireReleaseFeature("booking", prisma, code); codes.push(code); }
       catch { /* Incomplete release approval must not make inventory visible. */ }
     }
-    const where = { status: "ACTIVE" as const, isDemo: false, listingApproval: "APPROVED", jurisdictionCode: { in: codes } };
+    const where: Prisma.VehicleWhereInput = { status: "ACTIVE", isDemo: false, listingApproval: "APPROVED", jurisdictionCode: { in: codes }, AND: [{ OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] }, { OR: [{ availability: null }, { availability: { isBookable: true } }] }] };
     if (!id) return collection(await prisma.vehicle.findMany({ where, select: mobileVehicleSelect, ...page }), limit);
     return prisma.$transaction(async tx => {
       const vehicle = await tx.vehicle.findFirst({ where: { ...where, id }, select: mobileVehicleSelect });
@@ -49,6 +50,19 @@ export async function mobileQuery(req: Request, parts: string[]) {
     return prisma.$transaction(async tx => {
       await mobileReservationAccess(tx, actor.userId, id);
       if (!action) return tx.reservation.findUniqueOrThrow({ where: { id }, select: mobileReservationSelect });
+      if (action === "agreement-preview") {
+        const legal = await tx.legalDocument.findUnique({ where: { type: "RENTAL_AGREEMENT" }, select: { type: true, version: true, content: true, needsAttorneyReview: true } });
+        if (!legal) throw new MobileError("NOT_FOUND", 404);
+        return { ...legal, contentHash: createHash("sha256").update(legal.content).digest("hex") };
+      }
+      if (action === "pricing") {
+        const r = await tx.reservation.findUniqueOrThrow({ where: { id }, select: mobileReservationSelect });
+        const quote = await tx.financeQuote.findUnique({ where: { reservationId: id }, select: { terms: true } });
+        const terms = quote?.terms as { amounts?: { guestServiceCents?: number; protectionCents?: number; guestProcessingCents?: number; commissionCents?: number; hostNetCents?: number; riskReserveCents?: number } } | undefined;
+        const a = terms?.amounts;
+        return { subtotalCents: r.subtotalCents, extrasCents: r.extrasCents, discountCents: r.discountCents, taxCents: r.taxCents, totalCents: r.totalCents, depositCents: r.depositCents,
+          platformFeeCents: a?.guestServiceCents ?? null, protectionCents: a?.protectionCents ?? null, processingCents: a?.guestProcessingCents ?? null, hostCommissionCents: a?.commissionCents ?? null, hostEarningsCents: a?.hostNetCents ?? null, reserveCents: a?.riskReserveCents ?? null, approval: "SAMPLE_UNAPPROVED" };
+      }
       if (action === "payment-status") {
         await mobileReservationAccess(tx, actor.userId, id, true);
         const r = await tx.reservation.findUniqueOrThrow({ where: { id }, include: { payments: true, deposit: { include: { operation: true } }, refunds: true } });

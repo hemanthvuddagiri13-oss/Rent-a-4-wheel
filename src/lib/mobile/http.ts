@@ -31,12 +31,13 @@ export function mobileHeaders(requestId: string) {
   return { "X-API-Version": MOBILE_VERSION, "X-Request-ID": requestId, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Vary": "Authorization", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'" };
 }
 export async function mobileHandler(req: Request, operation: string, run: (requestId: string) => Promise<unknown>) {
-  const requestId = randomUUID(), start = performance.now(); let status = 200;
+  const requestId = randomUUID(), start = performance.now(); let status = 200, telemetryOperation = operation;
   try {
     const requested = req.headers.get("x-api-version");
     if (requested && requested !== MOBILE_VERSION) throw new MobileError("INVALID_REQUEST", 400);
     const contract = mobileOperation(req);
     if (!contract) throw new MobileError("NOT_FOUND", 404);
+    telemetryOperation = contract.operationId;
     if (!await sharedRequestLimit(req.headers, operation.startsWith("auth.") ? "mobile-auth" : "mobile-api", operation.startsWith("auth.") ? 30 : 120)) throw new MobileError("RATE_LIMITED", 429);
     const data = await run(requestId);
     if (data instanceof Response) { status = data.status; for (const [key, value] of Object.entries(mobileHeaders(requestId))) data.headers.set(key, value); return data; }
@@ -51,6 +52,6 @@ export async function mobileHandler(req: Request, operation: string, run: (reque
     return Response.json({ data: null, error: { code }, requestId }, { status, headers: { ...mobileHeaders(requestId), ...(status === 429 ? { "Retry-After": "60" } : {}) } });
   } finally {
     // Callers supply a fixed operation label, never a URL, ID or request data.
-    console.info(JSON.stringify({ event: "mobile.request", operation, requestId, status, durationMs: Math.round(performance.now() - start) }));
+    console.info(JSON.stringify({ event: "mobile.request", operation: telemetryOperation, requestId, status, durationMs: Math.round(performance.now() - start) }));
   }
 }

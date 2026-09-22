@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { createHoldSchema } from "@/lib/validations/reservation";
 import { checkoutSchema } from "@/lib/validations/reservation";
 import { checkoutReservation } from "@/lib/checkout-service";
@@ -17,7 +18,7 @@ import { cancelCustomerReservation, startCustomerTrip } from "@/lib/customer-res
 import { mobileMutation } from "./mutation";
 import { mobileReservationAccess } from "./queries";
 import { authenticateMobile, MobileError } from "./auth";
-import { mobileBody } from "./http";
+import { mobileBody, mobileIp } from "./http";
 
 export async function mobileCommand(req: Request, parts: string[]) {
   const actor = await authenticateMobile(req.headers);
@@ -55,13 +56,21 @@ export async function mobileCommand(req: Request, parts: string[]) {
   }
   if (resource === "reservations" && id && action === "checkout" && parts.length === 3) {
     const data = checkoutSchema.parse(input);
-    return mobileMutation(req, "reservation.checkout", { id, ...data }, async (tx, userId) => {
+    const { agreementContentHash } = z.object({ agreementContentHash: z.string().regex(/^[0-9a-f]{64}$/) }).parse(input);
+    return mobileMutation(req, "reservation.checkout", { id, ...data, agreementContentHash }, async (tx, userId) => {
       await mobileReservationAccess(tx, userId, id, true);
       const current = await lockReservation(tx, id);
       if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new MobileError("CONFLICT", 409);
       await requireCheckoutAdmission(tx, id);
+      const signed = current.checkoutFingerprint ? await tx.agreementAcceptance.findFirst({ where: { reservationId: id, type: "RENTAL_AGREEMENT" }, orderBy: { signedAt: "desc" }, select: { contentHash: true } }) : null;
+      if (signed) { if (signed.contentHash !== agreementContentHash) throw new MobileError("CONFLICT", 409); }
+      else {
+        await tx.$queryRaw`SELECT "id" FROM "LegalDocument" WHERE "type"='RENTAL_AGREEMENT' FOR UPDATE`;
+        const legal = await tx.legalDocument.findUnique({ where: { type: "RENTAL_AGREEMENT" } });
+        if (!legal || createHash("sha256").update(legal.content).digest("hex") !== agreementContentHash) throw new MobileError("CONFLICT", 409);
+      }
     }, async (tx, userId) => {
-      const response = await checkoutReservation(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(data) }), id, userId, tx);
+      const response = await checkoutReservation(new Request(req.url, { method: "POST", headers: { "content-type": "application/json", "user-agent": "Rent A 4Wheel native API v1", "x-real-ip": mobileIp(req.headers) }, body: JSON.stringify(data) }), id, userId, tx);
       if (!response.ok) throw new MobileError(response.status === 403 ? "FORBIDDEN" : "CONFLICT", response.status);
       return { id, success: true };
     });

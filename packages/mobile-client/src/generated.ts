@@ -13,7 +13,9 @@ export interface MobileOperations {
   "reservations": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "confirmationNumber": string; "vehicleId": string; "status": string; "pickupAt": string; "returnAt": string; "bookingTimezone": string; "expiresAt": string | null; "subtotalCents": number; "extrasCents": number; "discountCents": number; "taxCents": number; "feesCents": number; "totalCents": number; "depositCents": number; "bookingFingerprint": string | null }>; "nextCursor": string | null } };
   "reservation": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "confirmationNumber": string; "vehicleId": string; "status": string; "pickupAt": string; "returnAt": string; "bookingTimezone": string; "expiresAt": string | null; "subtotalCents": number; "extrasCents": number; "discountCents": number; "taxCents": number; "feesCents": number; "totalCents": number; "depositCents": number; "bookingFingerprint": string | null } };
   "hold": { input: { params?: never; body: { "draftId": string; "revision": number; "vehicleId": string; "pickupAt": string; "returnAt": string; "extraIds"?: Array<string>; "couponCode"?: string }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
-  "checkout": { input: { params: { "id": string }; body: { "bookingFingerprint"?: string; "driver": { "firstName": string; "lastName": string; "dob": string; "email": string; "phone": string; "address": string; "city": string; "state": string; "zip": string; "country"?: string; "licenseNumber": string; "licenseState": string; "licenseExpiration": string }; "documentIds": { "front"?: string; "back"?: string; "selfie"?: string }; "agreementAccepted": true }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string; "success": true } };
+  "checkout": { input: { params: { "id": string }; body: { "bookingFingerprint"?: string; "driver": { "firstName": string; "lastName": string; "dob": string; "email": string; "phone": string; "address": string; "city": string; "state": string; "zip": string; "country"?: string; "licenseNumber": string; "licenseState": string; "licenseExpiration": string }; "documentIds": { "front"?: string; "back"?: string; "selfie"?: string }; "agreementAccepted": true; "agreementContentHash": string }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string; "success": true } };
+  "agreementPreview": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "type": "RENTAL_AGREEMENT"; "version": string; "content": string; "contentHash": string; "needsAttorneyReview": boolean } };
+  "pricing": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "subtotalCents": number; "extrasCents": number; "discountCents": number; "taxCents": number; "totalCents": number; "depositCents": number; "platformFeeCents": number | null; "protectionCents": number | null; "processingCents": number | null; "hostCommissionCents": number | null; "hostEarningsCents": number | null; "reserveCents": number | null; "approval": "SAMPLE_UNAPPROVED" } };
   "tripCancel": { input: { params: { "id": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
   "tripStart": { input: { params: { "id": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
   "tripKeys": { input: { params: { "id": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
@@ -127,6 +129,18 @@ export const operationMetadata = {
   "checkout": {
     "path": "/reservations/{id}/checkout",
     "method": "POST",
+    "auth": true,
+    "binary": null
+  },
+  "agreementPreview": {
+    "path": "/reservations/{id}/agreement-preview",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "pricing": {
+    "path": "/reservations/{id}/pricing",
+    "method": "GET",
     "auth": true,
     "binary": null
   },

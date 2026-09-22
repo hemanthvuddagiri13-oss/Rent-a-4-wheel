@@ -6,6 +6,7 @@ import {chromium,type Browser} from "playwright";
 import {encode} from "next-auth/jwt";
 import {createDeviceSession} from "@/lib/device-sessions";
 import {createTestCustomer,prisma} from "./helpers/factories";
+import bcrypt from "bcryptjs";
 
 // This suite runs against the production build only after CI provisions disposable TLS.
 // Deliberately unavailable external providers prove fail-closed readiness, not provider health.
@@ -66,3 +67,23 @@ it.skipIf(!enabled)("public production pages hydrate under fresh per-request CSP
   expect(errors).toEqual([]);
  }finally{await context.close();}
 },90000);
+
+it.skipIf(!enabled)("native bearer auth crosses the real production proxy without weakening web cookie CSRF",async()=>{
+ const user=await createTestCustomer();users.push(user.id);
+ await prisma.authCode.create({data:{email:user.email,purpose:"MOBILE_SIGN_IN",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});
+ const context=await browser.newContext({ignoreHTTPSErrors:true});
+ try {
+  const signed=await context.request.post(base+"/api/v1/mobile/auth/sign-in",{data:{email:user.email,code:"123456",deviceId:crypto.randomUUID(),platform:"ANDROID",appVersion:"1.0.0"}});
+  expect(signed.status()).toBe(200);expect(signed.headers()["x-api-version"]).toBe("1");expect(signed.headers()["cache-control"]).toContain("no-store");
+  const credentials=(await signed.json()).data;
+  expect((await context.request.get(base+"/api/v1/mobile/me")).status()).toBe(401);
+  const headers={authorization:"Bearer "+credentials.accessToken};
+  expect((await context.request.get(base+"/api/v1/mobile/me",{headers})).status()).toBe(200);
+  // Native credentials do not authenticate a cookie-protected web mutation.
+  expect((await context.request.post(base+"/api/account/security",{headers,data:{action:"revokeAll"}})).status()).toBe(403);
+  const oversized=await context.request.post(base+"/api/v1/mobile/auth/refresh",{data:{refreshToken:"x".repeat(25000)}});
+  expect(oversized.status()).toBe(413);expect((await oversized.json()).error.code).toBe("INVALID_REQUEST");expect(oversized.headers()["x-api-version"]).toBe("1");
+  expect((await context.request.post(base+"/api/v1/mobile/auth/logout",{headers,data:{}})).status()).toBe(200);
+  expect((await context.request.get(base+"/api/v1/mobile/me",{headers})).status()).toBe(401);
+ }finally{await context.close();await prisma.authCode.deleteMany({where:{email:user.email}});}
+},60000);

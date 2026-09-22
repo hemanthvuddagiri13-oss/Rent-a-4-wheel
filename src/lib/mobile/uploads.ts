@@ -33,6 +33,12 @@ export async function finalizeMobileUpload(req: Request, id: string) {
   const raw = await boundedBody(req, MAX_DOCUMENT_SIZE_BYTES);
   const hash = createHash("sha256").update(raw).digest("hex");
   if (raw.length !== upload.expectedSize || hash !== upload.expectedSha256) throw new MobileError("CONFLICT", 409);
+  // Reserve the finalize key before external IO as well as recording the
+  // committed document receipt afterward. Concurrent reuse for another upload
+  // cannot write an unrelated private object before discovering the conflict.
+  await mobileMutation(req, "document.finalize.intent", { id, sha256: hash }, async (tx, userId) => {
+    if (upload.reservationId) await mobileReservationAccess(tx, userId, upload.reservationId, upload.type !== "INSPECTION");
+  }, async () => ({ id }));
   // Initialization durably froze input evidence before any provider/storage IO.
   // Stable storage identity reuses the storage service's durable write intent;
   // ambiguous writes remain review-blocked there, never assigned a fresh key.

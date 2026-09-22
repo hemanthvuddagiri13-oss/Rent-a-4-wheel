@@ -2494,15 +2494,398 @@
                   "agreementAccepted": {
                     "type": "boolean",
                     "const": true
+                  },
+                  "agreementContentHash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
                   }
                 },
                 "required": [
                   "driver",
                   "documentIds",
-                  "agreementAccepted"
+                  "agreementAccepted",
+                  "agreementContentHash"
                 ]
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/reservations/{id}/agreement-preview": {
+      "get": {
+        "operationId": "agreementPreview",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "RENTAL_AGREEMENT"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        },
+                        "contentHash": {
+                          "type": "string"
+                        },
+                        "needsAttorneyReview": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "version",
+                        "content",
+                        "contentHash",
+                        "needsAttorneyReview"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/reservations/{id}/pricing": {
+      "get": {
+        "operationId": "pricing",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "subtotalCents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "extrasCents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "discountCents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "taxCents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalCents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "depositCents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "platformFeeCents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "protectionCents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "processingCents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "hostCommissionCents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "hostEarningsCents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reserveCents": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "approval": {
+                          "type": "string",
+                          "const": "SAMPLE_UNAPPROVED"
+                        }
+                      },
+                      "required": [
+                        "subtotalCents",
+                        "extrasCents",
+                        "discountCents",
+                        "taxCents",
+                        "totalCents",
+                        "depositCents",
+                        "platformFeeCents",
+                        "protectionCents",
+                        "processingCents",
+                        "hostCommissionCents",
+                        "hostEarningsCents",
+                        "reserveCents",
+                        "approval"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
           }
         }
       }

@@ -168,6 +168,7 @@ it("domain failure rolls back mobile receipt and domain effect together", async 
 });
 
 async function tenantFixture() {
+  await prisma.jurisdiction.upsert({ where: { code: "TX" }, create: { code: "TX" }, update: {} });
   const customer = await login(), owner = await login(), employee = await login(), other = await login();
   const user = await prisma.user.findUniqueOrThrow({ where: { email: customer.email } });
   const hostUser = await prisma.user.update({ where: { email: owner.email }, data: { role: "HOST" } });
@@ -225,7 +226,8 @@ it("HTTP upload persists immutable intent, scans/re-encodes and finalizes exactl
   expect((await finalize(Buffer.from("wrong content"))).status).toBe(409); expect(fixture.storageWrite).not.toHaveBeenCalled();
   expect((await finalize()).status).toBe(200); expect((await finalize()).status).toBe(200);
   expect(fixture.scan).toHaveBeenCalledTimes(1); expect(fixture.storageWrite).toHaveBeenCalledTimes(1);
-  expect(await prisma.driverDocument.count()).toBe(1); expect(await prisma.privateObject.count()).toBe(1); expect(await prisma.mobileMutation.count()).toBe(2);
+  expect(await prisma.driverDocument.count()).toBe(1); expect(await prisma.privateObject.count()).toBe(1);
+  expect(await prisma.mobileMutation.count()).toBe(3); // initialize, pre-IO intent, atomic finalize receipt
   expect((await prisma.mobileUpload.findUniqueOrThrow({ where: { id } })).finalizedAt).not.toBeNull();
 });
 it.each(["SCAN_UNAVAILABLE", "INFECTED"])("HTTP upload %s fails closed without storage or document writes", async status => {
@@ -252,7 +254,7 @@ it("HTTP expired hold cannot checkout or start; caller cannot elevate through ad
   const f = await tenantFixture(); await fixtureJurisdiction(prisma);
   await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: "CHECKOUT_HOLD", expiresAt: new Date(0) } });
   const driver = { firstName: "Synthetic", lastName: "Guest", dob: "1990-01-01", email: "synthetic@mobile.test", phone: "5555555555", address: "Fixture", city: "Fixture", state: "TX", zip: "75001", country: "US", licenseNumber: "SYNTHETIC_ONLY", licenseState: "TX", licenseExpiration: "2059-01-01" };
-  expect((await post(`reservations/${f.reservation.id}/checkout`, { driver, documentIds: { front: "a", back: "b", selfie: "c" }, agreementAccepted: true }, f.customer.accessToken, crypto.randomUUID())).status).toBe(409);
+  expect((await post(`reservations/${f.reservation.id}/checkout`, { driver, documentIds: { front: "a", back: "b", selfie: "c" }, agreementAccepted: true, agreementContentHash: "a".repeat(64) }, f.customer.accessToken, crypto.randomUUID())).status).toBe(409);
   expect((await post(`reservations/${f.reservation.id}/start`, {}, f.customer.accessToken, crypto.randomUUID())).status).toBe(409);
   expect((await post("admin/refund", {}, f.customer.accessToken, crypto.randomUUID())).status).toBe(404);
   expect(await prisma.trip.count()).toBe(0); expect(await prisma.payment.count()).toBe(0); expect(await prisma.agreementAcceptance.count()).toBe(0);
@@ -298,4 +300,61 @@ it("overlapping holds contend on separate connections after a synchronization ba
     expect(result.filter(r => r.status === "fulfilled")).toHaveLength(1); expect(result.filter(r => r.status === "rejected")).toHaveLength(1); expect(arrivals).toBeGreaterThanOrEqual(2);
     expect(await prisma.reservation.count({ where: { status: "CHECKOUT_HOLD" } })).toBe(1);
   } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it("HTTP expired codes and access/refresh lifetimes fail closed", async () => {
+  const email = "expired@mobile.test", code = await requestCode(email);
+  await prisma.authCode.updateMany({ data: { expiresAt: new Date(0) } });
+  expect((await post("auth/sign-in", { email, code, ...device() })).status).toBe(401);
+  const c = await login();
+  await prisma.mobileCredential.updateMany({ data: { accessExpiresAt: new Date(0) } });
+  expect((await get("me", c.accessToken)).status).toBe(401);
+  await prisma.mobileCredential.updateMany({ data: { refreshExpiresAt: new Date(0) } });
+  expect((await post("auth/refresh", { refreshToken: c.refreshToken })).status).toBe(401);
+});
+it("HTTP account issuance limit remains five codes per hour beyond the resend cooldown", async () => {
+  const email = "account-limit@mobile.test";
+  for (let i = 0; i < 7; i++) {
+    expect((await post("auth/request-code", { email })).status).toBe(200);
+    await prisma.authCode.updateMany({ data: { createdAt: new Date(Date.now() - 61000) } });
+  }
+  expect(await prisma.authCode.count()).toBe(5); expect(fixture.emails).toHaveLength(5);
+});
+it("HTTP issuance throttles one IP across accounts without enumeration responses", async () => {
+  for (let i = 0; i < 22; i++) {
+    const r = await post("auth/request-code", { email: `ip-${i}@mobile.test` }); expect(r.status).toBe(200); expect((await r.json()).data).toEqual({ accepted: true });
+  }
+  expect(await prisma.authCode.count()).toBe(20); expect(fixture.emails).toHaveLength(20);
+});
+it("HTTP logout is per-device while logout-all revokes every native device", async () => {
+  const first = await login();
+  // Expire only the resend cooldown in controlled evidence, not a timer wait.
+  await prisma.authCode.updateMany({ data: { createdAt: new Date(Date.now() - 61000) } });
+  const second = await login(first.email);
+  expect((await (await get("auth/devices", second.accessToken)).json()).data.devices).toHaveLength(2);
+  expect((await post("auth/logout", {}, first.accessToken)).status).toBe(200);
+  expect((await get("me", second.accessToken)).status).toBe(200);
+  expect((await post("auth/logout-all", {}, second.accessToken)).status).toBe(200);
+  for (const c of [first, second]) expect((await get("me", c.accessToken)).status).toBe(401);
+});
+it("HTTP checkout binds the displayed agreement and commits one immutable acceptance on retry", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const content = "SYNTHETIC TEST AGREEMENT ONLY", contentHash = createHash("sha256").update(content).digest("hex");
+  await prisma.legalDocument.create({ data: { type: "RENTAL_AGREEMENT", title: "Synthetic agreement", version: "synthetic-v1", content, needsAttorneyReview: false } });
+  const data = { draftId: crypto.randomUUID(), revision: 1, vehicleId: f.vehicle.id, pickupAt: "2056-04-01T12:00:00Z", returnAt: "2056-04-02T12:00:00Z", extraIds: [] };
+  const held = await post("reservations/hold", data, f.customer.accessToken, crypto.randomUUID()); expect(held.status).toBe(200); const id = (await held.json()).data.id;
+  const docs = await Promise.all((["LICENSE_FRONT", "LICENSE_BACK", "SELFIE_WITH_LICENSE"] as const).map(type => prisma.driverDocument.create({ data: { userId: f.user.id, type, storageKey: "local:synthetic-" + type + ".png", mimeType: "image/png", fileSizeBytes: 1, contentSha256: "f".repeat(64), malwareScanStatus: "CLEAN" } })));
+  const driver = { firstName: "Synthetic", lastName: "Guest", dob: "1990-01-01", email: f.customer.email, phone: "5555555555", address: "Fixture", city: "Fixture", state: "TX", zip: "75001", country: "US", licenseNumber: "SYNTHETIC_ONLY", licenseState: "TX", licenseExpiration: "2059-01-01" };
+  const r = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+  const checkout = { driver, documentIds: { front: docs[0].id, back: docs[1].id, selfie: docs[2].id }, agreementAccepted: true, bookingFingerprint: r.bookingFingerprint, agreementContentHash: contentHash };
+  const key = crypto.randomUUID(), route = `reservations/${id}/checkout`;
+  expect((await post(route, { ...checkout, agreementContentHash: "0".repeat(64) }, f.customer.accessToken, key)).status).toBe(409);
+  expect(await prisma.agreementAcceptance.count()).toBe(0);
+  for (let i = 0; i < 2; i++) expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(200);
+  expect(await prisma.agreementAcceptance.count()).toBe(1); expect(await prisma.financeSnapshot.count()).toBe(1);
+  expect(await prisma.operationsJob.count({ where: { kind: "AGREEMENT" } })).toBe(1);
+  const acceptance = await prisma.agreementAcceptance.findFirstOrThrow(); expect(acceptance.contentHash).toBe(contentHash);
+  expect((await prisma.reservation.findUniqueOrThrow({ where: { id } })).status).toBe("AWAITING_PAYMENT");
+  await prisma.reservation.update({ where: { id }, data: { expiresAt: new Date(0) } });
+  expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(409);
+  expect(await prisma.agreementAcceptance.findMany()).toEqual([acceptance]); expect(await prisma.payment.count()).toBe(0);
 });

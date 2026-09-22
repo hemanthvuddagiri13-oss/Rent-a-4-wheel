@@ -51,7 +51,7 @@ jobs:
         run: |
           for run in 1 2 3 4 5; do
             echo "Mobile security repetition $run"
-            npx vitest run tests/mobile-security.test.ts tests/mobile-contract.test.ts || exit 1
+            npx vitest run tests/mobile-security.test.ts tests/mobile-contract.test.ts tests/mobile-migration.test.ts || exit 1
           done
       - name: OpenAPI and client artifacts (no runtime payloads)
         uses: actions/upload-artifact@v4

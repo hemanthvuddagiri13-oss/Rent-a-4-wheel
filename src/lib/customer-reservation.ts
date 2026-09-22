@@ -27,6 +27,9 @@ export async function cancelCustomerReservation(userId: string, id: string, db: 
 }
 
 const PRE_TRIP_CHAIN: ReservationStatus[] = ["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START", "ACTIVE"];
+export class TripStartBlockedError extends MarketplaceError {
+  constructor(public reasons: string[]) { super("Trip cannot start yet.", 409); }
+}
 export async function startCustomerTrip(userId: string, id: string, db: DomainDatabase = prisma) {
   return withReservationLock(id, async tx => {
     const owner = await tx.reservation.findUniqueOrThrow({ where: { id }, select: { customerId: true } });
@@ -36,7 +39,7 @@ export async function startCustomerTrip(userId: string, id: string, db: DomainDa
     const index = PRE_TRIP_CHAIN.indexOf(reservation.status);
     if (index < 0 || index === PRE_TRIP_CHAIN.length - 1) throw new MarketplaceError("Trip is not awaiting start.", 409);
     const gate = await evaluateTripStartGate(id, tx);
-    if (!gate.canStart) throw new MarketplaceError("Trip requirements are incomplete.", 409);
+    if (!gate.canStart) throw new TripStartBlockedError(gate.reasons);
     const report = await tx.conditionReport.findFirst({ where: { reservationId: id, phase: "PRE_TRIP", submittedByRole: "HOST" } });
     let current = reservation.status;
     for (let i = index; i < PRE_TRIP_CHAIN.length - 1; i++) {
