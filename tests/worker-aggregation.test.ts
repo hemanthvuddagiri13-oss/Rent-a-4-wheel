@@ -9,6 +9,7 @@ import {financialWorkers} from "@/lib/financial-workers";
 import {recordRelease} from "@/lib/release-outcomes";
 import {POST as financialCron} from "@/app/api/cron/financial/[worker]/route";
 import {NextRequest} from "next/server";
+import {prisma as workerDb} from "@/lib/prisma";
 const users:string[]=[];
 afterEach(async()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.unstubAllEnvs();await prisma.channelDelivery.deleteMany({where:{userId:{in:users}}});await prisma.inboxNotice.deleteMany({where:{userId:{in:users}}});users.length=0;});afterAll(()=>prisma.$disconnect());
 it("counts nested deposit releases once and preserves committed work alongside failures",()=>{
@@ -37,6 +38,15 @@ it.each(["SUCCESS","PARTIAL_FAILURE","FAILED","DISABLED","NO_WORK"] as const)("d
  if(["FAILED","PARTIAL_FAILURE"].includes(status))await expect(dispatchCron("community",env,request)).rejects.toThrow("CRON_WORKER_"+status);else await expect(dispatchCron("community",env,request)).resolves.toMatchObject({status:200});
 });
 async function sms(){const u=await createTestCustomer();users.push(u.id);await prisma.smsConsent.create({data:{userId:u.id,phone:"+15551234567",source:"HANDSET_CONFIRMED",consentAt:new Date()}});const n=await prisma.inboxNotice.create({data:{userId:u.id,eventKey:crypto.randomUUID(),category:"MESSAGE",title:"Private fixture",resourceType:"RESERVATION",resourceId:crypto.randomUUID()}});await prisma.noticePreference.create({data:{userId:u.id,category:"MESSAGE",sms:true,email:false}});return n;}
+it("retains a committed delivery when a later database claim fails",async()=>{
+ vi.stubEnv("APP_ENV","test");vi.stubEnv("TWILIO_ACCOUNT_SID","AC_fixture");vi.stubEnv("TWILIO_AUTH_TOKEN","fixture");vi.stubEnv("TWILIO_FROM_NUMBER","+15550000001");
+ await sms();await sms();const send=vi.fn(async()=>Response.json({sid:"SM_"+crypto.randomUUID(),status:"accepted"}));vi.stubGlobal("fetch",send);
+ const transaction=workerDb.$transaction.bind(workerDb);let transactions=0;
+ const spy=vi.spyOn(workerDb,"$transaction").mockImplementation(((...args:Parameters<typeof transaction>)=>{if(++transactions===3)return Promise.reject(new Error("Controlled next-claim failure"));return transaction(...args);}) as typeof workerDb.$transaction);
+ const result=await deliverNoticeChannels();spy.mockRestore();expect(result).toMatchObject({committed:1,accepted:1,failed:1,status:"PARTIAL_FAILURE"});expect(send).toHaveBeenCalledTimes(1);
+ expect(await prisma.channelDelivery.count({where:{userId:{in:users},state:"ACCEPTED"}})).toBe(1);
+ await deliverNoticeChannels();expect(send).toHaveBeenCalledTimes(2);await deliverNoticeChannels();expect(send).toHaveBeenCalledTimes(2);
+});
 it.each(["review","failed","mixed","uncertain"] as const)("real channel delivery reports %s and does not resend uncertain work",async outcome=>{
  vi.stubEnv("APP_ENV","test");vi.stubEnv("TWILIO_ACCOUNT_SID","AC_fixture");vi.stubEnv("TWILIO_AUTH_TOKEN","fixture");vi.stubEnv("TWILIO_FROM_NUMBER","+15550000001");
  const count=outcome==="mixed"?3:outcome==="uncertain"?2:1;for(let i=0;i<count;i++)await sms();let calls=0;

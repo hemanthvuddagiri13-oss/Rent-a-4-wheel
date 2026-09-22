@@ -27,6 +27,8 @@ export async function handleSmsConsent(params: URLSearchParams) {
   }
 }
 export async function deliverNoticeChannels() {
+  let accepted=0,attempted=0,failed=0,uncertain=0,stale=0,skipped=0;
+  try {
   const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN, from = process.env.TWILIO_FROM_NUMBER;
   // Twilio's Messages create endpoint does not provide the email provider's
   // replay key guarantee. A lost response is quarantined, never blindly resent.
@@ -42,7 +44,6 @@ export async function deliverNoticeChannels() {
   if (!sid || !token || !from) return {...workerResult({disabled:1,review:await reviewBacklog()}),accepted:0,configured:false};
   const ready = await prisma.$queryRaw<Array<{id:string}>>`SELECT d.id FROM "ChannelDelivery" d JOIN "SmsConsent" c ON c."userId"=d."userId" JOIN "User" u ON u.id=d."userId" WHERE d.state='READY' AND d.channel='SMS' AND c.source='HANDSET_CONFIRMED' AND c."stoppedAt" IS NULL AND u."isActive"=true ORDER BY d."createdAt",d.id LIMIT 30`;
   const jobs = await prisma.channelDelivery.findMany({ where: { id: { in: ready.map(d=>d.id) } } });
-  let accepted=0,attempted=0,failed=0,uncertain=0,stale=0,skipped=0;
   for (const job of jobs) {
     const lease = randomUUID();
     const consent = await prisma.$transaction(async tx => {
@@ -75,4 +76,9 @@ export async function deliverNoticeChannels() {
     }
   }
   return {...workerResult({attempted,committed:accepted,failed,uncertain,stale,skipped,review:await reviewBacklog()}),accepted,configured:true};
+  } catch {
+    // A later database/claim failure must not erase earlier committed deliveries.
+    // The durable DISPATCHING/REVIEW records still own uncertain provider work.
+    return {...workerResult({attempted,committed:accepted,failed:failed+1,uncertain,stale,skipped}),accepted};
+  }
 }
