@@ -11,10 +11,10 @@ export function RevenueChart({
 }) {
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <div className="rounded-xl border border-white/10 bg-card p-5">
+      <div className="min-w-0 rounded-xl border border-white/10 bg-card p-5">
         <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-gold-bright">Revenue (last 6 months)</h2>
-        <div className="mt-4 h-64">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="relative mt-4 h-64 min-w-0">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0}>
             <LineChart data={revenue}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
               <XAxis dataKey="month" stroke="#8A8A8A" fontSize={12} />
@@ -29,10 +29,10 @@ export function RevenueChart({
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-card p-5">
+      <div className="min-w-0 rounded-xl border border-white/10 bg-card p-5">
         <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-gold-bright">Bookings by Status</h2>
-        <div className="mt-4 h-64">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="relative mt-4 h-64 min-w-0">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0}>
             <BarChart data={bookings}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
               <XAxis dataKey="status" stroke="#8A8A8A" fontSize={11} />

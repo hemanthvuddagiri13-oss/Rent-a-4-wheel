@@ -1,8 +1,9 @@
 name: Phase 6 candidate UI observations
 on:
   push:
-    branches: [codex/phase-6-ui-ux-staging]
-    paths: ['src/**', tests/phase6-baseline.test.ts, .github/workflows/phase6-candidate.yml]
+    branches: [main, codex/phase-6-ui-ux-staging]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,7 +23,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
       DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
-      PHASE6_BASELINE: 'true'
+      PHASE6_ACCEPTANCE: 'true'
       PHASE6_CANDIDATE: 'true'
       BASELINE_APPLICATION_SHA: ${{ github.sha }}
     steps:
@@ -38,7 +39,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run db:deploy
-      - run: npm test -- tests/phase6-baseline.test.ts
+      - run: npm test -- tests/phase6-acceptance.test.ts
       - name: Candidate observations, not staging acceptance
         if: always()
         uses: actions/upload-artifact@v4
