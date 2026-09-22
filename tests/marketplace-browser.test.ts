@@ -1,3 +1,4 @@
+import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { uploadBookingDocument } from "./helpers/booking-document";
 import { createDeviceSession } from "@/lib/device-sessions";
 import { beforeAll, afterAll, it, expect } from "vitest";
@@ -98,6 +99,7 @@ afterAll(async () => {
 });
 
 it("uses real pages and HTTP for host onboarding, listing, owner and calendar operations", async () => {
+  await fixtureJurisdiction(prisma);
   const user = await createTestCustomer(); users.push(user.id);
   const context = await login(user), page = await context.newPage();
   await page.goto(`${base}/host`); await page.getByRole("link", { name: "Start host application" }).click();
@@ -280,7 +282,21 @@ it("renders discovery and account pages at all requested widths with labeled for
     expect(await page.locator('input:not([type="hidden"]):not([type="checkbox"])').evaluateAll(elements => elements.filter(e => !(e as HTMLInputElement).labels?.length && !e.getAttribute("aria-label")).length)).toBe(0);
   }
   await context.close();
-}, 120000);
+  const vehicle=await createTestVehicle({make:"DiscoveryFixture",model:"Staging sedan"});vehicles.push(vehicle.id);
+  const visitor=await browser.newContext(),search=await visitor.newPage();
+  for(const width of [375,390,430,768,1024,1440]) {
+    await search.setViewportSize({width,height:1000});await search.goto(base+"/vehicles");
+    if(width<1024) await search.getByRole("button",{name:"Filters",exact:true}).click();
+    const filters=width<1024?search.getByRole("dialog"):search.getByRole("complementary",{name:"Vehicle filters"});
+    await filters.getByLabel("Make",{exact:true}).selectOption("DiscoveryFixture");
+    await filters.getByRole("button",{name:"Apply filters"}).click();await search.waitForURL(/make=DiscoveryFixture/);
+    await search.getByRole("navigation",{name:"Active filters"}).getByText("Make: DiscoveryFixture").waitFor();
+    const listing=search.locator("article").filter({has:search.getByRole("heading",{name:/DiscoveryFixture/})});
+    expect(await listing.count()).toBe(1);await listing.getByRole("link",{name:"View Details"}).click();await search.waitForURL(base+"/vehicles/"+vehicle.slug);
+    await search.getByRole("heading",{name:/DiscoveryFixture/}).first().waitFor();await screenshot(search,"visitor-vehicle",[width]);
+  }
+  await visitor.close();
+}, 180000);
 
 // Controlled local email boundary: real issuance, hashed PostgreSQL code, Auth.js verification and device session.
 it("customer signs in through the controlled email-code UI and consumes the code once", async()=>{

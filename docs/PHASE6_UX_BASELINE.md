@@ -4,7 +4,7 @@ Approved application: `82bfea4648d86386a1b4be51c76935512bacd0f1`. This audit pre
 
 ## Evidence status
 
-The source audit is recorded below. The first screenshot attempt correctly failed on an invalid zero-value synthetic payout fixture; the corrected fixture includes matching earnings and a payout item. The rerun is pending. Screenshot counts, measured overflow and visual-review findings will be added after the actual artifacts are inspected. This document does not claim visual or staging acceptance.
+The approved baseline succeeded with 378 captures; its exact evidence is recorded below. Initial fixture failures and subsequent candidate failures are retained in Actions history. Final acceptance is tracked separately from this before-implementation audit.
 
 The baseline uses a dedicated disposable PostgreSQL database, synthetic people/listings and explicitly synthetic jurisdiction approvals. No actual license, selfie, owner document, payment credential or provider payload is present. Private-media selectors are masked in screenshots. Browser sessions are real database-backed sessions; the baseline intentionally injects fixture session cookies for observation, not as proof of the email-code sign-in journey.
 
@@ -172,3 +172,26 @@ Measured document overflow occurred on account at 375; admin legal at 375/390; a
 Initial visual review of account, reservation, security, calendar, coupon, FAQ administration, financial cases, legal, maintenance, marketplace review, release controls and owner screens confirms clipped legal action labels, crowded account reservation cards, long unstructured trip forms, dense administrative navigation, empty tables whose message scrolls out of view, and inconsistent native versus designed form controls. Review of the remaining screenshot gallery is still pending; no complete visual acceptance is claimed.
 
 The shared-control correction starts with wrapping action labels, 44px controls, legible form text, restrained gold actions, neutral secondary actions, visible dialog-close focus and scrollable safe-area-aware drawers. Dedicated browser checks must verify these changes after implementation.
+
+## Correction mapping
+
+| Baseline priority / concern | Implementation |
+| --- | --- |
+| P1 brand and branch claims | Original marketplace metadata, exact tagline, search-led hero, independent-host wording, no default placeholder contact or unsupported discount/maintenance promise. |
+| P1 disconnected navigation | Current-role navbar, grouped admin and shared workspace navigation, current-route indicators. Authorization stays on destination/action. |
+| P1 upload approval confusion | Accessible camera/file inputs, local preview/retake, progress, explicit scan/review states and quarantine journey. |
+| P1 booking continuity | Persistent summary, compact progress, server expiration countdown, recovery links and preserved immutable checkout identity. |
+| P1 financial status | Announced errors, authoritative polling, deposit-required distinction, historical eligibility, neutral pending confirmation and compensation journey. |
+| P1 trip form | Role-specific pickup/return checklist, selected-photo progress, server-saved reports, timestamps/attribution and trip support. Retained previews intentionally use secure download alternative. |
+| P1 account grouping | Status-aware attention/active/upcoming/past grouping and reservation timeline. |
+| P1 worker reporting | Shared nested worker results for scheduling, reconciliation and historical audit; caught failures and all-review batches remain actionable. Per-account report errors do not substitute totals. |
+| P2 touch targets / labels | Shared 44px button targets, wrapping labels, readable pricing text and associated filter labels; exact-width axe audit. |
+| P2 inconsistent controls | Shared semantic tokens, workspace fields, neutral secondary/status styling and protected loading/retry feedback. |
+| P2 discovery / loading | Mobile sorting, active filters, clear reset, date errors, search-only loading boundary, account/booking loading and error boundaries. Detail rejection preserves non-streamed 404. |
+| P2 host action priorities | Server-derived return/vehicle-attention queues, pickup list and direct documents, messages, claims and earnings access. |
+| P2 admin navigation / statuses | Grouped mobile navigation, readable status presentation, existing reason/step-up safeguards and queue filters retained. |
+| P2 public host route | Current approved host and visible vehicle projection, published feedback only, no legal-name/contact/private-file projection. |
+
+Seven recorded candidate overflow observations were addressed through actual flex/grid minimums and wrapping: dashboard/chart containers at 1024, administrator dashboard at 375, vehicle edit heading/actions at 375, booking vehicle card at 768 and homepage hero at 375 (including separate STAFF/ADMIN observations). A subsequent exact-application audit at fead467447195d12b28da25ce06961ce75fc62a0 recorded 384 captures with zero document overflow, zero axe violations and zero browser console errors. Its separate zoom/focus checks failed; those failures are not counted as acceptance.
+
+See PHASE6_JOURNEYS.md for the complete 20-journey assertion map. Final exact-SHA verification and visual review remain mandatory before marking Phase 6 complete.

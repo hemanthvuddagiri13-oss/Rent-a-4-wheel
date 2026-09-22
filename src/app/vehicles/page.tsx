@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import VehicleSearchLoading from "@/components/vehicles/vehicle-search-loading";
 import { Button } from "@/components/ui/button";
 import type { Metadata } from "next";
 import { bookingInstant } from "@/lib/booking-time";
@@ -22,7 +24,11 @@ function parseDate(dateStr: string | undefined, timeStr: string | undefined, zon
   return bookingInstant(`${dateStr}T${timeStr || "10:00"}`, zone);
 }
 
-export default async function VehiclesPage({
+export default function VehiclesPage(props: {searchParams: Promise<Record<string,string|undefined>>}) {
+  return <Suspense fallback={<VehicleSearchLoading/>}><VehicleResults {...props}/></Suspense>;
+}
+
+async function VehicleResults({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
