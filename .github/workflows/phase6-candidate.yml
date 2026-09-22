@@ -1,0 +1,49 @@
+name: Phase 6 candidate UI observations
+on:
+  push:
+    branches: [codex/phase-6-ui-ux-staging]
+    paths: ['src/**', tests/phase6-baseline.test.ts, .github/workflows/phase6-candidate.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: phase6_baseline_test
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
+      PHASE6_BASELINE: 'true'
+      PHASE6_CANDIDATE: 'true'
+      BASELINE_APPLICATION_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify observed application SHA
+        run: test "$(git rev-parse HEAD)" = "$BASELINE_APPLICATION_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run db:deploy
+      - run: npm test -- tests/phase6-baseline.test.ts
+      - name: Candidate observations, not staging acceptance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase6-candidate-observations
+          path: test-artifacts/phase6/candidate
+          retention-days: 14
+          if-no-files-found: error

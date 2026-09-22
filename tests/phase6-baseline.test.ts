@@ -8,11 +8,11 @@ import {prisma,createTestCustomer,createTestHost,createTestVehicle,createTestRes
 
 const enabled=process.env.PHASE6_BASELINE==="true";
 const sizes=[[375,812],[390,844],[430,932],[768,1024],[1024,768],[1440,1000]];
-const base="http://127.0.0.1:3214",secret="isolated-phase6-baseline-only-session",output="test-artifacts/phase6/baseline";
+const base="http://127.0.0.1:3214",secret="isolated-phase6-baseline-only-session",output=process.env.PHASE6_CANDIDATE==="true"?"test-artifacts/phase6/candidate":"test-artifacts/phase6/baseline";
 async function pages(directory="src/app"):Promise<string[]>{const entries=await readdir(directory,{withFileTypes:true});return (await Promise.all(entries.map(e=>e.isDirectory()?pages(directory+"/"+e.name):e.name==="page.tsx"?[directory+"/"+e.name]:[]))).flat();}
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 
-it.skipIf(!enabled)("records the approved real application baseline by route, role and viewport without asserting visual acceptance",async()=>{
+it.skipIf(!enabled)("records the pinned real application by route, role and viewport without asserting visual acceptance",async()=>{
  const dbName=(await prisma.$queryRaw<Array<{name:string}>>`SELECT current_database() name`)[0].name;
  if(dbName!=="phase6_baseline_test")throw new Error("Use the dedicated disposable phase6_baseline_test database");
  await mkdir(output,{recursive:true});
@@ -67,7 +67,7 @@ it.skipIf(!enabled)("records the approved real application baseline by route, ro
    await page.close();
   }
   await writeFile(output+"/manifest.json",JSON.stringify({applicationSha:process.env.BASELINE_APPLICATION_SHA??"82bfea4648d86386a1b4be51c76935512bacd0f1",fixture:"isolated synthetic PostgreSQL data; no provider calls or private document media",sizes,captures},null,2));
-  const html='<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Phase 6 baseline</title><style>body{font:16px system-ui;background:#101214;color:#eee;margin:24px}a{color:#d8bd7c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}img{width:100%;height:auto;border:1px solid #555}article{min-width:0}h2{overflow-wrap:anywhere}</style><h1>Approved application baseline</h1><p>Synthetic staging data. Screenshots are observations, not acceptance.</p><a href="manifest.json">Route and viewport metrics</a><div class="grid">'+captures.map(c=>'<article><h2>'+escape(String(c.role)+" · "+String(c.route)+" · "+c.width+"×"+c.height)+'</h2><p>HTTP '+c.status+' · overflow '+c.overflow+' · small targets '+c.smallTargets+' · unlabelled fields '+c.unlabelledFields+'</p><a href="'+c.image+'"><img loading="lazy" alt="'+escape(String(c.name))+'" src="'+c.image+'"></a></article>').join("")+"</div></html>";
+  const html='<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Phase 6 UI observations</title><style>body{font:16px system-ui;background:#101214;color:#eee;margin:24px}a{color:#d8bd7c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}img{width:100%;height:auto;border:1px solid #555}article{min-width:0}h2{overflow-wrap:anywhere}</style><h1>Real application UI observations</h1><p>Synthetic staging data. Screenshots are observations, not acceptance.</p><a href="manifest.json">Route and viewport metrics</a><div class="grid">'+captures.map(c=>'<article><h2>'+escape(String(c.role)+" · "+String(c.route)+" · "+c.width+"×"+c.height)+'</h2><p>HTTP '+c.status+' · overflow '+c.overflow+' · small targets '+c.smallTargets+' · unlabelled fields '+c.unlabelledFields+'</p><a href="'+c.image+'"><img loading="lazy" alt="'+escape(String(c.name))+'" src="'+c.image+'"></a></article>').join("")+"</div></html>";
   await writeFile(output+"/index.html",html);
   expect(captures).toHaveLength(specs.length*sizes.length);console.info(JSON.stringify({baselineScreens:specs.length,captures:captures.length,overflow:captures.filter(c=>c.overflow).length,serverErrors:captures.filter(c=>Number(c.status)>=500).length}));
  }finally{await browser?.close();if(child&&child.exitCode===null){const stopped=new Promise(r=>child!.once("exit",r));child.kill();await Promise.race([stopped,new Promise(r=>setTimeout(r,3000))]);}await prisma.$disconnect();}
