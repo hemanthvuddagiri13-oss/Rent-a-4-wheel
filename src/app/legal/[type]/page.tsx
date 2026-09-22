@@ -45,7 +45,7 @@ export default async function LegalDocumentPage({ params }: { params: Promise<{ 
         <div className="mt-6 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-300">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
           <p>
-            This document is a placeholder pending review by a licensed Texas attorney. It does not yet reflect
+            This document is a placeholder pending qualified legal review for the applicable jurisdiction. It does not yet reflect
             final, binding legal terms.
           </p>
         </div>

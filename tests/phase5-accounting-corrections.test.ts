@@ -110,7 +110,10 @@ it.each(["HOST","GUEST","PLATFORM"] as const)("settles %s processing accrual aga
       return {id,amount:refund.amountCents,currency:refund.payment.currency,status:refund.status.toLowerCase()};
     });
     vi.spyOn(financeProvider,"financeStripe").mockReturnValue({paymentIntents:{retrieve},refunds:{retrieve:refundRetrieve},transfers:{retrieve:vi.fn()}} as unknown as Stripe);
-    await auditFinanceHistory();await auditFinanceHistory();
+    const audited=await auditFinanceHistory();await auditFinanceHistory();
+    expect(audited.worker.checked).toBeGreaterThan(0);
+    expect(audited.worker.children?.payments.committed).toBeGreaterThan(0);
+    expect(audited.worker.status).not.toBe("NO_WORK");
     const lines=await prisma.ledgerLine.findMany({where:{journal:{reservationId:f.r.id}}});
     const balance=(account:string)=>lines.filter(l=>l.account===account).reduce((n,l)=>n+l.debitCents-l.creditCents,0);
     expect(balance("PROCESSING_PAYABLE")).toBe(0);

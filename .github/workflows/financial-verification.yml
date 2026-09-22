@@ -1,7 +1,7 @@
 name: Financial verification
 on:
   push:
-    branches: [claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims, codex/phase-4-payouts-finance, codex/phase-5-production-readiness]
+    branches: [main, codex/phase-6-ui-ux-staging, claude/tender-goodall-6aobde, codex/phase-2-marketplace, codex/phase-3-communications-claims, codex/phase-4-payouts-finance, codex/phase-5-production-readiness]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -111,6 +111,11 @@ jobs:
           npm test
       - name: Full suite, second run
         run: npm test
+      - name: Accounting outcome regression (five consecutive runs)
+        run: |
+          for run in 1 2 3 4 5; do
+            npm test -- tests/accounting-outcomes.test.ts tests/finance-http.test.ts || exit 1
+          done
       - name: Phase 5 corrections and actual deployment upgrades (five consecutive runs)
         run: |
           for run in 1 2 3 4 5; do

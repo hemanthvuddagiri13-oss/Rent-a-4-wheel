@@ -17,7 +17,7 @@ export default async function AdminMaintenancePage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-3xl font-bold text-white">Maintenance</h1>
         <Button asChild>
           <Link href="/admin/maintenance/new">
@@ -26,7 +26,7 @@ export default async function AdminMaintenancePage() {
         </Button>
       </div>
 
-      <div className="mt-6 overflow-x-auto rounded-xl border border-white/10">
+      {records.length === 0 ? <p className="mt-6 rounded-xl border border-white/10 bg-card p-6 text-silver">No maintenance records logged yet.</p> : <div role="region" aria-label="Maintenance records" tabIndex={0} className="mt-6 overflow-x-auto rounded-xl border border-white/10">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="bg-surface/60 text-xs uppercase tracking-wide text-muted">
             <tr>
@@ -51,16 +51,10 @@ export default async function AdminMaintenancePage() {
                 <td className="px-4 py-3 text-muted">{r.vendor}</td>
               </tr>
             ))}
-            {records.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted">
-                  No maintenance records logged yet.
-                </td>
-              </tr>
-            )}
+
           </tbody>
         </table>
-      </div>
+      </div>}
     </div>
   );
 }

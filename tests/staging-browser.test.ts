@@ -28,7 +28,8 @@ async function login(role:"CUSTOMER"|"SUPER_ADMIN"="CUSTOMER"){
 it.skipIf(!enabled)("enforces staging configuration, real database sessions, secure responses and protected cron routes in the production build",async()=>{
  const {context,user,session}=await login(),page=await context.newPage();const response=await page.goto(base+"/account/security");
  expect(response?.status()).toBe(200);expect(response?.headers()["strict-transport-security"]).toContain("max-age=31536000");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["content-security-policy"]).not.toContain("unsafe-eval");expect(response?.headers()["cache-control"]).toContain("no-store");
- await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await page.getByText("Browser (this device)",{exact:true}).waitFor();await page.screenshot({path:"test-artifacts/staging/account-security.png",fullPage:true});
+ await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();// Streaming may briefly retain the incoming subtree alongside its placeholder. Require a unique settled device label; never select an arbitrary duplicate.
+ await expect.poll(()=>page.getByText("Browser (this device)",{exact:true}).count()).toBe(1);await page.getByText("Browser (this device)",{exact:true}).waitFor();await page.screenshot({path:"test-artifacts/staging/account-security.png",fullPage:true});
  await page.getByLabel("One-use security code",{exact:true}).fill("000000");await page.getByRole("button",{name:"Rotate session credential",exact:true}).click();await page.getByRole("status").filter({hasText:"A fresh security code is required."}).waitFor();
  expect((await(await context.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
  expect((await context.request.get(base+"/api/admin/operations")).status()).toBe(403);
@@ -51,3 +52,17 @@ it.skipIf(!enabled)("revokes the database device on Auth.js sign-out so replayin
  expect((await prisma.session.findUniqueOrThrow({where:{id:session.sid}})).revokedAt).not.toBeNull();
  await context.addCookies(original);expect((await context.request.get(base+"/api/account/security")).status()).toBe(401);await context.close();
 },60000);
+
+it.skipIf(!enabled)("public production pages hydrate under fresh per-request CSP nonces",async()=>{
+ const context=await browser.newContext({ignoreHTTPSErrors:true}),page=await context.newPage();const errors:string[]=[];
+ page.on("pageerror",e=>errors.push(e.name));page.on("console",m=>{if(m.type()==="error")errors.push(m.text().replace(/nonce-[^' ]+/g,"nonce-[redacted]").replace(/https?:\/\/[^\s]+/g,"[URL]"));});
+ try {
+  const first=await page.goto(base+"/");await page.getByRole("button",{name:"SUV",exact:true}).click();
+  await expect.poll(()=>page.getByRole("button",{name:"SUV",exact:true}).getAttribute("aria-pressed")).toBe("true");
+  const second=await page.reload();await page.getByRole("button",{name:"Sedan",exact:true}).click();
+  await expect.poll(()=>page.getByRole("button",{name:"Sedan",exact:true}).getAttribute("aria-pressed")).toBe("true");
+  const nonce=(header:string|undefined)=>header?.match(/'nonce-([^']+)'/)?.[1];
+  expect(nonce(first?.headers()["content-security-policy"])).toBeTruthy();expect(nonce(first?.headers()["content-security-policy"])).not.toBe(nonce(second?.headers()["content-security-policy"]));
+  expect(errors).toEqual([]);
+ }finally{await context.close();}
+},90000);

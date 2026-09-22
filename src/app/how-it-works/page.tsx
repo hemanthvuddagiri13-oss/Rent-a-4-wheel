@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 const steps = [
   { icon: CarFront, title: "Choose Your Car", desc: "Browse vehicles offered by independent hosts in available markets. Filter by dates, category, and price to find the right fit." },
-  { icon: ListChecks, title: "Select Your Dates", desc: "Pick your pickup and return dates. Renting for a week or a month? We'll automatically apply the best weekly or monthly rate." },
+  { icon: ListChecks, title: "Select Your Dates", desc: "Choose pickup and return dates, then review the available rate and itemized quote before booking." },
   { icon: FileCheck2, title: "Verify Your Information", desc: "Create an account, provide your driver information, and securely upload your license — front and back." },
   { icon: CreditCard, title: "Pay & Reserve", desc: "Review a fully transparent price breakdown — rental, taxes, fees, and deposit — then complete secure checkout." },
   { icon: KeyRound, title: "Pick Up & Drive", desc: "Arrange pickup with your host, verify the handoff and record the vehicle condition before starting your trip." },

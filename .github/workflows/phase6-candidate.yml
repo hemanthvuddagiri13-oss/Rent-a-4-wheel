@@ -1,0 +1,71 @@
+name: Phase 6 candidate UI observations
+on:
+  push:
+    branches: [main, codex/phase-6-ui-ux-staging]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: phase6_baseline_test
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/phase6_baseline_test
+      PHASE6_ACCEPTANCE: 'true'
+      PHASE6_CANDIDATE: 'true'
+      BASELINE_APPLICATION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify observed application SHA
+        run: test "$(git rev-parse HEAD)" = "$BASELINE_APPLICATION_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run db:deploy
+      - run: npm run build
+      - name: Disposable staging TLS
+        env:
+          CI_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: node scripts/configure-ci-tls.mjs
+      - name: Measured production-build Lighthouse
+        run: PHASE6_LIGHTHOUSE=true npm test -- tests/phase6-lighthouse.test.ts
+      - name: Six-width accessibility and layout audit
+        if: ${{ !cancelled() }}
+        run: npm test -- tests/phase6-acceptance.test.ts
+      - name: Approved sanitized comparison baseline
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: phase6-approved-baseline
+          run-id: 35692507729
+          github-token: ${{ github.token }}
+          path: test-artifacts/phase6/before
+      - name: Build browsable before and after gallery
+        if: ${{ !cancelled() }}
+        run: node scripts/phase6-gallery.mjs
+      - name: Candidate observations, not staging acceptance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase6-candidate-observations
+          path: test-artifacts/phase6
+          retention-days: 14
+          if-no-files-found: error

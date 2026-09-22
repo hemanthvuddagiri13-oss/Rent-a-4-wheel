@@ -1,0 +1,1 @@
+export default function Loading() { return <div role="status" aria-live="polite" className="mx-auto max-w-7xl px-4 py-12"><p className="text-silver">Loading your account…</p><div aria-hidden="true" className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">{[1,2,3].map(id=><div key={id} className="h-48 rounded-xl bg-white/5 motion-safe:animate-pulse" />)}</div></div>; }

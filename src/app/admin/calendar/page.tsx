@@ -66,7 +66,7 @@ export default async function AdminCalendarPage() {
         ))}
       </div>
 
-      <div className="mt-6 overflow-x-auto rounded-xl border border-white/10">
+      <div role="region" aria-label="Reservation calendar" tabIndex={0} className="mt-6 overflow-x-auto rounded-xl border border-white/10">
         <table className="border-collapse text-xs">
           <thead>
             <tr>

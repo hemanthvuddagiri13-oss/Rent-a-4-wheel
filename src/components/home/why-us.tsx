@@ -1,12 +1,12 @@
 import { BadgeDollarSign, CalendarRange, Headset, MapPinned, Sparkles, Zap } from "lucide-react";
 
 const items = [
-  { icon: BadgeDollarSign, title: "Affordable Pricing", desc: "Transparent daily, weekly, and monthly rates with no hidden fees." },
+  { icon: BadgeDollarSign, title: "Itemized trip costs", desc: "Review rental costs, extras, fees, protection, taxes and any deposit separately before payment." },
   { icon: CalendarRange, title: "Daily / Weekly / Monthly", desc: "Flexible rental lengths that fit your schedule and budget." },
-  { icon: Sparkles, title: "Clean & Maintained Vehicles", desc: "Every vehicle is inspected, cleaned, and maintenance-tracked." },
-  { icon: Zap, title: "Fast Booking", desc: "Reserve your car online in minutes — no waiting in line." },
-  { icon: MapPinned, title: "Flexible Pickup", desc: "Convenient pickup options across the Dallas area." },
-  { icon: Headset, title: "Customer Support", desc: "Real support when you need it, before and during your rental." },
+  { icon: Sparkles, title: "Independent hosts", desc: "Hosts store, maintain, deliver and retrieve their vehicles, including the physical handoff." },
+  { icon: Zap, title: "Booking in one place", desc: "Manage dates, documents, agreements and payment status through your account." },
+  { icon: MapPinned, title: "Plan your pickup", desc: "Review the listing location and coordinate the available handoff options with your host." },
+  { icon: Headset, title: "Customer Support", desc: "Keep booking questions and support requests connected to your reservation." },
 ];
 
 export function WhyUs() {

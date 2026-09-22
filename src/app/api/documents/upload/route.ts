@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
       rawBuffer: buffer,
       declaredMimeType: file.type,
     });
-    return NextResponse.json({ id: document.id });
+    return NextResponse.json({ id: document.id, status: document.status, malwareScanStatus: document.malwareScanStatus }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (err) {
     if (err instanceof InvalidDocumentError) {
       return NextResponse.json({ error: err.message }, { status: 400 });

@@ -24,7 +24,7 @@ const SheetOverlay = React.forwardRef<
 SheetOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const sheetVariants = cva(
-  "fixed z-50 gap-4 border-white/10 bg-[#0a0a0a] p-6 shadow-2xl transition ease-in-out",
+  "fixed z-50 gap-4 max-h-dvh overflow-y-auto overscroll-contain border-white/10 bg-surface p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] shadow-2xl transition ease-in-out",
   {
     variants: {
       side: {
@@ -48,7 +48,7 @@ const SheetContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Co
       <SheetOverlay />
       <DialogPrimitive.Content ref={ref} className={cn(sheetVariants({ side }), className)} {...props}>
         {children}
-        <DialogPrimitive.Close className="absolute right-4 top-4 text-muted hover:text-gold">
+        <DialogPrimitive.Close className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-md text-silver hover:text-gold gold-ring-focus">
           <X className="h-5 w-5" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>

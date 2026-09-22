@@ -7,24 +7,28 @@ import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
-const LOCATIONS = ["Dallas", "Plano", "Irving", "Fort Worth", "Arlington"];
-
 function defaultDate(daysFromNow: number) {
   const d = new Date();
   d.setDate(d.getDate() + daysFromNow);
   return format(d, "yyyy-MM-dd");
 }
 
-export function SearchWidget() {
+export function SearchWidget({ locations = [], initial = {} }: { locations?: string[]; initial?: Record<string, string | undefined> }) {
   const router = useRouter();
-  const [location, setLocation] = useState(LOCATIONS[0]);
-  const [pickupDate, setPickupDate] = useState(defaultDate(1));
-  const [pickupTime, setPickupTime] = useState("10:00");
-  const [returnDate, setReturnDate] = useState(defaultDate(4));
-  const [returnTime, setReturnTime] = useState("10:00");
+  const [error, setError] = useState("");
+  const [location, setLocation] = useState(initial.location ?? "");
+  const [pickupDate, setPickupDate] = useState(initial.pickupDate ?? defaultDate(1));
+  const [pickupTime, setPickupTime] = useState(initial.pickupTime ?? "10:00");
+  const [returnDate, setReturnDate] = useState(initial.returnDate ?? defaultDate(4));
+  const [returnTime, setReturnTime] = useState(initial.returnTime ?? "10:00");
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (`${returnDate}T${returnTime}` <= `${pickupDate}T${pickupTime}`) {
+      setError("Choose a return date and time after pickup.");
+      return;
+    }
+    setError("");
     const params = new URLSearchParams({
       location,
       pickupDate,
@@ -32,6 +36,9 @@ export function SearchWidget() {
       returnDate,
       returnTime,
     });
+    for (const name of ["category", "make", "transmission", "seats", "priceMin", "priceMax", "sort"]) {
+      if (initial[name]) params.set(name, initial[name]!);
+    }
     router.push(`/vehicles?${params.toString()}`);
   }
 
@@ -44,7 +51,7 @@ export function SearchWidget() {
         <div className="lg:col-span-1">
           <Label htmlFor="pickup-location">Pickup Location</Label>
           <input id="pickup-location" list="pickup-locations" value={location} onChange={e => setLocation(e.target.value)} maxLength={200} placeholder="City or area" className="workspace-input mt-1.5" />
-          <datalist id="pickup-locations">{LOCATIONS.map(loc => <option key={loc} value={loc} />)}</datalist>
+          <datalist id="pickup-locations">{locations.map(loc => <option key={loc} value={loc} />)}</datalist>
         </div>
 
         <div>
@@ -56,7 +63,7 @@ export function SearchWidget() {
             value={pickupDate}
             min={defaultDate(0)}
             onChange={(e) => setPickupDate(e.target.value)}
-            className="mt-1.5 flex h-11 w-full rounded-md border border-white/15 bg-card px-3 text-sm text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
+            className="mt-1.5 flex h-11 min-w-0 w-full rounded-md border border-white/15 bg-card px-3 text-base text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
           />
         </div>
 
@@ -68,7 +75,7 @@ export function SearchWidget() {
             required
             value={pickupTime}
             onChange={(e) => setPickupTime(e.target.value)}
-            className="mt-1.5 flex h-11 w-full rounded-md border border-white/15 bg-card px-3 text-sm text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
+            className="mt-1.5 flex h-11 min-w-0 w-full rounded-md border border-white/15 bg-card px-3 text-base text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
           />
         </div>
 
@@ -81,7 +88,7 @@ export function SearchWidget() {
             value={returnDate}
             min={pickupDate}
             onChange={(e) => setReturnDate(e.target.value)}
-            className="mt-1.5 flex h-11 w-full rounded-md border border-white/15 bg-card px-3 text-sm text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
+            className="mt-1.5 flex h-11 min-w-0 w-full rounded-md border border-white/15 bg-card px-3 text-base text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
           />
         </div>
 
@@ -93,11 +100,12 @@ export function SearchWidget() {
             required
             value={returnTime}
             onChange={(e) => setReturnTime(e.target.value)}
-            className="mt-1.5 flex h-11 w-full rounded-md border border-white/15 bg-card px-3 text-sm text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
+            className="mt-1.5 flex h-11 min-w-0 w-full rounded-md border border-white/15 bg-card px-3 text-base text-white focus-visible:outline-none focus-visible:border-gold focus-visible:ring-1 focus-visible:ring-gold"
           />
         </div>
       </div>
 
+      {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
       <Button type="submit" size="lg" className="mt-5 w-full text-base">
         <Search className="h-5 w-5" />
         SEARCH VEHICLES

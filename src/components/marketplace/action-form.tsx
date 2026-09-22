@@ -21,6 +21,7 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
   const [pending, setPending] = useState(false), [message, setMessage] = useState(""), [failed, setFailed] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setPending(true); setMessage("");
+    try {
     const form = new FormData(event.currentTarget);
     const data: Record<string, unknown> = { ...Object.fromEntries(form.entries()), ...values, ...(action ? { action } : {}) };
     for (const field of fields) {
@@ -32,7 +33,6 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
       if (field.name === "features") data.features = String(data.features || "").split(",").map(s => s.trim()).filter(Boolean);
     }
     if (multipart) for (const [key, value] of Object.entries(values)) form.set(key, String(value));
-    try {
       const response = await fetch(endpoint, { method: "POST", ...(multipart ? {} : { headers: { "Content-Type": "application/json" } }), body: multipart ? form : JSON.stringify(data) });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "Unable to complete this action.");
@@ -51,7 +51,7 @@ export function ActionForm({ endpoint = "/api/host/workspace", action, fields = 
       </div>)}
       {children}
     </fieldset>
-    <p role={failed ? "alert" : "status"} className={failed ? "text-sm text-red-300" : "text-sm text-gold-bright"}>{message}</p>
-    <button disabled={pending} className="min-h-11 rounded-lg bg-gold px-5 py-3 font-semibold text-black disabled:opacity-50">{pending ? "Saving…" : label}</button>
+    <p role={failed ? "alert" : "status"} className={failed ? "text-sm text-red-300" : "text-sm text-silver"}>{message}</p>
+    <button disabled={pending || !hydrated} className="min-h-11 max-w-full whitespace-normal break-words rounded-lg bg-gold px-5 py-3 font-semibold text-black disabled:opacity-50">{pending ? "Saving…" : label}</button>
   </form>;
 }

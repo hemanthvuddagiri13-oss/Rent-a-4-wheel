@@ -12,7 +12,7 @@ export function FinalCta() {
         <h2 className="font-display text-4xl font-bold uppercase tracking-tight text-white sm:text-5xl">
           Ready to <span className="text-gradient-gold">Hit the Road?</span>
         </h2>
-        <p className="mt-4 text-lg text-muted">Find your car and reserve it in minutes.</p>
+        <p className="mt-4 text-lg text-muted">Explore available cars and plan your next trip.</p>
         <Button asChild size="lg" className="mt-8 text-base">
           <Link href="/vehicles">Book Your Car</Link>
         </Button>

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { PublicReviews } from "@/components/marketplace/public-reviews";
 import { ActionForm } from "@/components/marketplace/action-form";
 import type { Metadata } from "next";
@@ -129,6 +130,7 @@ export default async function VehicleDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
+      {vehicle.hostId && <section className="my-8 rounded-xl border border-white/10 p-5"><h2 className="text-xl">Your independent host</h2><p className="mt-2 text-silver">Your host coordinates vehicle storage, maintenance and handoff. Message them with pickup or delivery questions.</p><Link className="mt-3 inline-flex min-h-11 items-center underline" href={`/hosts/${vehicle.hostId}`}>View host profile and vehicles</Link></section>}
       <PublicReviews vehicleId={vehicle.id} hostId={vehicle.hostId} />
       <section className="my-8 rounded-xl border border-white/10 p-5"><h2 className="mb-4 text-xl">Questions before booking?</h2><ActionForm endpoint="/api/community" action="conversation" values={{vehicleId:vehicle.id}} label="Ask the host" redirectTo="/connect/conversations/:id" /></section>
       <MobileStickyCta dailyRateCents={vehicle.dailyRateCents} />

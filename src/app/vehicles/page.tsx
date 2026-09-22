@@ -1,15 +1,19 @@
+import Link from "next/link";
+import { Suspense } from "react";
+import VehicleSearchLoading from "@/components/vehicles/vehicle-search-loading";
+import { Button } from "@/components/ui/button";
 import type { Metadata } from "next";
 import { bookingInstant } from "@/lib/booking-time";
 import { getSiteSettings } from "@/lib/settings";
 import { SearchWidget } from "@/components/home/search-widget";
-import { VehicleFilters, SortSelect } from "@/components/vehicles/vehicle-filters";
+import { VehicleFilters, SortSelect, ActiveFilterChips } from "@/components/vehicles/vehicle-filters";
 import { VehicleCard } from "@/components/vehicles/vehicle-card";
-import { searchVehicles, getDistinctMakes, type VehicleSearchFilters } from "@/lib/data/vehicles";
+import { searchVehicles, getDistinctMakes, getDistinctLocations, type VehicleSearchFilters } from "@/lib/data/vehicles";
 
 export const metadata: Metadata = {
   title: "Browse Vehicles",
   description:
-    "Browse our full fleet of sedans, SUVs, luxury cars, and trucks available for daily, weekly, and monthly rental in Dallas, TX.",
+    "Explore available cars from independent hosts. Choose dates and compare rental options.",
   alternates: { canonical: "/vehicles" },
 };
 
@@ -20,7 +24,11 @@ function parseDate(dateStr: string | undefined, timeStr: string | undefined, zon
   return bookingInstant(`${dateStr}T${timeStr || "10:00"}`, zone);
 }
 
-export default async function VehiclesPage({
+export default function VehiclesPage(props: {searchParams: Promise<Record<string,string|undefined>>}) {
+  return <Suspense fallback={<VehicleSearchLoading/>}><VehicleResults {...props}/></Suspense>;
+}
+
+async function VehicleResults({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
@@ -42,13 +50,13 @@ export default async function VehiclesPage({
     sort: (sp.sort as VehicleSearchFilters["sort"]) ?? "recommended",
   };
 
-  const [vehicles, makes] = await Promise.all([dateError ? Promise.resolve([]) : searchVehicles(filters), getDistinctMakes()]);
+  const [vehicles, makes, locations] = await Promise.all([dateError ? Promise.resolve([]) : searchVehicles(filters), getDistinctMakes(), getDistinctLocations()]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
       <div className="mb-8">
         <h1 className="font-display text-3xl font-bold uppercase tracking-tight text-white sm:text-4xl">
-          Browse Our Fleet
+          Find your next car
         </h1>
         <p className="mt-2 text-muted">
           {filters.pickupAt && filters.returnAt
@@ -57,11 +65,12 @@ export default async function VehiclesPage({
         </p>
       </div>
 
-      <div className="mb-8"><SearchWidget /><p className="mt-2 text-xs text-silver">Times are in {zone}.</p>{dateError && <p role="alert" className="mt-3 text-red-300">{dateError}</p>}</div>
+      <div className="mb-8"><SearchWidget key={JSON.stringify(sp)} locations={locations} initial={sp} /><p className="mt-2 text-xs text-silver">Times are in {zone}.</p>{dateError && <p role="alert" className="mt-3 text-red-300">{dateError}</p>}</div>
       <div className="flex flex-col gap-8 lg:flex-row">
         <VehicleFilters makes={makes} />
 
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
+          <ActiveFilterChips />
           <div className="mb-6 hidden items-center justify-between lg:flex">
             <p className="text-sm text-muted">{vehicles.length} vehicles found</p>
             <SortSelect />
@@ -71,13 +80,14 @@ export default async function VehiclesPage({
             <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-card py-24 text-center">
               <p className="font-display text-xl font-semibold text-white">No vehicles match your search</p>
               <p className="mt-2 max-w-sm text-sm text-muted">
-                Try adjusting your dates or filters, or view our full fleet.
+                Try different dates or clear your filters. Vehicles in unavailable operating states cannot be booked.
               </p>
+              <Button asChild variant="outline" className="mt-5"><Link href="/vehicles">Clear dates and filters</Link></Button>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3">
               {vehicles.map((vehicle) => (
-                <VehicleCard key={vehicle.id} vehicle={vehicle} />
+                <VehicleCard key={vehicle.id} vehicle={vehicle} headingLevel={2} />
               ))}
             </div>
           )}

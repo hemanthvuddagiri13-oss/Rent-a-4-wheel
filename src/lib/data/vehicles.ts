@@ -152,3 +152,14 @@ export async function getDistinctMakes(): Promise<string[]> {
     return [];
   }
 }
+
+/** Suggestions reflect only inventory currently visible under jurisdiction authority. */
+export async function getDistinctLocations(): Promise<string[]> {
+  try {
+    const rows = await prisma.vehicle.findMany({
+      where: { ...publicInventory, jurisdictionCode: { in: await visibleJurisdictions() } },
+      select: { location: true }, distinct: ["location"], orderBy: { location: "asc" },
+    });
+    return rows.map(row => row.location).filter(Boolean);
+  } catch { return []; }
+}

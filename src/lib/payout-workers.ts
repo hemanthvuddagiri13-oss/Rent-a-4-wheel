@@ -8,6 +8,7 @@ import { financeStripe } from "@/lib/finance-provider";
 import { withReservationLock } from "@/lib/financial-locks";
 import { retainProcessingFee } from "@/lib/processing-fees";
 import { accountReservation } from "@/lib/finance-ledger";
+import { workerResult } from "@/lib/worker-result";
 
 export function nextPayoutCutoff(schedule:string,zone:string,now=new Date()){
  let date=Temporal.Instant.from(now.toISOString()).toZonedDateTimeISO(zone).toPlainDate();
@@ -25,35 +26,44 @@ export async function recoverPayoutOperations(){
  return {processed,pending};
 }
 export async function schedulePayouts(){
- const hosts=await prisma.connectAccount.findMany({where:{active:true,schedule:{not:"MANUAL"},nextRunAt:{lte:new Date()}},orderBy:{nextRunAt:"asc"},take:25});let planned=0;
+ const hosts=await prisma.connectAccount.findMany({where:{active:true,schedule:{not:"MANUAL"},nextRunAt:{lte:new Date()}},orderBy:{nextRunAt:"asc"},take:25});let planned=0,review=0,skipped=0,failed=0;
  for(const a of hosts)try{
-  const claimed=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+a.hostId})`;const rule=await selectedRule(tx,"PAYOUT",[{scope:"HOST",scopeId:a.hostId},{scope:"DEFAULT",scopeId:"*"}]);const defer=async()=>{await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:new Date(Date.now()+15*60000)}});await financeIssue(tx,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Schedule or threshold needs current business approval; work deferred without moving money"});return false;};if(!rule)return defer();const p=payoutSchema.parse(rule.config);if(!p.allowedSchedules.includes(a.schedule as "MANUAL")||a.minimumCents<p.minimumCents)return defer();await tx.financeIssue.updateMany({where:{key:"schedule:"+a.hostId,status:{not:"RESOLVED"}},data:{status:"RESOLVED",resolution:"Current immutable business rule confirms the selected schedule and threshold"}});const changed=await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:nextPayoutCutoff(a.schedule,a.timezone)}});if(changed.count)await tx.outboxMessage.upsert({where:{deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`},create:{type:"finance_schedule",deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`,payload:{hostId:a.hostId,cutoff:new Date().toISOString()}},update:{}});return Boolean(changed.count);});
-  if(claimed)planned++;
- }catch{await financeIssue(prisma,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Scheduled payout remains pending; operator review required"});}
- return {planned};
+  const claimed=await prisma.$transaction(async tx=>{await tx.$queryRaw`SELECT financial_guard_xact(${"host-finance:"+a.hostId})`;const rule=await selectedRule(tx,"PAYOUT",[{scope:"HOST",scopeId:a.hostId},{scope:"DEFAULT",scopeId:"*"}]);const defer=async()=>{await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:new Date(Date.now()+15*60000)}});await financeIssue(tx,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Schedule or threshold needs current business approval; work deferred without moving money"});return "review" as const;};if(!rule)return defer();const p=payoutSchema.parse(rule.config);if(!p.allowedSchedules.includes(a.schedule as "MANUAL")||a.minimumCents<p.minimumCents)return defer();await tx.financeIssue.updateMany({where:{key:"schedule:"+a.hostId,status:{not:"RESOLVED"}},data:{status:"RESOLVED",resolution:"Current immutable business rule confirms the selected schedule and threshold"}});const changed=await tx.connectAccount.updateMany({where:{hostId:a.hostId,nextRunAt:a.nextRunAt},data:{nextRunAt:nextPayoutCutoff(a.schedule,a.timezone)}});if(changed.count)await tx.outboxMessage.upsert({where:{deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`},create:{type:"finance_schedule",deliveryKey:`finance-schedule:${a.hostId}:${a.nextRunAt.toISOString()}`,payload:{hostId:a.hostId,cutoff:new Date().toISOString()}},update:{}});return changed.count ? "scheduled" as const : "skipped" as const;});
+  if(claimed==="scheduled")planned++;else if(claimed==="review")review++;else skipped++;
+ }catch{failed++;await financeIssue(prisma,{key:"schedule:"+a.hostId,kind:"SCHEDULE_REVIEW",hostId:a.hostId,reason:"Scheduled payout remains pending; operator review required"});}
+ return {planned,worker:workerResult({attempted:hosts.length,committed:planned,review,skipped,failed,actionable:review+failed})};
 }
 export async function reconcileFinance(){
  const metrics=await financeBacklogAlerts();const accounting=await reconcileAccounting();const rows=await prisma.financeIssue.findMany({where:{status:{not:"RESOLVED"}},orderBy:[{checkedAt:{sort:"asc",nulls:"first"}},{createdAt:"asc"}],take:25});
- let checked=0;for(const issue of rows){await prisma.financeIssue.update({where:{id:issue.id},data:{checkedAt:new Date()}});if(issue.operationId){const op=await prisma.financialOperation.findUnique({where:{id:issue.operationId}});if(op?.providerId&&op.state!=="REVIEW")try{await executeFinanceOperation(op);}catch{/* Remains visible, never silently written off. */}}
-  if(issue.kind==="UNMATCHED_PROVIDER_OBJECT"){const providerId=(issue.evidence as {providerId?:string})?.providerId,owner=providerId?await prisma.financeObject.findUnique({where:{providerId}}):null;if(owner){const op=await prisma.financialOperation.findUniqueOrThrow({where:{id:owner.operationId}});try{await executeFinanceOperation(op);await prisma.financeIssue.update({where:{id:issue.id},data:{status:"RESOLVED",resolution:"Reconciled against immutable owned operation "+op.id}});await prisma.auditLog.create({data:{action:"finance.unmatched.reconciled",entityType:"FinanceIssue",entityId:issue.id,metadata:{operationId:op.id,providerId}}});}catch{/* Still unexplained; retain the hold. */}}}
+ let checked=0,committed=0,review=0,failed=0;for(const issue of rows){let operationFailed=false;await prisma.financeIssue.update({where:{id:issue.id},data:{checkedAt:new Date()}});if(issue.operationId){const op=await prisma.financialOperation.findUnique({where:{id:issue.operationId}});if(op?.providerId&&op.state!=="REVIEW")try{await executeFinanceOperation(op);}catch{operationFailed=true;/* Remains visible, never silently written off. */}}
+  if(issue.kind==="UNMATCHED_PROVIDER_OBJECT"){const providerId=(issue.evidence as {providerId?:string})?.providerId,owner=providerId?await prisma.financeObject.findUnique({where:{providerId}}):null;if(owner){const op=await prisma.financialOperation.findUniqueOrThrow({where:{id:owner.operationId}});try{await executeFinanceOperation(op);await prisma.financeIssue.update({where:{id:issue.id},data:{status:"RESOLVED",resolution:"Reconciled against immutable owned operation "+op.id}});await prisma.auditLog.create({data:{action:"finance.unmatched.reconciled",entityType:"FinanceIssue",entityId:issue.id,metadata:{operationId:op.id,providerId}}});}catch{operationFailed=true;/* Still unexplained; retain the hold. */}}}
+  const current=await prisma.financeIssue.findUniqueOrThrow({where:{id:issue.id},select:{status:true}});
+  if(operationFailed)failed++;else if(current.status==="RESOLVED")committed++;else review++;
   checked++;}
  const mismatches=await prisma.$queryRaw<Array<{id:string}>>`SELECT j.id FROM "LedgerJournal" j LEFT JOIN "LedgerLine" l ON l."journalId"=j.id GROUP BY j.id HAVING COALESCE(sum(l."debitCents"::bigint-l."creditCents"::bigint),0)<>0 OR count(l.id)<2 LIMIT 25`;
  for(const j of mismatches)await financeIssue(prisma,{key:"imbalance:"+j.id,kind:"LEDGER_IMBALANCE",reason:"Ledger invariant violation requires immediate investigation",evidence:{journalId:j.id}});
- return {...accounting,checked,imbalances:mismatches.length,metrics};
+ return {...accounting,checked,imbalances:mismatches.length,metrics,worker:workerResult({}, {accounting:accounting.worker,issues:workerResult({attempted:checked,checked,committed,review,failed,actionable:review+failed}),ledger:workerResult({attempted:mismatches.length,checked:mismatches.length,review:mismatches.length,actionable:mismatches.length})})};
 }
 export async function auditFinanceHistory(){
+ let checked=0,actionable=0,failed=0;
  const stripe=financeStripe(),rows=await prisma.reservation.findMany({where:{payments:{some:{status:"SUCCEEDED",stripePaymentIntentId:{not:null}}}},orderBy:[{financialCheckedAt:{sort:"asc",nulls:"first"}},{id:"asc"}],take:10,include:{payments:true,refunds:true}});
  for(const r of rows){await prisma.reservation.update({where:{id:r.id},data:{financialCheckedAt:new Date()}});for(const p of r.payments.filter(p=>p.stripePaymentIntentId)){
+  let difference=false;checked++;try{
   const intent=await stripe.paymentIntents.retrieve(p.stripePaymentIntentId!,{expand:["latest_charge.balance_transaction"]});
-  if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded"))await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});
+  if((p.type==="DEPOSIT_CAPTURE"?intent.amount_received:intent.amount)!==p.amountCents||intent.currency!==p.currency||p.status==="SUCCEEDED"&&!(p.type==="DEPOSIT_AUTH"?["requires_capture","canceled","succeeded"].includes(intent.status):intent.status==="succeeded")){difference=true;await financeIssue(prisma,{key:"provider-payment:"+p.id,kind:"PROVIDER_PAYMENT_DIFFERENCE",reservationId:r.id,reason:"Provider payment amount/currency/status differs from internal evidence",evidence:{paymentId:p.id,providerId:intent.id}});}
   const charge=typeof intent.latest_charge==="object"?intent.latest_charge:null,balance=charge&&typeof charge.balance_transaction==="object"?charge.balance_transaction:null;
-  if(balance&&p.status==="SUCCEEDED"&&p.type!=="DEPOSIT_AUTH"){await retainProcessingFee(p.id,balance);await withReservationLock(r.id,tx=>accountReservation(tx,r.id));}
+  if(balance&&p.status==="SUCCEEDED"&&p.type!=="DEPOSIT_AUTH"){await retainProcessingFee(p.id,balance);const accounting=await withReservationLock(r.id,tx=>accountReservation(tx,r.id));if(accounting.status==="REVIEW")difference=true;}
+  if(difference)actionable++;
+  }catch{failed++;/* Report unavailable verification; do not alter financial eligibility or provider state. */}
  }
  for(const refund of r.refunds.filter(f=>f.stripeRefundId)){
+  let difference=false;checked++;try{
   const actual=await stripe.refunds.retrieve(refund.stripeRefundId!);
-  if(actual.amount!==refund.amountCents||actual.currency!==(r.payments.find(p=>p.id===refund.paymentId)?.currency??"usd")||refund.status==="SUCCEEDED"&&actual.status!=="succeeded")await financeIssue(prisma,{key:"provider-refund:"+refund.id,kind:"PROVIDER_REFUND_DIFFERENCE",reservationId:r.id,reason:"Provider refund differs from retained amount, currency or terminal status",evidence:{refundId:refund.id,providerId:actual.id}});
+  if(actual.amount!==refund.amountCents||actual.currency!==(r.payments.find(p=>p.id===refund.paymentId)?.currency??"usd")||refund.status==="SUCCEEDED"&&actual.status!=="succeeded"){difference=true;await financeIssue(prisma,{key:"provider-refund:"+refund.id,kind:"PROVIDER_REFUND_DIFFERENCE",reservationId:r.id,reason:"Provider refund differs from retained amount, currency or terminal status",evidence:{refundId:refund.id,providerId:actual.id}});}
+  if(difference)actionable++;
+  }catch{failed++;/* Report unavailable verification; do not alter financial eligibility or provider state. */}
  }
- }const payouts=await auditPayoutHistory();return {checked:rows.length,payouts};
+ }const payouts=await auditPayoutHistory();return {checked:rows.length,payouts,worker:workerResult({}, {payments:workerResult({attempted:checked,checked,actionable:actionable+failed,failed,committed:checked-actionable-failed,review:actionable}),payouts:payouts.worker})};
 }
 export const payoutWorkers={accounting:reconcileAccounting,recovery:recoverPayoutOperations,schedule:schedulePayouts,reconciliation:reconcileFinance,"historical-audit":auditFinanceHistory};
 
@@ -87,8 +97,9 @@ export async function financeBacklogAlerts(){
 export async function auditPayoutHistory(){
  // Separate bounded historical work; urgent recovery never waits behind it.
  const rows=await prisma.financialOperation.findMany({where:{kind:{in:["FINANCE_TRANSFER","FINANCE_PAYOUT","FINANCE_REVERSAL"]},state:"OBSERVED",providerId:{not:null}},orderBy:[{updatedAt:"asc"},{id:"asc"}],take:10});
- for(const op of rows)try{await executeFinanceOperation(op);}catch{
+ let committed=0,failed=0;
+ for(const op of rows)try{await executeFinanceOperation(op);committed++;}catch{failed++;
   await financeIssue(prisma,{key:"historical-operation:"+op.id,kind:"FINANCE_PROVIDER_DIFFERENCE",operationId:op.id,hostId:(op.payload as {hostId:string}).hostId,reason:"Historical provider object differs or cannot be reconciled; preserve the financial hold"});
  }
- return {checked:rows.length};
+ return {checked:rows.length,worker:workerResult({attempted:rows.length,checked:rows.length,committed,failed,actionable:failed})};
 }

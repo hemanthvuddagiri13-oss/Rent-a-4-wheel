@@ -2,9 +2,9 @@ import { CalendarClock, HeadphonesIcon, MousePointerClick, ShieldCheck, Sparkles
 
 const items = [
   { icon: CalendarClock, label: "Flexible Rentals" },
-  { icon: ShieldCheck, label: "Competitive Rates" },
-  { icon: Sparkles, label: "Clean Vehicles" },
-  { icon: MousePointerClick, label: "Easy Booking" },
+  { icon: ShieldCheck, label: "Itemized pricing" },
+  { icon: Sparkles, label: "Independent hosts" },
+  { icon: MousePointerClick, label: "Online booking" },
   { icon: HeadphonesIcon, label: "Customer Support" },
 ];
 

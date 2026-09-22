@@ -4,38 +4,38 @@ import { BOOKING_STEPS } from "@/components/booking/types";
 
 export function ProgressSteps({ current }: { current: number }) {
   return (
-    <div className="mb-8 overflow-x-auto scrollbar-thin">
-      <ol className="flex min-w-max items-center gap-1 sm:gap-2">
+    <nav aria-label="Booking progress" className="mb-8 min-w-0">
+      <p className="mb-3 text-sm text-silver" aria-live="polite">Step {current} of {BOOKING_STEPS.length}: <strong className="text-white">{BOOKING_STEPS[current - 1]}</strong></p>
+      <ol className="grid grid-cols-7 gap-2">
         {BOOKING_STEPS.map((label, i) => {
           const stepNum = i + 1;
           const state = stepNum < current ? "done" : stepNum === current ? "current" : "upcoming";
           return (
-            <li key={label} className="flex items-center gap-1 sm:gap-2">
-              <div className="flex items-center gap-2">
+            <li key={label} aria-current={state === "current" ? "step" : undefined} className="min-w-0">
+              <div className="flex flex-col items-center gap-2">
                 <span
                   className={cn(
-                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
                     state === "done" && "bg-gold text-black",
                     state === "current" && "border-2 border-gold text-gold-bright",
                     state === "upcoming" && "border border-white/15 text-muted"
                   )}
                 >
-                  {state === "done" ? <Check className="h-3.5 w-3.5" /> : stepNum}
+                  {state === "done" ? <><Check aria-hidden="true" className="h-4 w-4" /><span className="sr-only">Completed: </span></> : stepNum}
                 </span>
                 <span
                   className={cn(
-                    "text-xs font-medium sm:text-sm",
+                    "sr-only text-center text-sm font-medium lg:not-sr-only",
                     state === "upcoming" ? "text-muted" : "text-white"
                   )}
                 >
                   {label}
                 </span>
               </div>
-              {stepNum < BOOKING_STEPS.length && <span className="mx-1 h-px w-4 bg-white/15 sm:w-8" />}
             </li>
           );
         })}
       </ol>
-    </div>
+    </nav>
   );
 }

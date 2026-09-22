@@ -41,7 +41,7 @@ export function DeleteVehicleButton({ vehicleId }: { vehicleId: string }) {
   }
 
   return (
-    <div className="flex gap-2">
+    <div className="flex min-w-0 flex-wrap gap-2">
       <Button type="button" variant="secondary" onClick={handleDeactivate} disabled={isPending}>
         Deactivate
       </Button>

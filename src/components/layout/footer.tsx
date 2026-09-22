@@ -57,23 +57,22 @@ export function Footer({ settings }: { settings: SiteSettings }) {
   return (
     <footer className="border-t border-white/10 bg-surface">
       <div className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-10 lg:grid-cols-[1.4fr_1fr_1fr_1fr]">
-          <div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-10 lg:grid-cols-[1.4fr_1fr_1fr_1fr]">
+          <div className="col-span-2 lg:col-span-1">
             <Logo />
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-muted">
-              Daily, weekly &amp; monthly car rentals in Dallas, Texas. Clean, reliable vehicles with
-              transparent pricing.
+              Drive More Possibilities. A car-sharing marketplace connecting guests with independent vehicle hosts.
             </p>
             <div className="mt-5 flex flex-col gap-2 text-sm text-silver">
-              <a href={`tel:${settings.phone.replace(/[^0-9+]/g, "")}`} className="flex items-center gap-2 hover:text-gold-bright">
+              {settings.phone && <a href={`tel:${settings.phone.replace(/[^0-9+]/g, "")}`} className="flex items-center gap-2 hover:text-gold-bright">
                 <Phone className="h-4 w-4 text-gold" /> {settings.phone}
-              </a>
-              <a href={`mailto:${settings.email}`} className="flex items-center gap-2 hover:text-gold-bright">
+              </a>}
+              {settings.email && <a href={`mailto:${settings.email}`} className="flex items-center gap-2 hover:text-gold-bright">
                 <Mail className="h-4 w-4 text-gold" /> {settings.email}
-              </a>
-              <span className="flex items-center gap-2">
+              </a>}
+              {settings.address && <span className="flex items-center gap-2">
                 <MapPin className="h-4 w-4 text-gold" /> {settings.address}
-              </span>
+              </span>}
             </div>
             <div className="mt-5 flex gap-3">
               {settings.socialLinks?.instagram && (
@@ -91,13 +90,13 @@ export function Footer({ settings }: { settings: SiteSettings }) {
 
           {columns.map((col) => (
             <div key={col.title}>
-              <h3 className="font-display text-sm font-semibold uppercase tracking-wider text-gold-bright">
+              <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-gold-bright">
                 {col.title}
-              </h3>
-              <ul className="mt-4 space-y-2.5">
+              </h2>
+              <ul className="mt-3 space-y-1">
                 {col.links.map((link) => (
                   <li key={link.href}>
-                    <Link href={link.href} className="text-sm text-muted hover:text-white">
+                    <Link href={link.href} className="inline-flex min-h-11 items-center text-sm text-muted hover:text-white">
                       {link.label}
                     </Link>
                   </li>

@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { VehicleCard, type VehicleCardData } from "@/components/vehicles/vehicle-card";
 import { VEHICLE_CATEGORY_LABELS } from "@/lib/constants";
@@ -25,15 +24,13 @@ export function VehicleShowcase({ vehicles }: { vehicles: VehicleCardData[] }) {
           Find Your Perfect Ride
         </h2>
 
-        <Tabs value={category} onValueChange={setCategory}>
-          <TabsList className="flex-wrap h-auto">
+        <div role="group" aria-label="Vehicle categories" className="flex flex-wrap justify-center gap-2">
             {CATEGORIES.map((cat) => (
-              <TabsTrigger key={cat} value={cat}>
+              <Button key={cat} type="button" variant={category === cat ? "default" : "outline"} aria-pressed={category === cat} onClick={() => setCategory(cat)}>
                 {VEHICLE_CATEGORY_LABELS[cat]}
-              </TabsTrigger>
+              </Button>
             ))}
-          </TabsList>
-        </Tabs>
+        </div>
       </div>
 
       <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">

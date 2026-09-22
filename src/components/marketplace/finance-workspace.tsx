@@ -1,10 +1,12 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Workspace, Panel } from "./workspace";
+import { WorkspaceNavigation } from "@/components/layout/workspace-navigation";
 
 export function FinanceWorkspace({title,description,children,admin=false}:{title:string;description?:string;children:ReactNode;admin?:boolean}) {
+ const links=(admin?[["/finance/admin","Overview"],["/finance/admin/rules","Commission & tax rules"],["/finance/admin/reconciliation","Reconciliation"]]:[["/finance","Earnings"],["/finance/onboarding","Payout settings"],["/finance/statements","Statements"],["/host","Host workspace"]]).map(([href,label])=>({href,label}));
  return <Workspace eyebrow={admin?"Financial administration":"Host finance"} title={title} description={description}>
-  <nav aria-label="Finance" className="flex flex-wrap gap-2">{(admin?[["/finance/admin","Overview"],["/finance/admin/rules","Commission & tax rules"],["/finance/admin/reconciliation","Reconciliation"]]:[["/finance","Earnings"],["/finance/onboarding","Payout settings"],["/finance/statements","Statements"],["/host","Host workspace"]]).map(([href,label])=><Link key={href} href={href} className="rounded-lg border border-white/15 px-4 py-3 text-sm text-silver hover:border-gold hover:text-white">{label}</Link>)}</nav>
+  <WorkspaceNavigation label="Finance" links={links} />
   <p className="rounded-xl border border-gold/30 bg-gold/5 p-4 text-sm text-silver"><strong className="text-gold-bright">Development sandbox.</strong> Live transfers and payouts are disabled. Availability and bank delivery depend on approved policies and Stripe confirmation.</p>
   {children}
  </Workspace>;

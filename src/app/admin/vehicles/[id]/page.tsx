@@ -19,7 +19,7 @@ export default async function EditVehiclePage({ params }: { params: Promise<{ id
 
   return (
     <div className="max-w-3xl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
         <h1 className="font-display text-3xl font-bold text-white">
           Edit {vehicle.year} {vehicle.make} {vehicle.model}
         </h1>
