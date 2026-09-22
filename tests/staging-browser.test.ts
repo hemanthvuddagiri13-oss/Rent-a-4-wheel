@@ -73,9 +73,11 @@ it.skipIf(!enabled)("native bearer auth crosses the real production proxy withou
  await prisma.authCode.create({data:{email:user.email,purpose:"MOBILE_SIGN_IN",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});
  const context=await browser.newContext({ignoreHTTPSErrors:true});
  try {
-  const signed=await context.request.post(base+"/api/v1/mobile/auth/sign-in",{data:{email:user.email,code:"123456",deviceId:crypto.randomUUID(),platform:"ANDROID",appVersion:"1.0.0"}});
+  const suppliedRequestId="00000000-0000-4000-8000-000000000000";
+  const signed=await context.request.post(base+"/api/v1/mobile/auth/sign-in",{headers:{"x-request-id":suppliedRequestId},data:{email:user.email,code:"123456",deviceId:crypto.randomUUID(),platform:"ANDROID",appVersion:"1.0.0"}});
   expect(signed.status()).toBe(200);expect(signed.headers()["x-api-version"]).toBe("1");expect(signed.headers()["cache-control"]).toContain("no-store");
   const signedBody=await signed.json();expect(signed.headers()["x-request-id"]).toBe(signedBody.requestId);
+  expect(signedBody.requestId).not.toBe(suppliedRequestId);expect(signed.headers()["content-security-policy"]).toContain("default-src 'none'");
   const credentials=signedBody.data;
   expect((await context.request.get(base+"/api/v1/mobile/me")).status()).toBe(401);
   const headers={authorization:"Bearer "+credentials.accessToken};
