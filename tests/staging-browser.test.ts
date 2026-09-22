@@ -51,3 +51,17 @@ it.skipIf(!enabled)("revokes the database device on Auth.js sign-out so replayin
  expect((await prisma.session.findUniqueOrThrow({where:{id:session.sid}})).revokedAt).not.toBeNull();
  await context.addCookies(original);expect((await context.request.get(base+"/api/account/security")).status()).toBe(401);await context.close();
 },60000);
+
+it.skipIf(!enabled)("public production pages hydrate under fresh per-request CSP nonces",async()=>{
+ const context=await browser.newContext({ignoreHTTPSErrors:true}),page=await context.newPage();const errors:string[]=[];
+ page.on("pageerror",e=>errors.push(e.name));page.on("console",m=>{if(m.type()==="error")errors.push(m.text().replace(/nonce-[^' ]+/g,"nonce-[redacted]").replace(/https?:\/\/[^\s]+/g,"[URL]"));});
+ try {
+  const first=await page.goto(base+"/");await page.getByRole("button",{name:"SUV",exact:true}).click();
+  await expect.poll(()=>page.getByRole("button",{name:"SUV",exact:true}).getAttribute("aria-pressed")).toBe("true");
+  const second=await page.reload();await page.getByRole("button",{name:"Sedan",exact:true}).click();
+  await expect.poll(()=>page.getByRole("button",{name:"Sedan",exact:true}).getAttribute("aria-pressed")).toBe("true");
+  const nonce=(header:string|undefined)=>header?.match(/'nonce-([^']+)'/)?.[1];
+  expect(nonce(first?.headers()["content-security-policy"])).toBeTruthy();expect(nonce(first?.headers()["content-security-policy"])).not.toBe(nonce(second?.headers()["content-security-policy"]));
+  expect(errors).toEqual([]);
+ }finally{await context.close();}
+},90000);

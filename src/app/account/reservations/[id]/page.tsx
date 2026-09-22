@@ -29,6 +29,7 @@ export default async function ReservationDetailPage({ params }: { params: Promis
     include: {
       vehicle: { include: { images: { take: 1, orderBy: { position: "asc" } } } },
       payments: true,
+      agreementAcceptances: {where:{type:"RENTAL_AGREEMENT"},orderBy:{signedAt:"desc"},take:1,select:{signedPdfStorageKey:true}},
       extras: { include: { extra: true } },
     },
   });
@@ -94,11 +95,11 @@ export default async function ReservationDetailPage({ params }: { params: Promis
       </div>
 
       <div className="mt-8 flex flex-wrap gap-3">
-        <Button asChild variant="outline">
+        {reservation.agreementAcceptances[0]?.signedPdfStorageKey && <Button asChild variant="outline">
           <a href={`/api/reservations/${reservation.id}/agreement`} target="_blank" rel="noreferrer">
             <Download className="h-4 w-4" /> Download Agreement
           </a>
-        </Button>
+        </Button>}
         {canCancel && <CancelReservationButton reservationId={reservation.id} />}
         <Button asChild variant="ghost">
           <Link href="/contact">Contact Support</Link>

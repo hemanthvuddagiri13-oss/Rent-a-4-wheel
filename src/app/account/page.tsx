@@ -10,7 +10,7 @@ import { formatCurrency } from "@/lib/utils";
 import { RESERVATION_STATUS_LABELS } from "@/lib/constants";
 import { ProfileForm } from "@/components/account/profile-form";
 
-export const metadata: Metadata = { title: "My Account", robots: { index: false } };
+export const metadata: Metadata = { title: "My Account", alternates: { canonical: "/account" }, robots: { index: false } };
 
 // Factual, server-status-derived explanations only — never a promise about
 // timing, approval or outcome the backend hasn't already decided.

@@ -6,7 +6,7 @@ Brand: **Drive More Possibilities**. The interface represents a marketplace of i
 
 Black backgrounds use `background`, `surface`, `card` and `card-elevated`. White is the primary text color; silver supports descriptions; muted text uses #a4a7ae. Restrained metallic gold #d6b66a identifies primary actions and focus. Secondary actions use neutral borders. Semantic positive, caution, negative and information tokens are paired with explicit text; color alone never carries status.
 
-Use the existing Inter body font and Oswald display font. Form controls use 16px text to remain legible on phones. Body copy uses 1.6 line-height. Prefer sentence case and meaningful headings. Do not use tiny uppercase text for essential pricing or instructions.
+Use the self-contained system sans-serif stack for body text and the configured narrow sans-serif stack for display text; no third-party font request is required. Form controls use 16px text to remain legible on phones. Body copy uses 1.6 line-height. Prefer sentence case and meaningful headings. Do not use tiny uppercase text for essential pricing or instructions.
 
 The spacing scale follows 4px increments: 4, 8, 12, 16, 24, 32, 48 and 64. Page gutters start at 16px, grow to 24px at 640px and 32px at 1024px. Reading/form content should be constrained; workspaces may grow to 1280px. Cards use 12–16px radii, controls 6–8px. Use a restrained shadow for elevation, not a gold glow.
 
@@ -33,3 +33,7 @@ Financial summaries must retain server-frozen line items. Deposits, taxes, prote
 ## Implementation and acceptance status
 
 Shared controls and initial responsive corrections are in progress. The approved baseline is recorded separately in `PHASE6_UX_BASELINE.md`. Full component adoption, all requested journeys, automated accessibility, manual keyboard verification, final screenshots and measured Lighthouse results remain required. This document does not certify completion or production readiness.
+
+## Explicit acceptance exception
+
+On 22 September 2026 the user approved retaining private-page `noindex` and documenting authenticated Lighthouse SEO as an exception to the 90+ score target. Raw scores remain in the report. The test still requires the indexing block and rejects any other weighted SEO failure on those pages. Public SEO remains 90+, Performance 90+, Accessibility 95+ and Best Practices 95+. No privacy or authentication rule is removed to improve a score.

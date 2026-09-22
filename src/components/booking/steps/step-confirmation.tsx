@@ -7,13 +7,14 @@ import type { BookingState, BookingVehicle } from "@/components/booking/types";
 import { formatCurrency } from "@/lib/utils";
 
 export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; state: BookingState }) {
+  const [agreementAvailable, setAgreementAvailable] = useState(false);
   const [outcome, setOutcome] = useState("processing");
   const [paidCents, setPaidCents] = useState<number | null>(null);
   useEffect(() => {
     let stopped = false;
     const poll = () => fetch(`/api/reservations/${state.reservationId}/status`, { cache: "no-store" }).then(async response => {
       if (!response.ok) throw new Error("Status unavailable");
-      const data = await response.json(); if (!stopped) { setOutcome(data.outcome); setPaidCents(data.paidCents); }
+      const data = await response.json(); if (!stopped) { setOutcome(data.outcome); setPaidCents(data.paidCents); setAgreementAvailable(data.agreementAvailable === true); }
     }).catch(() => { if (!stopped) setOutcome("status_unavailable"); });
     void poll(); const timer = setInterval(poll, 5000);
     return () => { stopped = true; clearInterval(timer); };
@@ -43,7 +44,7 @@ export function StepConfirmation({ vehicle, state }: { vehicle: BookingVehicle; 
         <Button asChild size="lg">
           <Link href={`/account/reservations/${state.reservationId}`}>View Reservation</Link>
         </Button>
-        {state.reservationId && (
+        {state.reservationId && agreementAvailable && (
           <Button asChild variant="outline" size="lg">
             <a href={`/api/reservations/${state.reservationId}/agreement`} target="_blank" rel="noreferrer">
               <Download className="h-4 w-4" /> Download Agreement

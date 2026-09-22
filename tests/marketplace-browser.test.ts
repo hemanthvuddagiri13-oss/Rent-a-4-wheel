@@ -261,6 +261,7 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
   expect(await prisma.driverDocument.count({ where: { reservationId: id, malwareScanStatus: "CLEAN" } })).toBe(3);
   const pdf = await context.request.get(`${base}/api/reservations/${id}/agreement`);
   expect(pdf.status()).toBe(200); expect(pdf.headers()["content-type"]).toBe("application/pdf");
+  expect((await (await context.request.get(`${base}/api/reservations/${id}/status`)).json()).agreementAvailable).toBe(true);
   await page.getByText("Preparing secure checkout…").waitFor({ state: "hidden" });
   await screenshot(page, "checkout-payment");
   await page.reload(); await page.getByRole("heading", { name: "Payment", exact: true }).waitFor();
@@ -322,7 +323,8 @@ it("real payment status UI distinguishes processing, failure, compensation and r
  // Synthetic persisted provider observations; the browser calls the real authoritative status endpoint.
  const panel=page.locator("section").filter({has:page.getByRole("heading",{name:"Payment, refund and deposit",exact:true})});
  try {
-  await page.goto(`${base}/account/reservations/${r.id}`);await panel.getByRole("status").filter({hasText:/^processing$/}).waitFor();
+  await page.goto(`${base}/account/reservations/${r.id}`);
+  expect(await page.getByRole("link",{name:"Download Agreement",exact:true}).count()).toBe(0);await panel.getByRole("status").filter({hasText:/^processing$/}).waitFor();
   await prisma.reservation.update({where:{id:r.id},data:{status:"PAYMENT_FAILED"}});await panel.getByRole("status").filter({hasText:/^payment failed$/}).waitFor();
   const payment=await prisma.payment.create({data:{reservationId:r.id,type:"RENTAL",status:"SUCCEEDED",amountCents:r.totalCents}});
   await prisma.reservation.update({where:{id:r.id},data:{status:"CANCELLED_BY_CUSTOMER",financialDisposition:"REFUND_REQUIRED",expiresAt:null}});

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Toaster } from "sonner";
 import { AuthSessionProvider } from "@/components/auth/session-provider";
 import { SiteChrome } from "@/components/layout/site-chrome";
@@ -40,11 +41,13 @@ const marketplaceJsonLd = {
 
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // A per-request CSP nonce must never be reused from a prerendered document.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" className="h-full">
       <body className="min-h-full flex flex-col bg-background text-foreground antialiased">
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(marketplaceJsonLd) }} />
+        <script nonce={nonce} type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(marketplaceJsonLd) }} />
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-gold focus:px-4 focus:py-2 focus:text-black"

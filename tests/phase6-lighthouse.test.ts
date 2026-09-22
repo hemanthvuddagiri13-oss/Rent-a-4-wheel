@@ -35,10 +35,10 @@ it.skipIf(process.env.PHASE6_LIGHTHOUSE !== "true")("measures public and authent
       expect(new URL(result.lhr.finalDisplayedUrl).pathname).toBe(route);
       const scores=Object.fromEntries(Object.entries(result.lhr.categories).map(([name,category])=>[name,Math.round((category.score??0)*100)]));
       // Do not serialize configSettings, request headers, cookies or page screenshots.
-      results.push({route,sha:process.env.BASELINE_APPLICATION_SHA??process.env.GITHUB_SHA,formFactor:result.lhr.configSettings.formFactor,scores,audits:Object.values(result.lhr.audits).filter(a=>a.score!==null&&a.score<1).map(a=>({id:a.id,title:a.title,score:a.score,displayValue:a.displayValue}))});
+      results.push({route,sha:process.env.BASELINE_APPLICATION_SHA??process.env.GITHUB_SHA,formFactor:result.lhr.configSettings.formFactor,scores,seoFailures:result.lhr.categories.seo.auditRefs.filter(ref=>ref.weight>0&&result.lhr.audits[ref.id]?.score===0).map(ref=>ref.id),audits:Object.values(result.lhr.audits).filter(a=>a.score!==null&&a.score<1).map(a=>({id:a.id,title:a.title,score:a.score,displayValue:a.displayValue}))});
     }
     await writeFile(output+"/scores.json",JSON.stringify(results,null,2));
     await writeFile(output+"/index.html",`<!doctype html><html lang="en"><meta charset="utf-8"><title>Measured Lighthouse results</title><h1>Production-build Lighthouse measurements</h1><pre>${JSON.stringify(results,null,2).replaceAll("&","&amp;").replaceAll("<","&lt;")}</pre></html>`);
-    for(const result of results){expect(result.scores.performance,result.route+" performance").toBeGreaterThanOrEqual(90);expect(result.scores.accessibility,result.route+" accessibility").toBeGreaterThanOrEqual(95);expect(result.scores["best-practices"],result.route+" best practices").toBeGreaterThanOrEqual(95);expect(result.scores.seo,result.route+" SEO").toBeGreaterThanOrEqual(90);}
+    for(const result of results){expect(result.scores.performance,result.route+" performance").toBeGreaterThanOrEqual(90);expect(result.scores.accessibility,result.route+" accessibility").toBeGreaterThanOrEqual(95);expect(result.scores["best-practices"],result.route+" best practices").toBeGreaterThanOrEqual(95);if(result.route.startsWith("/account")){expect(result.seoFailures,"Approved private-page SEO exception: indexing must stay blocked, with no other SEO failure").toEqual(["is-crawlable"]);}else expect(result.scores.seo,result.route+" SEO").toBeGreaterThanOrEqual(90);}
   } finally {await browser?.close();app.kill();await prisma.$disconnect();}
 },600000);

@@ -90,9 +90,9 @@ export function Footer({ settings }: { settings: SiteSettings }) {
 
           {columns.map((col) => (
             <div key={col.title}>
-              <h3 className="font-display text-sm font-semibold uppercase tracking-wider text-gold-bright">
+              <h2 className="font-display text-sm font-semibold uppercase tracking-wider text-gold-bright">
                 {col.title}
-              </h3>
+              </h2>
               <ul className="mt-3 space-y-1">
                 {col.links.map((link) => (
                   <li key={link.href}>
