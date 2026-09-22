@@ -1,3 +1,4 @@
+import { uploadBookingDocument } from "./helpers/booking-document";
 import { createDeviceSession } from "@/lib/device-sessions";
 import { beforeAll, afterAll, it, expect } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -242,11 +243,7 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
   const fields = { "First Name": "Synthetic", "Last Name": "Driver", "Date of Birth": "1990-01-01", Email: customer.email, Phone: "5551234567", Address: "1 Synthetic Street", City: "Dallas", State: "TX", ZIP: "75001", Country: "US", "License Number": "SYNTHETIC_PRIVATE_LICENSE", "License State/Country": "TX", "License Expiration": "2038-01-01" };
   for (const [label, value] of Object.entries(fields)) await page.getByLabel(label, { exact: true }).fill(value);
   const buffer = await sharp({ create: { width: 32, height: 32, channels: 3, background: "silver" } }).png().toBuffer();
-  for (let i = 0; i < 3; i++) {
-    const uploaded = page.waitForResponse(r => r.url().endsWith("/api/documents/upload") && r.request().method() === "POST");
-    await page.locator('input[type="file"]').nth(i).setInputFiles({ name: "synthetic.png", mimeType: "image/png", buffer });
-    expect((await uploaded).status()).toBe(200);
-  }
+  for (let i = 0; i < 3; i++) await uploadBookingDocument(page,i,buffer);
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByRole("heading", { name: "Review Your Booking" }).waitFor();
   await page.getByRole("checkbox").check();

@@ -1,3 +1,4 @@
+import { uploadBookingDocument } from "./helpers/booking-document";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
@@ -34,7 +35,7 @@ async function reachPayment(page:Page){
  await page.getByRole('heading',{name:'Driver Information'}).waitFor();
  const fields={'First Name':'SYNTHETIC_PRIVATE','Last Name':'Driver','Date of Birth':'1990-01-01','Email':'fixture@example.com','Phone':'5551234567','Address':'SYNTHETIC_PRIVATE_ADDRESS','City':'Dallas','State':'TX','ZIP':'75001','Country':'US','License Number':'SYNTHETIC_PRIVATE_LICENSE','License State/Country':'TX','License Expiration':'2038-01-01'};
  for(const [name,value] of Object.entries(fields))await page.getByLabel(name,{exact:true}).fill(value);
- for(let i=0;i<3;i++)await page.locator('input[type=file]').nth(i).setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from('synthetic image')});
+ for(let i=0;i<3;i++)await uploadBookingDocument(page,i,Buffer.from('synthetic image'));
  await page.getByRole('button',{name:'Continue',exact:true}).click();
  await page.getByRole('heading',{name:'Review Your Booking'}).waitFor();
  await page.getByRole('checkbox').check();

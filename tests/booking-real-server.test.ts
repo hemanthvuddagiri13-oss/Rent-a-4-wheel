@@ -1,3 +1,4 @@
+import { uploadBookingDocument } from "./helpers/booking-document";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -52,7 +53,7 @@ describe("real Next application, browser, API and PostgreSQL checkout",()=>{
   const fields={"First Name":"Synthetic","Last Name":"Driver","Date of Birth":"1990-01-01","Email":u.email,"Phone":"5551234567","Address":"100 Test Street","City":"Dallas","State":"TX","ZIP":"75001","Country":"US","License Number":"SYNTHETIC_ONLY","License State/Country":"TX","License Expiration":"2035-01-01"};
   for(const [name,value]of Object.entries(fields))await page.getByLabel(name,{exact:true}).fill(value);
   const buffer=await sharp({create:{width:20,height:20,channels:3,background:"white"}}).png().toBuffer();
-  for(let i=0;i<3;i++){const uploaded=page.waitForResponse(r=>r.url().endsWith("/api/documents/upload"));await page.locator("input[type=file]").nth(i).setInputFiles({name:"synthetic.png",mimeType:"image/png",buffer});expect((await uploaded).status()).toBe(200)}
+  for(let i=0;i<3;i++)await uploadBookingDocument(page,i,buffer);
   await page.getByRole("button",{name:"Continue",exact:true}).click();await page.getByRole("heading",{name:"Review Your Booking"}).waitFor();
   await page.getByLabel("Promo Code").fill(coupon.code);const applied=page.waitForResponse(r=>r.url().endsWith("/api/reservations/hold"));await page.getByRole("button",{name:"Apply",exact:true}).click();expect((await applied).status()).toBe(200);
   await page.getByRole("checkbox").check();await page.getByRole("button",{name:"Continue to Payment"}).click();await page.getByRole("button",{name:"Simulate Successful Payment"}).waitFor();
