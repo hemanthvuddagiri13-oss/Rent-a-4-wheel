@@ -84,7 +84,7 @@ export async function refreshMobileCredential(token: string, db: PrismaClient = 
   return result;
 }
 
-export async function authenticateMobile(headers: Headers, db: DomainDatabase = prisma) {
+export async function authenticateMobile(headers: Headers, db: DomainDatabase = prisma, touch = true) {
   // This namespace never falls back to cookie authentication.
   const authorization = headers.get("authorization") ?? "";
   const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
@@ -93,8 +93,10 @@ export async function authenticateMobile(headers: Headers, db: DomainDatabase = 
   if (!credential || credential.consumedAt || credential.accessExpiresAt <= new Date()) throw new MobileError("UNAUTHORIZED", 401);
   const { session } = credential;
   if (session.revokedAt || session.expiresAt <= new Date() || credential.generation !== session.generation || !session.user.isActive || !nativeRole(session.user.role)) throw new MobileError("UNAUTHORIZED", 401);
-  const accepted = await db.mobileSession.updateMany({ where: { id: session.id, generation: credential.generation, revokedAt: null, expiresAt: { gt: new Date() }, user: { isActive: true, role: { in: ["CUSTOMER", "HOST", "HOST_EMPLOYEE"] } }, credentials: { some: { id: credential.id, consumedAt: null, accessExpiresAt: { gt: new Date() } } } }, data: { lastUsedAt: new Date() } });
-  if (accepted.count !== 1) throw new MobileError("UNAUTHORIZED", 401);
+  if (touch) {
+    const accepted = await db.mobileSession.updateMany({ where: { id: session.id, generation: credential.generation, revokedAt: null, expiresAt: { gt: new Date() }, user: { isActive: true, role: { in: ["CUSTOMER", "HOST", "HOST_EMPLOYEE"] } }, credentials: { some: { id: credential.id, consumedAt: null, accessExpiresAt: { gt: new Date() } } } }, data: { lastUsedAt: new Date() } });
+    if (accepted.count !== 1) throw new MobileError("UNAUTHORIZED", 401);
+  }
   return { userId: session.userId, sessionId: session.id, role: session.user.role };
 }
 

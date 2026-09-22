@@ -13,7 +13,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
     if (action === "request-code") {
       const { email } = z.object({ email: z.email().max(254) }).strict().parse(input);
       // Same response for unknown, existing, disabled and throttled accounts.
-      await requestAuthCode({ email, ip: mobileIp(req.headers), purpose: "MOBILE_SIGN_IN" });
+      const issued = await requestAuthCode({ email, ip: mobileIp(req.headers), purpose: "MOBILE_SIGN_IN" });
+      if (!issued.ok) await prisma.auditLog.create({ data: { action: "mobile.code_throttled", entityType: "MobileAuthentication", entityId: mobileIp(req.headers), metadata: { reason: issued.reason } } });
       return { accepted: true };
     }
     if (action === "sign-in") return mobileSignIn(input, mobileIp(req.headers));

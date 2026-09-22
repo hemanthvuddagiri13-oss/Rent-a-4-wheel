@@ -32,10 +32,11 @@ export async function mobileQuery(req: Request, parts: string[]) {
       try { await requireReleaseFeature("booking", prisma, code); codes.push(code); }
       catch { /* Incomplete release approval must not make inventory visible. */ }
     }
-    const where: Prisma.VehicleWhereInput = { status: "ACTIVE", isDemo: false, listingApproval: "APPROVED", jurisdictionCode: { in: codes }, AND: [{ OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] }, { OR: [{ availability: null }, { availability: { isBookable: true } }] }] };
+    const safety = await prisma.serviceCase.findMany({ where: { safetyBlock: true, vehicleId: { not: null } }, select: { vehicleId: true } });
+    const where: Prisma.VehicleWhereInput = { id: { notIn: safety.map(row => row.vehicleId!) }, status: "ACTIVE", isDemo: false, listingApproval: "APPROVED", jurisdictionCode: { in: codes }, AND: [{ OR: [{ hostId: null }, { host: { onboardingStatus: "APPROVED" } }] }, { OR: [{ availability: null }, { availability: { isBookable: true } }] }] };
     if (!id) return collection(await prisma.vehicle.findMany({ where, select: mobileVehicleSelect, ...page }), limit);
     return prisma.$transaction(async tx => {
-      const vehicle = await tx.vehicle.findFirst({ where: { ...where, id }, select: mobileVehicleSelect });
+      const vehicle = await tx.vehicle.findFirst({ where: { AND: [where, { id }] }, select: mobileVehicleSelect });
       if (!vehicle) throw new MobileError("NOT_FOUND", 404);
       await requireVehicleJurisdiction(tx, id, "SEARCH"); return vehicle;
     });

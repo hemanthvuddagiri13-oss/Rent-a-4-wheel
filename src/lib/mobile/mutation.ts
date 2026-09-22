@@ -16,7 +16,11 @@ export async function mobileMutation<T extends Prisma.InputJsonObject>(req: Requ
   const id = createHash("sha256").update(JSON.stringify([actor.userId, operation, key])).digest("hex"), hash = fingerprint(input);
   return db.$transaction(async tx => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${"mobile-mutation:" + id},0))::text`;
-    await authenticateMobile(req.headers, tx);
+    // Read current credentials again without holding a device-row write lock
+    // across financial/domain locks. Refresh/logout lock user then device;
+    // case commands lock reservation then user, so a nested touch would invert
+    // those orders. The outer authentication already records last use by CAS.
+    await authenticateMobile(req.headers, tx, false);
     // Recheck tenant access even when returning a previously committed receipt.
     await authorize(tx, actor.userId);
     const prior = await tx.mobileMutation.findUnique({ where: { id } });

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import sharp from "sharp";
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { createMobileClient } from "../packages/mobile-client/src";
@@ -210,6 +210,12 @@ it("HTTP quarantine, purpose-bound capability and employee revocation are checke
   const read = (id = doc.id, token = f.employee.accessToken, cap = capability) => fetch(base + "/api/v1/mobile/files/" + id, { headers: { authorization: "Bearer " + token, "x-file-access": cap } });
   expect((await read()).status).toBe(200); expect(fixture.storageRead).toHaveBeenCalledTimes(1);
   expect((await read("other-document")).status).toBe(403); expect((await read(doc.id, f.other.accessToken)).status).toBe(403); expect((await read(doc.id, f.employee.accessToken, capability + "x")).status).toBe(403);
+  const claim = JSON.parse(Buffer.from(capability.split(".")[0], "base64url").toString("utf8"));
+  for (const override of [{ expires: 0 }, { purpose: "UNAUTHORIZED_PURPOSE" }, { session: "another-device" }]) {
+    const payload = Buffer.from(JSON.stringify({ ...claim, ...override })).toString("base64url");
+    const signed = payload + "." + createHmac("sha256", process.env.AUTH_SECRET!).update(payload).digest("base64url");
+    expect((await read(doc.id, f.employee.accessToken, signed)).status).toBe(403);
+  }
   await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: { isActive: false } });
   expect((await read()).status).toBe(403); expect(fixture.storageRead).toHaveBeenCalledTimes(1);
   expect(await prisma.documentAccessLog.count({ where: { purpose: "mobile_identity_preview" } })).toBe(1);
@@ -318,6 +324,7 @@ it("HTTP account issuance limit remains five codes per hour beyond the resend co
     await prisma.authCode.updateMany({ data: { createdAt: new Date(Date.now() - 61000) } });
   }
   expect(await prisma.authCode.count()).toBe(5); expect(fixture.emails).toHaveLength(5);
+  expect(await prisma.auditLog.count({ where: { action: "mobile.code_throttled" } })).toBe(2);
 });
 it("HTTP issuance throttles one IP across accounts without enumeration responses", async () => {
   for (let i = 0; i < 22; i++) {
@@ -357,4 +364,35 @@ it("HTTP checkout binds the displayed agreement and commits one immutable accept
   await prisma.reservation.update({ where: { id }, data: { expiresAt: new Date(0) } });
   expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(409);
   expect(await prisma.agreementAcceptance.findMany()).toEqual([acceptance]); expect(await prisma.payment.count()).toBe(0);
+});
+it("public discovery excludes vehicles under an active safety hold", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  expect((await get(`vehicles/${f.vehicle.id}`)).status).toBe(200);
+  await prisma.serviceCase.create({ data: { kind: "SAFETY", category: "VEHICLE", title: "Synthetic safety hold", details: {}, openedById: f.user.id, vehicleId: f.vehicle.id, safetyBlock: true, dueAt: new Date("2058-01-01"), retainUntil: new Date("2059-01-01") } });
+  expect((await get(`vehicles/${f.vehicle.id}`)).status).toBe(404);
+  expect((await (await get("vehicles")).json()).data.items).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: f.vehicle.id })]));
+});
+it("refresh and an in-flight domain mutation cannot invert user/device locks", async () => {
+  const c = await login(), [a, b] = await independentClients();
+  let authorized!: () => void, userLocked!: () => void;
+  const atAuthorization = new Promise<void>(resolve => { authorized = resolve; });
+  const atUserLock = new Promise<void>(resolve => { userLocked = resolve; });
+  let observedUserLock = false;
+  const refreshDb = b.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    const result = await query(args);
+    if (operation === "$queryRaw" && JSON.stringify(args).includes('User') && JSON.stringify(args).includes('FOR UPDATE')) { observedUserLock = true; userLocked(); }
+    return result;
+  } } }) as unknown as PrismaClient;
+  const req = new Request(base, { headers: { authorization: "Bearer " + c.accessToken, "idempotency-key": crypto.randomUUID() } });
+  try {
+    const mutation = mobileMutation(req, "test.lock-order", {}, async () => { authorized(); await atUserLock; }, async (tx, userId) => {
+      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
+      return { success: true };
+    }, a);
+    const rotation = (async () => { await atAuthorization; return refreshMobileCredential(c.refreshToken, refreshDb); })();
+    const [result, rotated] = await Promise.all([mutation, rotation]);
+    expect(observedUserLock).toBe(true); expect(result).toEqual({ success: true });
+    expect(await prisma.mobileMutation.count()).toBe(1); expect(await prisma.mobileCredential.count()).toBe(2);
+    expect((await get("me", c.accessToken)).status).toBe(401); expect((await get("me", rotated.accessToken)).status).toBe(200);
+  } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
 });
