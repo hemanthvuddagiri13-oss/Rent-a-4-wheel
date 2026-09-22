@@ -28,7 +28,8 @@ async function login(role:"CUSTOMER"|"SUPER_ADMIN"="CUSTOMER"){
 it.skipIf(!enabled)("enforces staging configuration, real database sessions, secure responses and protected cron routes in the production build",async()=>{
  const {context,user,session}=await login(),page=await context.newPage();const response=await page.goto(base+"/account/security");
  expect(response?.status()).toBe(200);expect(response?.headers()["strict-transport-security"]).toContain("max-age=31536000");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["content-security-policy"]).not.toContain("unsafe-eval");expect(response?.headers()["cache-control"]).toContain("no-store");
- await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();await page.getByText("Browser (this device)",{exact:true}).waitFor();await page.screenshot({path:"test-artifacts/staging/account-security.png",fullPage:true});
+ await page.getByRole("heading",{name:"Account security",exact:true}).waitFor();// Streaming may briefly retain the incoming subtree alongside its placeholder. Require a unique settled device label; never select an arbitrary duplicate.
+ await expect.poll(()=>page.getByText("Browser (this device)",{exact:true}).count()).toBe(1);await page.getByText("Browser (this device)",{exact:true}).waitFor();await page.screenshot({path:"test-artifacts/staging/account-security.png",fullPage:true});
  await page.getByLabel("One-use security code",{exact:true}).fill("000000");await page.getByRole("button",{name:"Rotate session credential",exact:true}).click();await page.getByRole("status").filter({hasText:"A fresh security code is required."}).waitFor();
  expect((await(await context.request.get(base+"/api/auth/session")).json()).user.id).toBe(user.id);
  expect((await context.request.get(base+"/api/admin/operations")).status()).toBe(403);
