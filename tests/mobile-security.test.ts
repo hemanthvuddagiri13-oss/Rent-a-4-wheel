@@ -368,7 +368,7 @@ it("HTTP checkout binds the displayed agreement and commits one immutable accept
 it("public discovery excludes vehicles under an active safety hold", async () => {
   const f = await tenantFixture(); await fixtureJurisdiction(prisma);
   expect((await get(`vehicles/${f.vehicle.id}`)).status).toBe(200);
-  await prisma.serviceCase.create({ data: { kind: "SAFETY", category: "VEHICLE", title: "Synthetic safety hold", details: {}, openedById: f.user.id, vehicleId: f.vehicle.id, safetyBlock: true, dueAt: new Date("2058-01-01"), retainUntil: new Date("2059-01-01") } });
+  await prisma.serviceCase.create({ data: { kind: "INCIDENT", category: "VEHICLE", title: "Synthetic safety hold", details: {}, openedById: f.user.id, vehicleId: f.vehicle.id, safetyBlock: true, dueAt: new Date("2058-01-01"), retainUntil: new Date("2059-01-01") } });
   expect((await get(`vehicles/${f.vehicle.id}`)).status).toBe(404);
   expect((await (await get("vehicles")).json()).data.items).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: f.vehicle.id })]));
 });
