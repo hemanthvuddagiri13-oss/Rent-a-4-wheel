@@ -52,7 +52,9 @@ env:
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN
+    centerElement: true
 - tapOn: "Account & devices"
+- assertVisible: "Login & recovery"
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN

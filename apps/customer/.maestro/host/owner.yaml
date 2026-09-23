@@ -220,9 +220,20 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Record keys handed to customer"
     direction: UP
+# Gate refresh must finish before attempting the enabled host action.
+- extendedWaitUntil:
+    visible:
+      text: "Record keys handed to customer"
+      enabled: true
+    timeout: 20000
 - tapOn:
     text: "Record keys handed to customer"
     repeat: 2
+# mutate performs me -> tripKeys -> parallel authoritative readback, each with
+# the existing 20s HTTP bound. Await that state, not Maestro's shorter default.
+- extendedWaitUntil:
+    visible: "Keys handoff recorded"
+    timeout: 60000
 - assertVisible: "Keys handoff recorded"
 - assertNotVisible: "Start trip"
 - takeScreenshot: host-keys
