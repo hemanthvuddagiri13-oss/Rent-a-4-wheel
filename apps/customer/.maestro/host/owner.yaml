@@ -41,6 +41,10 @@ appId: com.renta4wheel.host.acceptance
 - inputText: "Synthetic host pickup instructions."
 - runFlow: dismiss-keyboard.yaml
 - tapOn: "Send message"
+# Composer text is not proof of delivery. Await the initially empty conversation.
+- extendedWaitUntil:
+    notVisible: "No messages yet."
+    timeout: 60000
 - assertVisible: "Synthetic host pickup instructions."
 - takeScreenshot: host-message
 - runFlow: back.yaml
@@ -121,6 +125,12 @@ appId: com.renta4wheel.host.acceptance
     element: "HOST_REPLY.*"
     direction: UP
 - assertVisible: "Synthetic interrupted reply."
+# Refresh alone can expose the committed event while the retry is still pending.
+# Require the original intent to finish before calling this recovered.
+- extendedWaitUntil:
+    visible: "Write a reply, then send it once."
+    timeout: 60000
+- assertNotVisible: "This reply is awaiting confirmation.*"
 - takeScreenshot: host-reply-recovered
 - runFlow: back.yaml
 - runFlow: back.yaml
