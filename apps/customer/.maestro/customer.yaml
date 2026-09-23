@@ -16,6 +16,8 @@ appId: com.renta4wheel.customer.acceptance
 - scrollUntilVisible:
     element: "Use verified email instead"
     direction: DOWN
+# Email code-verification coverage only: the isolated CI fixture pre-seeds this
+# code. Request-code returns generic accepted; no new email delivery is tested.
 - tapOn: "Use verified email instead"
 - assertVisible: "Sign in with linked email"
 - tapOn:

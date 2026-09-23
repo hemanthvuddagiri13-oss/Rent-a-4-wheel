@@ -7,8 +7,10 @@ async function main() {
 await fixtureJurisdiction(db);
 const user = await db.user.create({ data: { email: 'native-customer@example.test', emailVerified: new Date(), name: 'Synthetic customer', role: 'CUSTOMER' } });
 await db.mobilePhoneIdentity.create({ data: { userId: user.id, phone: '+12025550101' } });
-// Delivery boundary fixture: the app still exercises the real issuance, bcrypt,
-// consumption, native-session, refresh and logout HTTP routes. No production bypass.
+// Code-verification fixture, NOT email issuance/delivery coverage. Four consumed
+// rows plus one usable code trigger the request endpoint's generic rate-limit
+// response. The app consumes this pre-seeded code through real bcrypt/session
+// routes; it does not capture or consume a newly delivered email code.
 for (let i = 0; i < 5; i++) await db.authCode.create({ data: { email: user.email, purpose: 'MOBILE_SIGN_IN', codeHash: await bcrypt.hash('123456', 4), createdAt: new Date(Date.now() - (5 - i) * 1000), expiresAt: new Date(Date.now() + 600000), consumedAt: i < 4 ? new Date() : null } });
 const hostUser = await db.user.create({ data: { email: 'native-host@example.test', role: 'HOST' } });
 const host = await db.hostProfile.create({ data: { userId: hostUser.id, legalName: 'Synthetic acceptance host', onboardingStatus: 'APPROVED', jurisdictionCode: 'TX' } });

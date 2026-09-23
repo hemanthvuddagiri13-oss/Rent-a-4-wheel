@@ -83,7 +83,10 @@ export async function requestLoginChallenge(input: unknown, ipHash: string, head
         }
       }
     }
-    const record = await tx.mobileLoginChallenge.create({ data: { id, channel, purpose, target, targetHash, deviceId, ipHash, userId: actor?.userId, sessionId: actor?.sessionId, previousPhone, previousPhoneVersion, codeHash, state: denied ? "DENIED" : "CREATED", expiresAt: new Date(now.getTime() + 10 * 60000) } });
+    // Freeze an existing login binding. A later removal must not turn this
+    // challenge into registration, or authorize a recycled/re-linked number.
+    const loginIdentity = !actor ? await tx.mobilePhoneIdentity.findUnique({ where: { phone: target } }) : null;
+    const record = await tx.mobileLoginChallenge.create({ data: { id, channel, purpose, target, targetHash, deviceId, ipHash, userId: actor?.userId ?? loginIdentity?.userId, sessionId: actor?.sessionId, previousPhone: loginIdentity?.phone ?? previousPhone, previousPhoneVersion: loginIdentity?.version ?? previousPhoneVersion, codeHash, state: denied ? "DENIED" : "CREATED", expiresAt: new Date(now.getTime() + 10 * 60000) } });
     await event(tx, "requested", id, actor?.userId); return record;
   });
   if (!challenge || challenge.state === "DENIED") return { accepted: true as const, challengeId: id, retryAfterSeconds: 60 };
@@ -123,14 +126,23 @@ export async function verifyLoginChallenge(input: unknown, headers?: Headers, db
   }
   try {
     return await db.$transaction(async tx => {
-      await guard(tx, ["target:" + challenge.targetHash]);
+      // Global identity-finalization order: sorted target locks, User, challenge.
+      // Changing a number also serializes against registration/login on the old
+      // number; no transaction can restore a session after change revocation.
+      await guard(tx, ["target:" + challenge.targetHash, ...(challenge.purpose === "CHANGE_PHONE" && challenge.previousPhone ? ["target:" + hash(challenge.previousPhone)] : [])]);
       const actor = headers ? await freshActor(tx, headers) : null;
+      const locator = challenge.purpose === "SIGN_IN" ? await tx.mobilePhoneIdentity.findUnique({ where: { phone: challenge.target } }) : null;
+      if (locator) await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${locator.userId} FOR UPDATE`;
       await tx.$queryRaw`SELECT "id" FROM "MobileLoginChallenge" WHERE "id"=${challenge.id} FOR UPDATE`;
       const c = await tx.mobileLoginChallenge.findUniqueOrThrow({ where: { id: challenge.id } });
       if (c.state !== "CHECKING" || c.claim !== claim || c.expiresAt <= new Date()) throw new MobileError("UNAUTHORIZED", 401);
       if (c.providerSid) await tx.mobileVerificationReceipt.create({ data: { providerSid: c.providerSid, challengeId: c.id } });
       if (c.purpose === "SIGN_IN") {
         let identity = await tx.mobilePhoneIdentity.findUnique({ where: { phone: c.target } });
+        // Re-read after the User lock, and validate both the locator and frozen
+        // challenge version before issuance. Never trust a pre-lock identity.
+        if ((identity?.userId ?? null) !== (locator?.userId ?? null) || (identity?.version ?? null) !== (locator?.version ?? null) ||
+          c.userId && (!identity || identity.userId !== c.userId || identity.phone !== c.previousPhone || identity.version !== c.previousPhoneVersion)) throw new MobileError("UNAUTHORIZED", 401);
         if (!identity) {
           // Random non-deliverable internal address preserves the established web
           // schema; it is never a linked email or an account-matching input.
@@ -166,6 +178,9 @@ export async function verifyLoginChallenge(input: unknown, headers?: Headers, db
         recoveryId = record.id;
       } else {
         if (c.purpose === "LINK_PHONE" && current || c.purpose === "CHANGE_PHONE" && !current) throw new MobileError("CONFLICT", 409);
+        // Invalidate pre-link registration approvals as well as old-number
+        // approvals. A new owner must obtain a new challenge after the change.
+        await tx.mobileLoginChallenge.updateMany({ where: { purpose: "SIGN_IN", target: { in: [c.target, ...(current ? [current.phone] : [])] }, state: { in: ["CREATED", "SENT", "CHECKING"] } }, data: { state: "FAILED", claim: null } });
         await tx.mobilePhoneIdentity.upsert({ where: { userId: actor.userId }, create: { userId: actor.userId, phone: c.target }, update: { phone: c.target, verifiedAt: new Date(), version: { increment: 1 } } });
         await tx.user.update({ where: { id: actor.userId }, data: { phone: c.target } });
       }

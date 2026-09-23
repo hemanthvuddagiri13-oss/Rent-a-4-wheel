@@ -710,6 +710,111 @@ it("phone change requires current-number proof in the same fresh session and rev
   expect((await post("auth/refresh", { refreshToken: c.refreshToken })).status).toBe(401);
   expect(await prisma.mobilePhoneIdentity.count()).toBe(1);
 });
+function signal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(r => { resolve = r; });
+  return { promise, resolve };
+}
+async function preparedPhoneChange() {
+  const c = await phoneLogin(); await agePhoneCooldown();
+  const current = await identityChallenge(c.accessToken, "CURRENT_PHONE", c.phone);
+  const proved = await verifyIdentity(c.accessToken, current); expect(proved.status).toBe(200);
+  const replacement = await identityChallenge(c.accessToken, "CHANGE_PHONE", "+12025550102", (await proved.json()).data.proofId);
+  await agePhoneCooldown();
+  return { c, replacement, signIn: await phoneChallenge(c.phone) };
+}
+it.each(["change", "sign-in"] as const)("phone binding race: %s commits first under real PostgreSQL lock contention", async first => {
+  const { c, replacement, signIn } = await preparedPhoneChange(), [a, b] = await independentClients();
+  const userId = (await prisma.mobilePhoneIdentity.findFirstOrThrow()).userId;
+  const [winnerPid] = await a.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const [waiterPid] = await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const locked = signal(), release = signal(); let approved = false, stopped = false;
+  const winnerDb = a.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    const result = await query(args);
+    // Stop only finalization, after provider approval and the real User lock.
+    // The challenge-claim transaction also locks User for identity changes.
+    if (!stopped && approved && operation === "$queryRaw" && JSON.stringify(args).includes("User") && JSON.stringify(args).includes("FOR UPDATE")) {
+      stopped = true; locked.resolve(); await release.promise;
+    }
+    return result;
+  } } }) as unknown as PrismaClient;
+  const provider = { start: fixture.smsStart, check: async () => { approved = true; return true; } };
+  const headers = new Headers({ authorization: "Bearer " + c.accessToken });
+  const change = (db: PrismaClient, p?: typeof provider) => verifyLoginChallenge({ challengeId: replacement, code: "123456" }, headers, db, p);
+  const login = (db: PrismaClient, p?: typeof provider) => verifyLoginChallenge(signIn, undefined, db, p);
+  const winner = (first === "change" ? change : login)(winnerDb, provider);
+  let waiter: ReturnType<typeof verifyLoginChallenge> | undefined;
+  try {
+    await locked.promise;
+    waiter = (first === "change" ? login : change)(b);
+    const resultsPromise = Promise.allSettled([winner, waiter]);
+    // Database-observed blocking is the barrier. No sleeps/timing inference:
+    // release only once the independent backend is actually waiting on winner.
+    let blocked = false; const deadline = Date.now() + 4000;
+    while (!blocked && Date.now() < deadline) {
+      const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`SELECT ${winnerPid.pid}::int = ANY(pg_blocking_pids(${waiterPid.pid}::int)) AS blocked`;
+      blocked = row.blocked;
+    }
+    expect(blocked).toBe(true); release.resolve();
+    const results = await resultsPromise;
+    expect(results[0].status).toBe("fulfilled");
+    if (first === "change") expect(results[1]).toMatchObject({ status: "rejected", reason: { status: 401 } });
+    else {
+      expect(results[1].status).toBe("fulfilled");
+      const tokens = (results[0] as PromiseFulfilledResult<Credentials>).value;
+      expect((await get("me", tokens.accessToken)).status).toBe(401);
+      expect((await post("auth/refresh", { refreshToken: tokens.refreshToken })).status).toBe(401);
+    }
+    expect(await prisma.mobilePhoneIdentity.findUnique({ where: { phone: c.phone } })).toBeNull();
+    expect(await prisma.mobilePhoneIdentity.findUnique({ where: { phone: "+12025550102" } })).toMatchObject({ userId, version: 2 });
+    expect(await prisma.mobilePhoneIdentity.count()).toBe(1); expect(await prisma.user.count()).toBe(1);
+    expect(await prisma.mobileSession.count()).toBe(first === "change" ? 1 : 2);
+    expect(await prisma.mobileCredential.count()).toBe(first === "change" ? 1 : 2);
+    expect(await prisma.mobileSession.count({ where: { revokedAt: null } })).toBe(0);
+    expect((await get("me", c.accessToken)).status).toBe(401);
+    expect((await post("auth/refresh", { refreshToken: c.refreshToken })).status).toBe(401);
+    expect((await post("auth/phone-sign-in", signIn)).status).toBe(401);
+    expect(await prisma.mobileSession.count()).toBe(first === "change" ? 1 : 2);
+    // Only a fresh new-number proof can restore access to the same account.
+    await agePhoneCooldown(); const fresh = await phoneLogin("+12025550102");
+    expect((await (await get("me", fresh.accessToken)).json()).data.id).toBe(userId);
+    expect(await prisma.mobileSession.count({ where: { revokedAt: null } })).toBe(1);
+  } finally { release.resolve(); await Promise.allSettled([winner, ...(waiter ? [waiter] : [])]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it("an old sign-in challenge cannot become registration after its phone binding is removed", async () => {
+  const { c, replacement, signIn } = await preparedPhoneChange();
+  expect((await verifyIdentity(c.accessToken, replacement)).status).toBe(200);
+  expect((await post("auth/phone-sign-in", signIn)).status).toBe(401);
+  expect(await prisma.user.count()).toBe(1); expect(await prisma.mobileSession.count()).toBe(1);
+  expect(await prisma.mobileLoginChallenge.findUnique({ where: { id: signIn.challengeId } })).toMatchObject({ state: "FAILED" });
+});
+it("sign-in rechecks the frozen identity version even when the phone and user still match", async () => {
+  const c = await phoneLogin(); await agePhoneCooldown(); const input = await phoneChallenge();
+  // Simulate a remove/re-link ABA: exact number and owner match, version differs.
+  await prisma.mobilePhoneIdentity.update({ where: { phone: c.phone }, data: { version: { increment: 2 } } });
+  expect((await post("auth/phone-sign-in", input)).status).toBe(401);
+  expect(await prisma.mobileSession.count()).toBe(1);
+  expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+});
+it("linking invalidates an approved registration challenge without transferring ownership", async () => {
+  const owner = await login(), input = await phoneChallenge(); await agePhoneCooldown();
+  const link = await identityChallenge(owner.accessToken, "LINK_PHONE", "+12025550101"), [a, b] = await independentClients();
+  const checked = signal(), release = signal();
+  const provider = { start: fixture.smsStart, check: async () => { checked.resolve(); await release.promise; return true; } };
+  const pending = verifyLoginChallenge(input, undefined, a, provider);
+  try {
+    await checked.promise;
+    await verifyLoginChallenge({ challengeId: link, code: "123456" }, new Headers({ authorization: "Bearer " + owner.accessToken }), b);
+    const result = Promise.allSettled([pending]); release.resolve();
+    expect((await result)[0]).toMatchObject({ status: "rejected", reason: { status: 401 } });
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: owner.email } });
+    expect(await prisma.mobilePhoneIdentity.findUnique({ where: { phone: "+12025550101" } })).toMatchObject({ userId: user.id });
+    expect(await prisma.user.count()).toBe(1); expect(await prisma.mobileSession.count()).toBe(1);
+    expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+    expect((await get("me", owner.accessToken)).status).toBe(200);
+    expect((await post("auth/phone-sign-in", input)).status).toBe(401);
+  } finally { release.resolve(); await Promise.allSettled([pending]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
 it("revocation during provider verification fences linking before identity authority changes", async () => {
   const c = await login(), id = await identityChallenge(c.accessToken, "LINK_PHONE", "+12025550101");
   let enter!: () => void, release!: () => void;
