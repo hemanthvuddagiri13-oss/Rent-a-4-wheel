@@ -16,11 +16,25 @@ import { saveTripReview } from "@/lib/trip-reviews";
 import { tripCommand } from "@/lib/trip-experience";
 import { cancelCustomerReservation, startCustomerTrip } from "@/lib/customer-reservation";
 import { mobileMutation } from "./mutation";
-import { mobileReservationAccess } from "./queries";
+import { mobileReservationAccess, mobileQuery } from "./queries";
+import { isVehicleAvailable } from "@/lib/availability";
+import { hasVerifiedBookingContact } from "@/lib/booking-contact";
 import { authenticateMobile, MobileError } from "./auth";
 import { mobileBody, mobileIp } from "./http";
 
+function mobileBookingDates(data: { pickupAt: string; returnAt: string }, timezone: string) {
+  try { return { pickupAt: bookingInstant(data.pickupAt, timezone), returnAt: bookingInstant(data.returnAt, timezone) }; }
+  catch { throw new MobileError("INVALID_REQUEST", 400); }
+}
+
 export async function mobileCommand(req: Request, parts: string[]) {
+  if (parts[0] === "vehicles" && parts[2] === "availability" && parts.length === 3) {
+    const data = z.object({ pickupAt: z.iso.datetime(), returnAt: z.iso.datetime() }).strict().parse(await mobileBody(req));
+    const { pickupAt: pickup, returnAt: end } = mobileBookingDates(data, (await getSiteSettings()).bookingTimezone);
+    if (pickup <= new Date() || end <= pickup || end.getTime() - pickup.getTime() > 366 * 86400000) throw new MobileError("INVALID_REQUEST", 400);
+    await mobileQuery(req, ["vehicles", parts[1]]);
+    return { available: await isVehicleAvailable(parts[1], pickup, end), authoritativeAt: new Date().toISOString(), holdRequired: true };
+  }
   const actor = await authenticateMobile(req.headers);
   await marketplaceLimit(actor.userId);
   const [resource, id, action] = parts;
@@ -60,6 +74,7 @@ export async function mobileCommand(req: Request, parts: string[]) {
     return mobileMutation(req, "reservation.checkout", { id, ...data, agreementContentHash }, async (tx, userId) => {
       await mobileReservationAccess(tx, userId, id, true);
       const current = await lockReservation(tx, id);
+      if (!await hasVerifiedBookingContact(tx, userId, data.driver.email)) throw new MobileError("CONFLICT", 409);
       if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new MobileError("CONFLICT", 409);
       await requireCheckoutAdmission(tx, id);
       const signed = current.checkoutFingerprint ? await tx.agreementAcceptance.findFirst({ where: { reservationId: id, type: "RENTAL_AGREEMENT" }, orderBy: { signedAt: "desc" }, select: { contentHash: true } }) : null;
@@ -77,8 +92,8 @@ export async function mobileCommand(req: Request, parts: string[]) {
   }
   if (resource === "reservations" && id === "hold" && parts.length === 2) {
     const data = createHoldSchema.parse(input), timezone = (await getSiteSettings()).bookingTimezone;
-    const pickupAt = bookingInstant(data.pickupAt, timezone), returnAt = bookingInstant(data.returnAt, timezone);
-    return mobileMutation(req, "reservation.hold", data, active, async (tx, userId) => {
+    const { pickupAt, returnAt } = mobileBookingDates(data, timezone);
+    return mobileMutation(req, "reservation.hold", data, async (tx, userId) => { await active(tx, userId); if (!await hasVerifiedBookingContact(tx, userId)) throw new MobileError("CONFLICT", 409); }, async (tx, userId) => {
       const held = await createOrRefreshHold({ ...data, customerId: userId, bookingTimezone: timezone, pickupAt, returnAt }, tx);
       return { id: held.id };
     });

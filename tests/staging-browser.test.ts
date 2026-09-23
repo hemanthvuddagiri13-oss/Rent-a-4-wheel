@@ -96,7 +96,7 @@ it.skipIf(!enabled)("public production pages hydrate under fresh per-request CSP
 },90000);
 
 it.skipIf(!enabled)("native bearer auth crosses the real production proxy without weakening web cookie CSRF",async()=>{
- const user=await createTestCustomer();users.push(user.id);
+ const user=await createTestCustomer({emailVerified:new Date()});users.push(user.id);
  await prisma.authCode.create({data:{email:user.email,purpose:"MOBILE_SIGN_IN",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});
  const context=await browser.newContext({ignoreHTTPSErrors:true});
  try {

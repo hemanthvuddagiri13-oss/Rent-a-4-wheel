@@ -13,7 +13,7 @@ import { authenticateMobile, MobileError } from "./auth";
 import { pageInput } from "./http";
 
 export const mobileVehicleSelect = { id: true, slug: true, year: true, make: true, model: true, category: true, transmission: true, fuelType: true, seats: true, dailyRateCents: true, securityDepositCents: true, location: true, jurisdictionCode: true } satisfies Prisma.VehicleSelect;
-export const mobileReservationSelect = { id: true, confirmationNumber: true, vehicleId: true, status: true, pickupAt: true, returnAt: true, bookingTimezone: true, expiresAt: true, subtotalCents: true, extrasCents: true, discountCents: true, taxCents: true, feesCents: true, totalCents: true, depositCents: true, bookingFingerprint: true } satisfies Prisma.ReservationSelect;
+export const mobileReservationSelect = { id: true, confirmationNumber: true, vehicleId: true, status: true, pickupAt: true, returnAt: true, bookingTimezone: true, pickupLocation: true, expiresAt: true, subtotalCents: true, extrasCents: true, discountCents: true, taxCents: true, feesCents: true, totalCents: true, depositCents: true, bookingFingerprint: true } satisfies Prisma.ReservationSelect;
 export async function mobileReservationAccess(tx: Prisma.TransactionClient, userId: string, id: string, ownerOnly = false) {
   const reservation = await tx.reservation.findUnique({ where: { id }, select: { customerId: true, vehicleId: true } });
   if (!reservation || ownerOnly && reservation.customerId !== userId) throw new MobileError("NOT_FOUND", 404);
@@ -26,6 +26,14 @@ export async function mobileQuery(req: Request, parts: string[]) {
   const [resource, id, action] = parts;
   const { limit, cursor } = pageInput(req);
   const page = { take: limit + 1, orderBy: { id: "asc" as const }, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) };
+  if (resource === "vehicles" && id && action === "photos" && parts.length === 3) {
+    await mobileQuery(req, ["vehicles", id]);
+    const v = await prisma.vehicle.findUniqueOrThrow({ where: { id }, select: { hostId: true } });
+    // Only explicit public listing uploads belonging to this vehicle's host.
+    // Unverified VehicleImage URLs and arbitrary supplied photos are never published.
+    const files = v.hostId ? await prisma.marketplaceFile.findMany({ where: { vehicleId: id, hostId: v.hostId, purpose: "LISTING_PHOTO", scanStatus: "CLEAN", mimeType: { in: ["image/jpeg", "image/png", "image/webp"] } }, select: { id: true }, take: 12, orderBy: { createdAt: "asc" } }) : [];
+    return { items: files.map(f => ({ id: f.id, path: `/api/marketplace/files/${encodeURIComponent(f.id)}`, alt: "Host-authorized vehicle listing photo" })) };
+  }
   if (resource === "vehicles" && !action && parts.length <= 2) {
     const codes: string[] = [];
     for (const code of await visibleJurisdictions()) {
@@ -42,6 +50,10 @@ export async function mobileQuery(req: Request, parts: string[]) {
     });
   }
   const actor = await authenticateMobile(req.headers);
+  if (resource === "reservations" && action === "reports" && parts[4] === "photos" && parts.length === 6) {
+    const { readReportPhoto } = await import("./report-photo");
+    return readReportPhoto(actor.userId, id, parts[3], parts[5]);
+  }
   if (resource === "files" && id && parts.length === 2) {
     const { readMobileDocument } = await import("./files"); return readMobileDocument(req, id);
   }
@@ -87,6 +99,12 @@ export async function mobileQuery(req: Request, parts: string[]) {
       if (!id) { const { conversationWhere } = await collaborationScopes(tx, actor.userId); return collection(await tx.conversation.findMany({ where: conversationWhere, select: { id: true, reservationId: true, vehicleId: true, updatedAt: true }, ...page }), limit); }
       await conversationAccess(tx, actor.userId, id);
       return collection(await tx.conversationMessage.findMany({ where: { conversationId: id, deletedAt: null }, select: { id: true, body: true, createdAt: true, editedAt: true, version: true }, ...page }), limit);
+    });
+  }
+  if (resource === "cases" && id && action === "events" && parts.length === 3) {
+    return prisma.$transaction(async tx => {
+      await caseAccess(tx, actor.userId, id);
+      return collection(await tx.serviceCaseEvent.findMany({ where: { caseId: id, internal: false }, select: { id: true, body: true, action: true, createdAt: true }, ...page }), limit);
     });
   }
   if (resource === "cases" && !action && parts.length <= 2) {

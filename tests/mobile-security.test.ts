@@ -8,7 +8,7 @@ import { createHash, createHmac } from "node:crypto";
 import sharp from "sharp";
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { createMobileClient } from "../packages/mobile-client/src";
-const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn() }));
+const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
 vi.mock("@/lib/prisma", async () => {
   const { PrismaClient } = await import("@prisma/client");
   const url = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!); url.pathname = "/" + fixture.name;
@@ -19,6 +19,7 @@ vi.mock("@/lib/prisma", async () => {
 vi.mock("@/lib/email", () => ({ sendEmail: async ({ html }: { html: string }) => { fixture.emails.push(html); return { sent: true }; } }));
 vi.mock("@/lib/storage", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/storage")>(), readPrivateDocument: fixture.storageRead, storePrivateDocument: fixture.storageWrite }));
 vi.mock("@/lib/clamav", () => ({ scanWithClamAv: fixture.scan }));
+vi.mock("@/lib/mobile/sms-provider", () => ({ smsProvider: () => ({ start: fixture.smsStart, check: fixture.smsCheck }) }));
 import { prisma } from "@/lib/prisma";
 import { POST as authPost, GET as authGet } from "@/app/api/v1/mobile/auth/[action]/route";
 import { POST as apiPost, GET as apiGet } from "@/app/api/v1/mobile/[...path]/route";
@@ -26,6 +27,7 @@ import { refreshMobileCredential, tokenHash } from "@/lib/mobile/auth";
 import { mobileMutation } from "@/lib/mobile/mutation";
 import { messageCommand, conversationAccess } from "@/lib/conversations";
 import { createOrRefreshHold } from "@/lib/checkout-hold";
+import { verifyLoginChallenge } from "@/lib/mobile/login-identity";
 
 const source = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!);
 const target = new URL(source); target.pathname = "/" + fixture.name;
@@ -51,6 +53,8 @@ beforeEach(async () => {
   const tables = await prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_prisma_migrations'`;
   await prisma.$executeRawUnsafe("TRUNCATE " + tables.map(t => '"' + t.tablename.replaceAll('"', '""') + '"').join(",") + " CASCADE");
   fixture.emails.length = 0;
+  fixture.smsStart.mockReset().mockImplementation(async () => "fixture:" + crypto.randomUUID());
+  fixture.smsCheck.mockReset().mockImplementation(async (_sid: string, code: string) => code === "123456");
   fixture.storageRead.mockReset().mockResolvedValue({ buffer: Buffer.from("synthetic private bytes") });
   fixture.scan.mockReset().mockResolvedValue({ status: "CLEAN" });
   fixture.storageWrite.mockReset().mockImplementation(async (bytes: Buffer, mimeType: string, stableId: string) => {
@@ -69,6 +73,8 @@ type Credentials = { accessToken: string; refreshToken: string; sessionId: strin
 const post = (route: string, body: unknown, token?: string, key?: string) => fetch(base + "/api/v1/mobile/" + route, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}), ...(key ? { "idempotency-key": key } : {}) }, body: JSON.stringify(body) });
 const get = (route: string, token?: string) => fetch(base + "/api/v1/mobile/" + route, { headers: token ? { authorization: "Bearer " + token } : {} });
 async function requestCode(email: string) {
+  // Email fallback is only for an already verified, linked identity.
+  await prisma.user.upsert({ where: { email }, update: {}, create: { email, emailVerified: new Date(), customer: { create: {} } } });
   const response = await post("auth/request-code", { email }); expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ data: { accepted: true }, error: null });
   return fixture.emails.at(-1)!.match(/>(\d{6})<\//)![1];
@@ -77,7 +83,7 @@ async function login(email = crypto.randomUUID() + "@mobile.test") {
   const code = await requestCode(email), response = await post("auth/sign-in", { email, code, ...device() });
   expect(response.status).toBe(200); return { ...(await response.json()).data as Credentials, email };
 }
-it("HTTP first sign-in consumes hashed code and stores only hashed credentials", async () => {
+it("HTTP linked-email sign-in consumes hashed code and stores only hashed credentials", async () => {
   const c = await login(), user = await prisma.user.findUniqueOrThrow({ where: { email: c.email } });
   expect(user).toMatchObject({ role: "CUSTOMER", isActive: true });
   expect(await prisma.customer.count({ where: { userId: user.id } })).toBe(1);
@@ -255,6 +261,81 @@ it("HTTP current host tenancy, employee removal and role changes apply without t
   expect((await get("host/fleet", f.owner.accessToken)).status).toBe(403);
   expect((await get("me", f.owner.accessToken)).status).toBe(200);
 });
+it("HTTP reservation instructions expose the stored pickup location only to current participants", async () => {
+  const f = await tenantFixture();
+  await prisma.reservation.update({ where: { id: f.reservation.id }, data: { pickupLocation: "Synthetic host handoff point" } });
+  for (const actor of [f.customer, f.owner]) {
+    const response = await get(`reservations/${f.reservation.id}`, actor.accessToken);
+    expect(response.status).toBe(200);
+    expect((await response.json()).data.pickupLocation).toBe("Synthetic host handoff point");
+  }
+  const denied = await get(`reservations/${f.reservation.id}`, f.other.accessToken);
+  expect(denied.status).toBe(404);
+  expect(await denied.text()).not.toContain("Synthetic host handoff point");
+});
+
+it("HTTP customer availability is dated, gate-protected and never substitutes for a hold", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const path = `vehicles/${f.vehicle.id}/availability`, dates = { pickupAt: '2056-04-01T12:00:00Z', returnAt: '2056-04-02T12:00:00Z' };
+  const available = await post(path, dates); expect(available.status).toBe(200); expect((await available.json()).data).toMatchObject({ available: true, holdRequired: true });
+  expect(await prisma.reservation.count()).toBe(1);
+  const hold = await post('reservations/hold', { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] }, f.customer.accessToken, crypto.randomUUID()); expect(hold.status).toBe(200);
+  expect((await (await post(path, dates)).json()).data.available).toBe(false);
+  expect((await post('reservations/hold', { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] }, f.other.accessToken, crypto.randomUUID())).status).toBe(409);
+  expect((await post(path, { ...dates, returnAt: dates.pickupAt })).status).toBe(400);
+  expect((await post(path, { ...dates, pickupAt: 'not-a-date' })).status).toBe(400);
+  await prisma.jurisdiction.update({ where: { code: 'TX' }, data: { mode: 'DISABLED' } });
+  expect((await post(path, dates)).status).toBe(404);
+});
+it.each(["2056-04-01T12:00:01.000Z", "2056-04-01T12:00:00.123Z"])("HTTP availability and hold consistently reject sub-minute pickup %s without writes", async pickupAt => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const dates = { pickupAt, returnAt: "2056-04-02T12:00:00.000Z" };
+  const available = await post(`vehicles/${f.vehicle.id}/availability`, dates);
+  expect(available.status).toBe(400);
+  expect((await available.json()).error.code).toBe("INVALID_REQUEST");
+  const held = await post("reservations/hold", { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] }, f.customer.accessToken, crypto.randomUUID());
+  expect(held.status).toBe(400);
+  expect((await held.json()).error.code).toBe("INVALID_REQUEST");
+  expect(await prisma.reservation.count()).toBe(1);
+  expect(await prisma.mobileMutation.count()).toBe(0);
+  expect(await prisma.bookingDraft.count()).toBe(0);
+});
+
+it("HTTP listing photos expose only explicitly designated clean photos of the current host", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const data = { vehicleId: f.vehicle.id, hostId: f.host.id, uploadedById: f.host.userId, storageKey: 'local:synthetic.png', mimeType: 'image/png', sha256: 'a'.repeat(64), scanStatus: 'CLEAN', purpose: 'LISTING_PHOTO' };
+  const allowed = await prisma.marketplaceFile.create({ data });
+  await prisma.marketplaceFile.create({ data: { ...data, purpose: 'INSURANCE' } });
+  await prisma.marketplaceFile.create({ data: { ...data, scanStatus: 'QUARANTINED' } });
+  await prisma.vehicleImage.create({ data: { vehicleId: f.vehicle.id, url: 'https://unapproved.invalid/private-sentinel.png' } });
+  const response = await get(`vehicles/${f.vehicle.id}/photos`); expect(response.status).toBe(200);
+  expect((await response.json()).data.items).toEqual([{ id: allowed.id, path: '/api/marketplace/files/' + allowed.id, alt: 'Host-authorized vehicle listing photo' }]);
+  await prisma.vehicle.update({ where: { id: f.vehicle.id }, data: { listingApproval: 'PENDING' } });
+  expect((await get(`vehicles/${f.vehicle.id}/photos`)).status).toBe(404);
+  expect(fixture.storageRead).not.toHaveBeenCalled();
+});
+it("HTTP report photos repeat participation and private-object quarantine checks without public URLs", async () => {
+  const f = await tenantFixture(), key = 'local:condition.png';
+  await prisma.privateObject.create({ data: { key, sha256: 'a'.repeat(64), size: 4, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+  const report = await prisma.conditionReport.create({ data: { reservationId: f.reservation.id, phase: 'PRE_TRIP', submittedByRole: 'CUSTOMER', submittedById: f.user.id, mileage: 100, fuelLevel: 50, photos: { create: { category: 'EXTERIOR', storageKey: key } } }, include: { photos: true } });
+  const path = `reservations/${f.reservation.id}/reports/${report.id}/photos/${report.photos[0].id}`;
+  for (const c of [f.customer, f.owner, f.employee]) { const r = await get(path, c.accessToken); expect(r.status).toBe(200); expect(r.headers.get('cache-control')).toContain('no-store'); expect(r.headers.get('content-type')).toBe('image/png'); }
+  expect((await get(path, f.other.accessToken)).status).toBe(404);
+  await prisma.hostEmployee.delete({ where: { id: f.membership.id } }); expect((await get(path, f.employee.accessToken)).status).toBe(403);
+  await prisma.privateObject.update({ where: { key }, data: { state: 'QUARANTINED' } }); expect((await get(path, f.customer.accessToken)).status).toBe(404);
+  expect(fixture.storageRead).toHaveBeenCalledTimes(3); expect(await prisma.auditLog.count({ where: { action: 'mobile.report_photo.read' } })).toBe(3);
+});
+it("HTTP case history excludes internal notes and checks current membership on every page", async () => {
+  const f = await tenantFixture();
+  const c = await prisma.serviceCase.create({ data: { openedById: f.membership.userId, reservationId: f.reservation.id, vehicleId: f.vehicle.id, kind: 'TICKET', category: 'GENERAL', title: 'Synthetic support', details: {}, dueAt: new Date('2056-01-01'), retainUntil: new Date('2058-01-01') } });
+  for (const internal of [false, true]) await prisma.serviceCaseEvent.create({ data: { caseId: c.id, actorId: f.user.id, action: 'reply', fromState: 'REPORTED', toState: 'REPORTED', body: internal ? 'PRIVATE_OPERATOR_SENTINEL' : 'Customer-visible reply', internal, version: internal ? 2 : 1 } });
+  const path = `cases/${c.id}/events`;
+  const response = await get(path, f.customer.accessToken); expect(response.status).toBe(200); const body = await response.json(); expect(body.data.items).toHaveLength(1); expect(JSON.stringify(body)).not.toContain('PRIVATE_OPERATOR_SENTINEL');
+  expect((await get(path, f.employee.accessToken)).status).toBe(200);
+  await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: { expiresAt: new Date(0) } });
+  expect((await get(path + '?limit=1', f.employee.accessToken)).status).toBe(403);
+  expect((await get(path, f.other.accessToken)).status).toBe(404);
+});
 it("HTTP a second host cannot access another tenant's reservation, documents or messages", async () => {
   const f = await tenantFixture(), user = await prisma.user.update({ where: { email: f.other.email }, data: { role: "HOST" } });
   await prisma.hostProfile.create({ data: { userId: user.id, legalName: "Other synthetic host", onboardingStatus: "APPROVED" } });
@@ -385,6 +466,7 @@ it("HTTP expired codes and access/refresh lifetimes fail closed", async () => {
 });
 it("HTTP account issuance limit remains five codes per hour beyond the resend cooldown", async () => {
   const email = "account-limit@mobile.test";
+  await prisma.user.create({ data: { email, emailVerified: new Date() } });
   for (let i = 0; i < 7; i++) {
     expect((await post("auth/request-code", { email })).status).toBe(200);
     await prisma.authCode.updateMany({ data: { createdAt: new Date(Date.now() - 61000) } });
@@ -394,6 +476,7 @@ it("HTTP account issuance limit remains five codes per hour beyond the resend co
 });
 it("HTTP issuance throttles one IP across accounts without enumeration responses", async () => {
   for (let i = 0; i < 22; i++) {
+    await prisma.user.create({ data: { email: `ip-${i}@mobile.test`, emailVerified: new Date() } });
     const r = await post("auth/request-code", { email: `ip-${i}@mobile.test` }); expect(r.status).toBe(200); expect((await r.json()).data).toEqual({ accepted: true });
   }
   expect(await prisma.authCode.count()).toBe(20); expect(fixture.emails).toHaveLength(20);
@@ -409,8 +492,9 @@ it("HTTP logout is per-device while logout-all revokes every native device", asy
   expect((await post("auth/logout-all", {}, second.accessToken)).status).toBe(200);
   for (const c of [first, second]) expect((await get("me", c.accessToken)).status).toBe(401);
 });
-it("HTTP checkout binds the displayed agreement and commits one immutable acceptance on retry", async () => {
+it.each([false, true])("HTTP checkout (phone identity %s) binds verified contact and agreement with one immutable acceptance on retry", async phoneIdentity => {
   const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  if (phoneIdentity) await prisma.mobilePhoneIdentity.create({ data: { userId: f.user.id, phone: "+12025550101" } });
   const content = "SYNTHETIC TEST AGREEMENT ONLY", contentHash = createHash("sha256").update(content).digest("hex");
   await prisma.legalDocument.create({ data: { type: "RENTAL_AGREEMENT", title: "Synthetic agreement", version: "synthetic-v1", content, needsAttorneyReview: false } });
   const data = { draftId: crypto.randomUUID(), revision: 1, vehicleId: f.vehicle.id, pickupAt: "2056-04-01T12:00:00Z", returnAt: "2056-04-02T12:00:00Z", extraIds: [] };
@@ -422,10 +506,19 @@ it("HTTP checkout binds the displayed agreement and commits one immutable accept
   const key = crypto.randomUUID(), route = `reservations/${id}/checkout`;
   expect((await post(route, { ...checkout, agreementContentHash: "0".repeat(64) }, f.customer.accessToken, key)).status).toBe(409);
   expect(await prisma.agreementAcceptance.count()).toBe(0);
+  if (phoneIdentity) {
+    expect((await post(route, { ...checkout, driver: { ...driver, email: "unverified-other@example.test" } }, f.customer.accessToken, crypto.randomUUID())).status).toBe(409);
+    expect(await prisma.agreementAcceptance.count()).toBe(0);
+  }
   for (let i = 0; i < 2; i++) expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(200);
   expect(await prisma.agreementAcceptance.count()).toBe(1); expect(await prisma.financeSnapshot.count()).toBe(1);
   expect(await prisma.operationsJob.count({ where: { kind: "AGREEMENT" } })).toBe(1);
   const acceptance = await prisma.agreementAcceptance.findFirstOrThrow(); expect(acceptance.contentHash).toBe(contentHash);
+  if (phoneIdentity) {
+    await prisma.user.update({ where: { id: f.user.id }, data: { emailVerified: null } });
+    expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(409);
+    expect(await prisma.agreementAcceptance.findMany()).toEqual([acceptance]);
+  }
   expect((await prisma.reservation.findUniqueOrThrow({ where: { id } })).status).toBe("AWAITING_PAYMENT");
   await prisma.reservation.update({ where: { id }, data: { expiresAt: new Date(0) } });
   expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(409);
@@ -461,4 +554,314 @@ it("refresh and an in-flight domain mutation cannot invert user/device locks", a
     expect(await prisma.mobileMutation.count()).toBe(1); expect(await prisma.mobileCredential.count()).toBe(2);
     expect((await get("me", c.accessToken)).status).toBe(401); expect((await get("me", rotated.accessToken)).status).toBe(200);
   } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+
+async function phoneChallenge(phone = "+12025550101", d = device()) {
+  const response = await post("auth/request-phone-code", { phone, deviceId: d.deviceId });
+  expect(response.status).toBe(200);
+  const result = (await response.json()).data;
+  expect(result).toMatchObject({ accepted: true, retryAfterSeconds: 60 });
+  return { ...d, challengeId: result.challengeId as string, code: "123456" };
+}
+async function phoneLogin(phone = "+12025550101") {
+  const input = await phoneChallenge(phone), response = await post("auth/phone-sign-in", input);
+  expect(response.status).toBe(200); return { ...(await response.json()).data as Credentials, phone, input };
+}
+async function identityChallenge(token: string, purpose: string, target: string, proofId?: string) {
+  const response = await post("auth/request-identity-code", { purpose, target, ...(proofId ? { proofId } : {}) }, token);
+  expect(response.status).toBe(200); return (await response.json()).data.challengeId as string;
+}
+const verifyIdentity = (token: string, challengeId: string, code = "123456") => post("auth/verify-identity-code", { challengeId, code }, token);
+async function agePhoneCooldown() { await prisma.mobileLoginChallenge.updateMany({ data: { createdAt: new Date(Date.now() - 61000) } }); }
+async function linkEmail(token: string, email: string) {
+  const id = await identityChallenge(token, "LINK_EMAIL", email), code = fixture.emails.at(-1)!.match(/>(\d{6})<\//)![1];
+  const response = await verifyIdentity(token, id, code); expect(response.status).toBe(200); return id;
+}
+it("HTTP phone registration normalizes identity, never merges legacy contact data, and leaves email unverified", async () => {
+  const legacy = await prisma.user.create({ data: { email: "existing@example.test", emailVerified: new Date(), phone: "+12025550101" } });
+  const first = await phoneLogin("(202) 555-0101"), identity = await prisma.mobilePhoneIdentity.findUniqueOrThrow({ where: { phone: "+12025550101" } });
+  expect(identity.userId).not.toBe(legacy.id);
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: identity.userId } });
+  expect(user.emailVerified).toBeNull(); expect(user.email).toMatch(/@phone.identity.invalid$/);
+  expect(await prisma.customer.count({ where: { userId: user.id } })).toBe(1);
+  expect((await (await get("auth/methods", first.accessToken)).json()).data).toMatchObject({ phoneLinked: true, emailLinked: false, email: null });
+  await agePhoneCooldown(); const second = await phoneLogin("+1 202 555 0101");
+  expect(await prisma.mobilePhoneIdentity.count()).toBe(1); expect(await prisma.user.count()).toBe(2);
+  expect((await (await get("me", second.accessToken)).json()).data.id).toBe(user.id);
+  expect(fixture.smsStart).toHaveBeenCalledTimes(2); expect(fixture.smsCheck).toHaveBeenCalledTimes(2);
+  const audit = JSON.stringify(await prisma.auditLog.findMany({ where: { action: { startsWith: "mobile.identity." } } }));
+  expect(audit).not.toContain("+12025550101"); expect(audit).not.toContain("123456");
+});
+it("HTTP phone code is bound to device, expires, and consumes only once", async () => {
+  const data = await phoneChallenge();
+  expect((await post("auth/phone-sign-in", { ...data, deviceId: crypto.randomUUID() })).status).toBe(401);
+  expect(fixture.smsCheck).not.toHaveBeenCalled();
+  expect((await post("auth/phone-sign-in", data)).status).toBe(200);
+  expect((await post("auth/phone-sign-in", data)).status).toBe(401);
+  expect(fixture.smsCheck).toHaveBeenCalledTimes(1); expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+  const expired = await phoneChallenge("+12025550102");
+  await prisma.mobileLoginChallenge.update({ where: { id: expired.challengeId }, data: { expiresAt: new Date(0) } });
+  expect((await post("auth/phone-sign-in", expired)).status).toBe(401);
+  expect(await prisma.mobileSession.count()).toBe(1);
+});
+it("HTTP phone guessing reserves exactly five attempts and cannot approve a sixth", async () => {
+  const data = await phoneChallenge();
+  for (let i = 0; i < 6; i++) expect((await post("auth/phone-sign-in", { ...data, code: "999999" })).status).toBe(401);
+  expect((await post("auth/phone-sign-in", data)).status).toBe(401);
+  expect(fixture.smsCheck).toHaveBeenCalledTimes(5); expect(await prisma.mobileSession.count()).toBe(0);
+});
+it("HTTP phone cooldown and per-number issuance limit prevent duplicate SMS", async () => {
+  await phoneChallenge();
+  for (let i = 0; i < 3; i++) await phoneChallenge();
+  expect(fixture.smsStart).toHaveBeenCalledTimes(1);
+  for (let i = 0; i < 6; i++) { await agePhoneCooldown(); await phoneChallenge(); }
+  expect(fixture.smsStart).toHaveBeenCalledTimes(5); expect(await prisma.mobileLoginChallenge.count()).toBe(5);
+});
+it("HTTP phone issuance enforces device and IP limits across numbers", async () => {
+  const d = device();
+  for (let i = 0; i < 12; i++) await phoneChallenge("+120255501" + String(i).padStart(2, "0"), d);
+  expect(fixture.smsStart).toHaveBeenCalledTimes(10);
+  for (let i = 12; i < 24; i++) await phoneChallenge("+120255501" + String(i).padStart(2, "0"));
+  expect(fixture.smsStart).toHaveBeenCalledTimes(20);
+});
+it("HTTP provider send/check failures leave durable failed intent and grant no account or session", async () => {
+  fixture.smsStart.mockRejectedValueOnce(new Error("provider credential sentinel"));
+  const failed = await post("auth/request-phone-code", { phone: "+12025550101", deviceId: crypto.randomUUID() });
+  expect(failed.status).toBe(503); expect(await failed.text()).not.toContain("sentinel");
+  expect(await prisma.mobileLoginChallenge.findFirst()).toMatchObject({ state: "FAILED" });
+  const data = await phoneChallenge("+12025550102"); fixture.smsCheck.mockRejectedValueOnce(new Error("lost provider approval"));
+  expect((await post("auth/phone-sign-in", data)).status).toBe(503);
+  expect((await post("auth/phone-sign-in", data)).status).toBe(401);
+  expect(fixture.smsCheck).toHaveBeenCalledTimes(1); expect(await prisma.user.count()).toBe(0);
+  expect(await prisma.mobileSession.count()).toBe(0);
+});
+it("parallel PostgreSQL connections consume a challenge once while provider approval is in flight", async () => {
+  const data = await phoneChallenge(), [a, b] = await independentClients();
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(r => { enter = r; }), barrier = new Promise<void>(r => { release = r; });
+  fixture.smsCheck.mockImplementation(async () => { enter(); await barrier; return true; });
+  try {
+    const first = verifyLoginChallenge(data, undefined, a); await entered;
+    await expect(verifyLoginChallenge(data, undefined, b)).rejects.toMatchObject({ status: 401 });
+    release(); await first;
+    expect(fixture.smsCheck).toHaveBeenCalledTimes(1); expect(await prisma.mobileSession.count()).toBe(1);
+    expect(await prisma.mobilePhoneIdentity.count()).toBe(1); expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+  } finally { release(); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it("two approved phone challenges on separate connections create one account without automatic merging", async () => {
+  const first = await phoneChallenge(); await agePhoneCooldown(); const second = await phoneChallenge();
+  const [a, b] = await independentClients(); let arrived = 0, release!: () => void;
+  const barrier = new Promise<void>(r => { release = r; });
+  fixture.smsCheck.mockImplementation(async () => { if (++arrived === 2) release(); await barrier; return true; });
+  try {
+    await Promise.all([verifyLoginChallenge(first, undefined, a), verifyLoginChallenge(second, undefined, b)]);
+    expect(arrived).toBe(2); expect(await prisma.user.count()).toBe(1); expect(await prisma.customer.count()).toBe(1);
+    expect(await prisma.mobilePhoneIdentity.count()).toBe(1); expect(await prisma.mobileSession.count()).toBe(2);
+  } finally { release(); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it("one provider approval SID cannot authorize two local challenges", async () => {
+  fixture.smsStart.mockResolvedValue("fixture:same-provider-verification");
+  const first = await phoneChallenge(); await agePhoneCooldown(); const second = await phoneChallenge();
+  expect((await post("auth/phone-sign-in", first)).status).toBe(200);
+  expect((await post("auth/phone-sign-in", second)).status).toBe(409);
+  expect(await prisma.mobileSession.count()).toBe(1); expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+});
+it("email fallback stays generic for unknown/unverified addresses and cannot create a customer", async () => {
+  await prisma.user.create({ data: { email: "unverified@example.test" } });
+  for (const email of ["unknown@example.test", "unverified@example.test"]) {
+    const response = await post("auth/request-code", { email }); expect(response.status).toBe(200);
+    expect((await response.json()).data).toEqual({ accepted: true });
+    expect((await post("auth/sign-in", { email, code: "123456", ...device() })).status).toBe(401);
+  }
+  expect(fixture.emails).toHaveLength(0); expect(await prisma.authCode.count()).toBe(0);
+  expect(await prisma.user.count()).toBe(1); expect(await prisma.mobileSession.count()).toBe(0);
+});
+it("verified email linking enables fallback for the same phone account without creating a duplicate", async () => {
+  const c = await phoneLogin(); await linkEmail(c.accessToken, "linked@example.test");
+  expect((await (await get("auth/methods", c.accessToken)).json()).data).toMatchObject({ emailLinked: true, email: "linked@example.test" });
+  const code = await requestCode("linked@example.test"), response = await post("auth/sign-in", { email: "linked@example.test", code, ...device() });
+  expect(response.status).toBe(200); expect(await prisma.user.count()).toBe(1);
+  const identity = await prisma.mobilePhoneIdentity.findFirstOrThrow();
+  expect((await (await get("me", (await response.json()).data.accessToken)).json()).data.id).toBe(identity.userId);
+});
+it("linking rejects an email or verified phone already belonging to another account", async () => {
+  const owner = await login("owner@example.test"), c = await phoneLogin();
+  const denied = await identityChallenge(c.accessToken, "LINK_EMAIL", owner.email);
+  expect((await verifyIdentity(c.accessToken, denied)).status).toBe(401);
+  const other = await login("other@example.test"); await agePhoneCooldown();
+  const phone = await identityChallenge(other.accessToken, "LINK_PHONE", c.phone);
+  expect((await verifyIdentity(other.accessToken, phone)).status).toBe(401);
+  expect(await prisma.user.count()).toBe(3); expect(await prisma.mobilePhoneIdentity.count()).toBe(1);
+  expect(fixture.smsStart).toHaveBeenCalledTimes(1);
+});
+it("phone change requires current-number proof in the same fresh session and revokes every native session", async () => {
+  const c = await phoneLogin(); await agePhoneCooldown();
+  const blocked = await identityChallenge(c.accessToken, "CHANGE_PHONE", "+12025550102");
+  expect((await verifyIdentity(c.accessToken, blocked)).status).toBe(401);
+  const current = await identityChallenge(c.accessToken, "CURRENT_PHONE", c.phone);
+  const proved = await verifyIdentity(c.accessToken, current); expect(proved.status).toBe(200);
+  const proofId = (await proved.json()).data.proofId;
+  await agePhoneCooldown();
+  const replacement = await identityChallenge(c.accessToken, "CHANGE_PHONE", "+12025550102", proofId);
+  const response = await verifyIdentity(c.accessToken, replacement); expect(response.status).toBe(200);
+  expect((await response.json()).data).toMatchObject({ outcome: "LINKED", requiresSignIn: true });
+  expect((await prisma.mobilePhoneIdentity.findFirstOrThrow()).phone).toBe("+12025550102");
+  expect((await get("me", c.accessToken)).status).toBe(401);
+  expect((await post("auth/refresh", { refreshToken: c.refreshToken })).status).toBe(401);
+  expect(await prisma.mobilePhoneIdentity.count()).toBe(1);
+});
+function signal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(r => { resolve = r; });
+  return { promise, resolve };
+}
+async function preparedPhoneChange() {
+  const c = await phoneLogin(); await agePhoneCooldown();
+  const current = await identityChallenge(c.accessToken, "CURRENT_PHONE", c.phone);
+  const proved = await verifyIdentity(c.accessToken, current); expect(proved.status).toBe(200);
+  const replacement = await identityChallenge(c.accessToken, "CHANGE_PHONE", "+12025550102", (await proved.json()).data.proofId);
+  await agePhoneCooldown();
+  return { c, replacement, signIn: await phoneChallenge(c.phone) };
+}
+it.each(["change", "sign-in"] as const)("phone binding race: %s commits first under real PostgreSQL lock contention", async first => {
+  const { c, replacement, signIn } = await preparedPhoneChange(), [a, b] = await independentClients();
+  const userId = (await prisma.mobilePhoneIdentity.findFirstOrThrow()).userId;
+  const [winnerPid] = await a.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const [waiterPid] = await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const locked = signal(), release = signal(); let approved = false, stopped = false;
+  const winnerDb = a.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    const result = await query(args);
+    // Stop only finalization, after provider approval and the real User lock.
+    // The challenge-claim transaction also locks User for identity changes.
+    if (!stopped && approved && operation === "$queryRaw" && JSON.stringify(args).includes("User") && JSON.stringify(args).includes("FOR UPDATE")) {
+      stopped = true; locked.resolve(); await release.promise;
+    }
+    return result;
+  } } }) as unknown as PrismaClient;
+  const provider = { start: fixture.smsStart, check: async () => { approved = true; return true; } };
+  const headers = new Headers({ authorization: "Bearer " + c.accessToken });
+  const change = (db: PrismaClient, p?: typeof provider) => verifyLoginChallenge({ challengeId: replacement, code: "123456" }, headers, db, p);
+  const login = (db: PrismaClient, p?: typeof provider) => verifyLoginChallenge(signIn, undefined, db, p);
+  const winner = (first === "change" ? change : login)(winnerDb, provider);
+  let waiter: ReturnType<typeof verifyLoginChallenge> | undefined;
+  try {
+    await locked.promise;
+    waiter = (first === "change" ? login : change)(b);
+    const resultsPromise = Promise.allSettled([winner, waiter]);
+    // Database-observed blocking is the barrier. No sleeps/timing inference:
+    // release only once the independent backend is actually waiting on winner.
+    let blocked = false; const deadline = Date.now() + 4000;
+    while (!blocked && Date.now() < deadline) {
+      const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`SELECT ${winnerPid.pid}::int = ANY(pg_blocking_pids(${waiterPid.pid}::int)) AS blocked`;
+      blocked = row.blocked;
+    }
+    expect(blocked).toBe(true); release.resolve();
+    const results = await resultsPromise;
+    expect(results[0].status).toBe("fulfilled");
+    if (first === "change") expect(results[1]).toMatchObject({ status: "rejected", reason: { status: 401 } });
+    else {
+      expect(results[1].status).toBe("fulfilled");
+      const tokens = (results[0] as PromiseFulfilledResult<Credentials>).value;
+      expect((await get("me", tokens.accessToken)).status).toBe(401);
+      expect((await post("auth/refresh", { refreshToken: tokens.refreshToken })).status).toBe(401);
+    }
+    expect(await prisma.mobilePhoneIdentity.findUnique({ where: { phone: c.phone } })).toBeNull();
+    expect(await prisma.mobilePhoneIdentity.findUnique({ where: { phone: "+12025550102" } })).toMatchObject({ userId, version: 2 });
+    expect(await prisma.mobilePhoneIdentity.count()).toBe(1); expect(await prisma.user.count()).toBe(1);
+    expect(await prisma.mobileSession.count()).toBe(first === "change" ? 1 : 2);
+    expect(await prisma.mobileCredential.count()).toBe(first === "change" ? 1 : 2);
+    expect(await prisma.mobileSession.count({ where: { revokedAt: null } })).toBe(0);
+    expect((await get("me", c.accessToken)).status).toBe(401);
+    expect((await post("auth/refresh", { refreshToken: c.refreshToken })).status).toBe(401);
+    expect((await post("auth/phone-sign-in", signIn)).status).toBe(401);
+    expect(await prisma.mobileSession.count()).toBe(first === "change" ? 1 : 2);
+    // Only a fresh new-number proof can restore access to the same account.
+    await agePhoneCooldown(); const fresh = await phoneLogin("+12025550102");
+    expect((await (await get("me", fresh.accessToken)).json()).data.id).toBe(userId);
+    expect(await prisma.mobileSession.count({ where: { revokedAt: null } })).toBe(1);
+  } finally { release.resolve(); await Promise.allSettled([winner, ...(waiter ? [waiter] : [])]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it("an old sign-in challenge cannot become registration after its phone binding is removed", async () => {
+  const { c, replacement, signIn } = await preparedPhoneChange();
+  expect((await verifyIdentity(c.accessToken, replacement)).status).toBe(200);
+  expect((await post("auth/phone-sign-in", signIn)).status).toBe(401);
+  expect(await prisma.user.count()).toBe(1); expect(await prisma.mobileSession.count()).toBe(1);
+  expect(await prisma.mobileLoginChallenge.findUnique({ where: { id: signIn.challengeId } })).toMatchObject({ state: "FAILED" });
+});
+it("sign-in rechecks the frozen identity version even when the phone and user still match", async () => {
+  const c = await phoneLogin(); await agePhoneCooldown(); const input = await phoneChallenge();
+  // Simulate a remove/re-link ABA: exact number and owner match, version differs.
+  await prisma.mobilePhoneIdentity.update({ where: { phone: c.phone }, data: { version: { increment: 2 } } });
+  expect((await post("auth/phone-sign-in", input)).status).toBe(401);
+  expect(await prisma.mobileSession.count()).toBe(1);
+  expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+});
+it("linking invalidates an approved registration challenge without transferring ownership", async () => {
+  const owner = await login(), input = await phoneChallenge(); await agePhoneCooldown();
+  const link = await identityChallenge(owner.accessToken, "LINK_PHONE", "+12025550101"), [a, b] = await independentClients();
+  const checked = signal(), release = signal();
+  const provider = { start: fixture.smsStart, check: async () => { checked.resolve(); await release.promise; return true; } };
+  const pending = verifyLoginChallenge(input, undefined, a, provider);
+  try {
+    await checked.promise;
+    await verifyLoginChallenge({ challengeId: link, code: "123456" }, new Headers({ authorization: "Bearer " + owner.accessToken }), b);
+    const result = Promise.allSettled([pending]); release.resolve();
+    expect((await result)[0]).toMatchObject({ status: "rejected", reason: { status: 401 } });
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: owner.email } });
+    expect(await prisma.mobilePhoneIdentity.findUnique({ where: { phone: "+12025550101" } })).toMatchObject({ userId: user.id });
+    expect(await prisma.user.count()).toBe(1); expect(await prisma.mobileSession.count()).toBe(1);
+    expect(await prisma.mobileVerificationReceipt.count()).toBe(1);
+    expect((await get("me", owner.accessToken)).status).toBe(200);
+    expect((await post("auth/phone-sign-in", input)).status).toBe(401);
+  } finally { release.resolve(); await Promise.allSettled([pending]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it("revocation during provider verification fences linking before identity authority changes", async () => {
+  const c = await login(), id = await identityChallenge(c.accessToken, "LINK_PHONE", "+12025550101");
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(r => { enter = r; }), barrier = new Promise<void>(r => { release = r; });
+  fixture.smsCheck.mockImplementation(async () => { enter(); await barrier; return true; });
+  const pending = verifyIdentity(c.accessToken, id); await entered;
+  expect((await post("auth/logout", {}, c.accessToken)).status).toBe(200); release();
+  expect((await pending).status).toBe(401); expect(await prisma.mobilePhoneIdentity.count()).toBe(0);
+  expect(await prisma.mobileLoginChallenge.findUnique({ where: { id } })).toMatchObject({ state: "FAILED" });
+});
+it("identity linking rejects stale sessions and phone proof from another session", async () => {
+  const c = await phoneLogin(); await agePhoneCooldown();
+  const id = await identityChallenge(c.accessToken, "CURRENT_PHONE", c.phone), proved = await verifyIdentity(c.accessToken, id);
+  const proofId = (await proved.json()).data.proofId;
+  await agePhoneCooldown(); const other = await phoneLogin(); await agePhoneCooldown();
+  const replacement = await identityChallenge(other.accessToken, "CHANGE_PHONE", "+12025550102", proofId);
+  expect((await verifyIdentity(other.accessToken, replacement)).status).toBe(401);
+  await prisma.mobileSession.update({ where: { id: other.sessionId }, data: { createdAt: new Date(Date.now() - 11 * 60000) } });
+  expect((await post("auth/request-identity-code", { purpose: "LINK_EMAIL", target: "fresh@example.test" }, other.accessToken)).status).toBe(401);
+  expect((await prisma.mobilePhoneIdentity.findFirstOrThrow()).phone).toBe(c.phone);
+});
+it("lost-phone recovery creates one review case, preserves identity and cannot be replayed into authority", async () => {
+  const c = await phoneLogin(); await linkEmail(c.accessToken, "recovery@example.test");
+  const before = await prisma.mobilePhoneIdentity.findFirstOrThrow();
+  const id = await identityChallenge(c.accessToken, "RECOVERY", "+12025550102"), response = await verifyIdentity(c.accessToken, id);
+  expect(response.status).toBe(200); expect((await response.json()).data).toMatchObject({ outcome: "REVIEW_REQUIRED", requiresSignIn: false });
+  for (let i = 0; i < 3; i++) expect((await verifyIdentity(c.accessToken, id)).status).toBe(401);
+  await agePhoneCooldown();
+  const repeated = await identityChallenge(c.accessToken, "RECOVERY", "+12025550102");
+  expect((await verifyIdentity(c.accessToken, repeated)).status).toBe(200);
+  expect(await prisma.mobilePhoneIdentity.findFirst()).toEqual(before);
+  expect(await prisma.mobileIdentityRecovery.count()).toBe(1); expect(await prisma.serviceCase.count()).toBe(1);
+  expect(await prisma.payment.count()).toBe(0); expect(await prisma.ledgerJournal.count()).toBe(0);
+  expect((await get("me", c.accessToken)).status).toBe(200);
+});
+it("phone-only accounts cannot acquire a hold before linking a verified email", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma); const c = await phoneLogin();
+  const input = { draftId: crypto.randomUUID(), revision: 1, vehicleId: f.vehicle.id, pickupAt: "2056-04-01T12:00:00.000Z", returnAt: "2056-04-02T12:00:00.000Z", extraIds: [] };
+  const identity = await prisma.mobilePhoneIdentity.findFirstOrThrow();
+  await expect(createOrRefreshHold({ ...input, customerId: identity.userId, pickupAt: new Date(input.pickupAt), returnAt: new Date(input.returnAt) })).rejects.toMatchObject({ status: 409 });
+  expect((await post("reservations/hold", input, c.accessToken, crypto.randomUUID())).status).toBe(409);
+  expect(await prisma.reservation.count()).toBe(1); expect(await prisma.mobileMutation.count()).toBe(0);
+  await linkEmail(c.accessToken, "booking@example.test");
+  const key = crypto.randomUUID();
+  expect((await post("reservations/hold", input, c.accessToken, key)).status).toBe(200);
+  expect(await prisma.reservation.count()).toBe(2);
+  await prisma.user.update({ where: { id: identity.userId }, data: { emailVerified: null } });
+  expect((await post("reservations/hold", input, c.accessToken, key)).status).toBe(409);
+  expect(await prisma.reservation.count()).toBe(2);
 });

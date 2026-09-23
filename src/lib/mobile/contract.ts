@@ -4,7 +4,7 @@ import { createHoldSchema, checkoutSchema } from "@/lib/validations/reservation"
 const id = z.string().min(1).max(128), date = z.iso.datetime(), cents = z.number().int(), empty = z.object({}).strict();
 const success = z.object({ success: z.boolean() }).strict(), identifier = z.object({ id }).strict();
 const vehicle = z.object({ id, slug: z.string(), year: z.number().int(), make: z.string(), model: z.string(), category: z.string(), transmission: z.string(), fuelType: z.string(), seats: z.number().int(), dailyRateCents: cents, securityDepositCents: cents, location: z.string(), jurisdictionCode: z.string().nullable() }).strict();
-const reservation = z.object({ id, confirmationNumber: z.string(), vehicleId: id, status: z.string(), pickupAt: date, returnAt: date, bookingTimezone: z.string(), expiresAt: date.nullable(), subtotalCents: cents, extrasCents: cents, discountCents: cents, taxCents: cents, feesCents: cents, totalCents: cents, depositCents: cents, bookingFingerprint: z.string().nullable() }).strict();
+const reservation = z.object({ id, confirmationNumber: z.string(), vehicleId: id, status: z.string(), pickupAt: date, returnAt: date, bookingTimezone: z.string(), pickupLocation: z.string(), expiresAt: date.nullable(), subtotalCents: cents, extrasCents: cents, discountCents: cents, taxCents: cents, feesCents: cents, totalCents: cents, depositCents: cents, bookingFingerprint: z.string().nullable() }).strict();
 const doc = z.object({ id, type: z.string(), status: z.string(), malwareScanStatus: z.string() }).strict();
 const serviceCase = z.object({ id, kind: z.string(), category: z.string(), title: z.string(), state: z.string(), version: z.number().int(), reservationId: id.nullable() }).strict();
 const page = (item: z.ZodType) => z.object({ items: z.array(item), nextCursor: id.nullable() }).strict();
@@ -19,6 +19,11 @@ export type MobileOperation = { operationId: string; method: "GET" | "POST"; pat
 const get = (operationId: string, path: string, response: z.ZodType, options: Partial<MobileOperation> = {}): MobileOperation => ({ operationId, method: "GET", path, auth: true, response, ...options });
 const post = (operationId: string, path: string, body: z.ZodType, response: z.ZodType, options: Partial<MobileOperation> = {}): MobileOperation => ({ operationId, method: "POST", path, auth: true, body, response, idempotent: true, ...options });
 export const mobileOperations: MobileOperation[] = [
+  post("requestPhoneCode", "/auth/request-phone-code", z.object({ phone: z.string().min(7).max(40), deviceId: z.uuid() }).strict(), z.object({ accepted: z.literal(true), challengeId: z.uuid(), retryAfterSeconds: z.number().int() }).strict(), { auth: false, idempotent: false }),
+  post("phoneSignIn", "/auth/phone-sign-in", z.object({ challengeId: z.uuid(), code: z.string().regex(/^\d{6}$/), deviceId: z.uuid(), platform: z.enum(["IOS", "ANDROID"]), appVersion: z.string().regex(/^[0-9A-Za-z.+-]{1,40}$/) }).strict(), credentials, { auth: false, idempotent: false }),
+  post("requestIdentityCode", "/auth/request-identity-code", z.object({ purpose: z.enum(["LINK_PHONE", "CURRENT_PHONE", "CHANGE_PHONE", "RECOVERY", "LINK_EMAIL"]), target: z.string().min(3).max(254), proofId: z.uuid().optional() }).strict(), z.object({ accepted: z.literal(true), challengeId: z.uuid(), retryAfterSeconds: z.number().int() }).strict(), { idempotent: false }),
+  post("verifyIdentityCode", "/auth/verify-identity-code", z.object({ challengeId: z.uuid(), code: z.string().regex(/^\d{6}$/) }).strict(), z.object({ outcome: z.enum(["LINKED", "PROVED", "REVIEW_REQUIRED"]), proofId: z.uuid().nullable(), requiresSignIn: z.boolean(), recoveryId: z.uuid().nullable() }).strict(), { idempotent: false }),
+  get("loginMethods", "/auth/methods", z.object({ phoneLinked: z.boolean(), phoneLabel: z.string().nullable(), emailLinked: z.boolean(), email: z.string().nullable(), recoveryId: z.uuid().nullable() }).strict()),
   post("requestCode", "/auth/request-code", z.object({ email: z.email().max(254) }).strict(), z.object({ accepted: z.literal(true) }).strict(), { auth: false, idempotent: false }),
   post("signIn", "/auth/sign-in", z.object({ email: z.email().max(254), code: z.string().regex(/^\d{6}$/), deviceId: z.uuid(), platform: z.enum(["IOS", "ANDROID"]), appVersion: z.string().regex(/^[0-9A-Za-z.+-]{1,40}$/) }).strict(), credentials, { auth: false, idempotent: false }),
   post("refresh", "/auth/refresh", z.object({ refreshToken: z.string().max(100) }).strict(), credentials, { auth: false, idempotent: false }),
@@ -28,6 +33,8 @@ export const mobileOperations: MobileOperation[] = [
   get("me", "/me", z.object({ id, role: z.enum(["CUSTOMER", "HOST", "HOST_EMPLOYEE"]) }).strict()),
   get("vehicles", "/vehicles", page(vehicle), { auth: false, paginated: true }),
   get("vehicle", "/vehicles/{id}", vehicle, { auth: false }),
+  get("listingPhotos", "/vehicles/{id}/photos", items(z.object({ id, path: z.string(), alt: z.string() }).strict()), { auth: false }),
+  post("availability", "/vehicles/{id}/availability", z.object({ pickupAt: date, returnAt: date }).strict(), z.object({ available: z.boolean(), authoritativeAt: date, holdRequired: z.literal(true) }).strict(), { auth: false, idempotent: false }),
   get("reservations", "/reservations", page(reservation), { paginated: true }),
   get("reservation", "/reservations/{id}", reservation),
   post("hold", "/reservations/hold", createHoldSchema, identifier),
@@ -45,6 +52,7 @@ export const mobileOperations: MobileOperation[] = [
   post("documentAccess", "/files/access", z.object({ documentId: id }).strict(), z.object({ capability: z.string(), expiresInSeconds: z.literal(60), documentId: id }).strict(), { idempotent: false }),
   get("privateDocument", "/files/{id}", z.string(), { binary: "response", capability: true, responseMediaTypes: ["image/jpeg", "image/png", "image/webp"] }),
   get("reports", "/reservations/{id}/reports", items(z.object({ id, phase: z.string(), submittedByRole: z.string(), mileage: cents, fuelLevel: cents, damageNotes: z.string().nullable(), acceptedAt: date.nullable(), photos: z.array(z.object({ id, category: photoCategory }).strict()) }).strict())),
+  get("reportPhoto", "/reservations/{id}/reports/{reportId}/photos/{photoId}", z.string(), { binary: "response", responseMediaTypes: ["image/jpeg", "image/png", "image/webp"] }),
   post("submitReport", "/reservations/{id}/reports", reportInput, identifier),
   post("acceptReport", "/reservations/{id}/reports/{reportId}/accept", empty, success),
   get("conversations", "/conversations", page(z.object({ id, reservationId: id.nullable(), vehicleId: id, updatedAt: date }).strict()), { paginated: true }),
@@ -54,6 +62,7 @@ export const mobileOperations: MobileOperation[] = [
   get("notifications", "/notifications", page(z.object({ id, category: z.string(), title: z.string(), readAt: date.nullable(), createdAt: date, resourceType: z.string(), resourceId: id }).strict()), { paginated: true }),
   get("cases", "/cases", page(serviceCase), { paginated: true }),
   get("serviceCase", "/cases/{id}", serviceCase),
+  get("caseEvents", "/cases/{id}/events", page(z.object({ id, body: z.string(), action: z.string(), createdAt: date }).strict()), { paginated: true }),
   post("openCase", "/cases", caseInput, identifier),
   post("replyCase", "/cases/{id}/reply", z.object({ body: z.string().min(1).max(5000), version: z.number().int().min(0) }).strict(), identifier),
   post("saveReview", "/reviews", review, identifier),

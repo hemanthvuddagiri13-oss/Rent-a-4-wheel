@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import Link from "next/link";
 import { Filter, X } from "lucide-react";
@@ -11,16 +11,21 @@ import { VEHICLE_CATEGORY_LABELS } from "@/lib/constants";
 
 const sorts = [["recommended", "Recommended"], ["price_asc", "Price: low to high"], ["price_desc", "Price: high to low"], ["newest", "Newest"]];
 const filterLabels: Record<string, string> = { category: "Type", make: "Make", transmission: "Transmission", seats: "Minimum seats", priceMin: "Minimum daily price", priceMax: "Maximum daily price" };
+const subscribeHydration = () => () => {};
 
 function FilterForm({ makes }: { makes: string[] }) {
   const params = useSearchParams(), pathname = usePathname(), id = useId();
+  const hydrated = useSyncExternalStore(subscribeHydration, () => true, () => false);
   const choices = [
     { name: "category", options: Object.entries(VEHICLE_CATEGORY_LABELS).filter(([key]) => key !== "ALL") },
     { name: "make", options: makes.map(make => [make, make]) },
     { name: "transmission", options: [["AUTOMATIC", "Automatic"], ["MANUAL", "Manual"]] },
     { name: "seats", options: [2, 4, 5, 6, 7].map(seats => [String(seats), `${seats}+`]) },
   ];
-  return <form action={pathname} method="get" className="space-y-5" key={params.toString()}>
+  // Hydration can restore select defaults. Do not accept edits that it can erase.
+  return <form action={pathname} method="get" key={params.toString()}>
+    <fieldset disabled={!hydrated} aria-busy={!hydrated} className="space-y-5">
+    <legend className="sr-only">Vehicle search filters</legend>
     {["location", "pickupDate", "pickupTime", "returnDate", "returnTime", "sort"].map(name => params.has(name) && <input type="hidden" name={name} value={params.get(name)!} key={name} />)}
     {choices.map(({ name, options }) => <div key={name}>
       <label htmlFor={id + name} className="mb-2 block text-sm font-medium text-silver">{filterLabels[name]}</label>
@@ -29,6 +34,7 @@ function FilterForm({ makes }: { makes: string[] }) {
     <fieldset><legend className="mb-2 text-sm font-medium text-silver">Daily rental price (USD)</legend><p className="mb-3 text-sm text-muted">Before fees, taxes, extras and any deposit.</p><div className="grid grid-cols-2 gap-3">{["priceMin", "priceMax"].map(name => <div key={name}><label htmlFor={id + name} className="mb-2 block text-sm text-silver">{name === "priceMin" ? "Minimum" : "Maximum"}</label><Input id={id + name} name={name} type="number" min={0} defaultValue={params.get(name) ?? ""} /></div>)}</div></fieldset>
     <Button type="submit" className="w-full">Apply filters</Button>
     <Button asChild variant="ghost" className="w-full"><Link href={pathname}>Clear dates and filters</Link></Button>
+    </fieldset>
   </form>;
 }
 export function VehicleFilters({ makes }: { makes: string[] }) {

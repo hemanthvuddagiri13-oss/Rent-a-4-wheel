@@ -3,7 +3,7 @@ import { loadEnv } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  plugins: [tsconfigPaths({ projects: ["./tsconfig.json"] })],
   test: {
     environment: "node",
     // Some suites share the singleton LegalDocument configuration. Individual

@@ -46,6 +46,7 @@ model User {
   accounts Account[]
   sessions Session[]
   mobileSessions MobileSession[]
+  phoneIdentity MobilePhoneIdentity?
 
   customer             Customer?
   hostProfile          HostProfile?
@@ -111,6 +112,63 @@ model MobileCredential {
   createdAt DateTime @default(now())
   session MobileSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   @@unique([sessionId, generation])
+}
+
+// Verified login identity; User.phone remains non-authoritative contact data.
+model MobilePhoneIdentity {
+  userId String @id
+  phone String @unique
+  verifiedAt DateTime @default(now())
+  version Int @default(1)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Intent precedes delivery. Provider uncertainty never grants identity authority.
+model MobileLoginChallenge {
+  id String @id @default(uuid())
+  channel String
+  purpose String
+  target String
+  targetHash String
+  deviceId String
+  ipHash String
+  userId String?
+  sessionId String?
+  previousPhone String?
+  previousPhoneVersion Int?
+  providerSid String?
+  codeHash String?
+  state String @default("CREATED")
+  attempts Int @default(0)
+  claim String?
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([targetHash, createdAt])
+  @@index([ipHash, createdAt])
+  @@index([deviceId, createdAt])
+  @@index([sessionId, purpose, state])
+}
+
+// A provider approval can authorize one local challenge only, even on resend.
+model MobileVerificationReceipt {
+  providerSid String @id
+  challengeId String @unique
+  createdAt DateTime @default(now())
+}
+
+// Review is an intake, never an account transfer or an authorization grant.
+model MobileIdentityRecovery {
+  id String @id @default(uuid())
+  userId String
+  sessionId String
+  challengeId String @unique
+  previousPhone String
+  requestedPhone String
+  caseId String? @unique
+  state String @default("REVIEW_REQUIRED")
+  createdAt DateTime @default(now())
+  @@index([userId, state])
 }
 
 // Completed domain effects and their result are committed in one transaction.

@@ -17,6 +17,7 @@ import { verifyDocumentOwnership } from "@/lib/documents";
 import {requireCheckoutAdmission} from "@/lib/admission-authority";
 import {ReleaseGateError} from "@/lib/release-control";
 import {JurisdictionUnavailable} from "@/lib/jurisdiction";
+import { hasVerifiedBookingContact } from "@/lib/booking-contact";
 
 const CHECKOUT_WINDOW_MINUTES = 15;
 class HistoricalCheckoutUnavailable extends Error {}
@@ -58,6 +59,7 @@ export async function checkoutReservation(req: Request, id: string, userId: stri
   if (reservation.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(reservation.status) || !reservation.expiresAt || reservation.expiresAt <= new Date()) return NextResponse.json({ error: "Checkout unavailable" }, { status: 409 });
   if (reservation.checkoutFingerprint === checkoutFingerprint) {
     try { await withReservationLock(id,async tx=>{
+      if (!await hasVerifiedBookingContact(tx, userId, driver.email)) throw new Error("Verify your booking email");
       await requireRetryAdmission(tx,id);
       const current=await tx.reservation.findUniqueOrThrow({where:{id}});
       if(current.financialDisposition!=="OPEN"||!current.expiresAt||current.expiresAt<=new Date()||!["CHECKOUT_HOLD","AWAITING_PAYMENT"].includes(current.status))throw new Error("Checkout unavailable");
@@ -107,6 +109,7 @@ export async function checkoutReservation(req: Request, id: string, userId: stri
 
   try {
     const historicalRetry=await withReservationLock(id, async (tx) => {
+      if (!await hasVerifiedBookingContact(tx, userId, driver.email)) throw new Error("Verify your booking email");
       const current = await tx.reservation.findUniqueOrThrow({ where: { id } });
       if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new Error("Checkout unavailable");
       if (current.checkoutFingerprint === checkoutFingerprint) {await requireRetryAdmission(tx,id);return true;}

@@ -1,0 +1,224 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- launchApp:
+    clearState: true
+# The AOSP CI launcher's own ANR may cover the tested app after cold boot.
+# Match only Quickstep; an ANR from Rent A 4Wheel must still fail the journey.
+- runFlow:
+    when:
+      visible: "Quickstep isn't responding"
+    commands:
+      - tapOn: "Close app"
+- takeScreenshot: native-launch
+- assertVisible: "Your next drive starts here."
+- takeScreenshot: native-home
+- tapOn: "Sign in"
+- scrollUntilVisible:
+    element: "Use verified email instead"
+    direction: DOWN
+# Email code-verification coverage only: the isolated CI fixture pre-seeds this
+# code. Request-code returns generic accepted; no new email delivery is tested.
+- tapOn: "Use verified email instead"
+- assertVisible: "Sign in with linked email"
+- tapOn:
+    id: "input-Email address"
+- inputText: "native-customer@example.test"
+- runFlow: dismiss-keyboard.yaml
+- tapOn: "Send sign-in code"
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit email code"
+    direction: DOWN
+- tapOn:
+    id: "input-Six-digit email code"
+- inputText: "123456"
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Verify & sign in"
+    direction: DOWN
+- tapOn: "Verify & sign in"
+- assertVisible: "Your next drive starts here."
+- scrollUntilVisible:
+    element: "Account & devices"
+    direction: DOWN
+- tapOn: "Account & devices"
+- scrollUntilVisible:
+    element: "Log out this device"
+    direction: DOWN
+- tapOn: "Log out this device"
+- assertVisible: "Your next drive starts here."
+- tapOn: "Sign in"
+- scrollUntilVisible:
+    element:
+      id: "input-Mobile phone number"
+    direction: UP
+- tapOn:
+    id: "input-Mobile phone number"
+- inputText: "+12025550101"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
+- tapOn: "Send text code"
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit text code"
+    direction: DOWN
+- tapOn:
+    id: "input-Six-digit text code"
+- inputText: "123456"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
+- scrollUntilVisible:
+    element: "Verify phone & continue"
+    direction: DOWN
+- tapOn: "Verify phone & continue"
+- assertVisible: "Your next drive starts here."
+- scrollUntilVisible:
+    element: "View Synthetic Acceptance Car"
+    direction: DOWN
+- tapOn: "View Synthetic Acceptance Car"
+- scrollUntilVisible:
+    element: "Check availability"
+    direction: DOWN
+- tapOn: "Check availability"
+- assertVisible: "Available at last check. A hold is required to reserve these dates."
+- takeScreenshot: native-availability
+- tapOn: "Hold dates & review price"
+- scrollUntilVisible:
+    element: "Server price breakdown"
+    direction: DOWN
+- assertVisible: "Server price breakdown"
+- takeScreenshot: native-price
+- scrollUntilVisible:
+    element: "Documents & checkout preparation"
+    direction: DOWN
+- tapOn: "Documents & checkout preparation"
+- assertVisible: "Prepare your reservation"
+# Identity entry blocks screenshots intentionally. Do not capture this screen.
+- scrollUntilVisible:
+    element:
+      id: "input-First name"
+    direction: DOWN
+- assertVisible:
+    id: "input-First name"
+- scrollUntilVisible:
+    element: "I have read and accept this agreement"
+    direction: DOWN
+- tapOn: "I have read and accept this agreement"
+- assertVisible: "Agreement selected — tap to withdraw"
+- tapOn: "Agreement selected — tap to withdraw"
+- runFlow: back.yaml
+- runFlow: back.yaml
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Your trips"
+    direction: UP
+- tapOn: "Your trips"
+- assertVisible: "NATIVE-SYNTHETIC-TRIP"
+- assertVisible: "Open trip to verify payment and deposit."
+- assertNotVisible: "Server status: CONFIRMED"
+- takeScreenshot: native-trips
+- tapOn: "View trip NATIVE-SYNTHETIC-TRIP"
+- assertVisible: "Reservation is not financially confirmed"
+- assertNotVisible: "Reservation confirmed by server"
+- takeScreenshot: native-payment-status
+- scrollUntilVisible:
+    element: "Message your host"
+    direction: DOWN
+- tapOn: "Message your host"
+- tapOn:
+    id: "input-Message"
+- inputText: "Synthetic native acceptance message"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
+- tapOn: "Send message"
+- assertVisible: "Synthetic native acceptance message"
+- takeScreenshot: native-message
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+      - back
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Back"
+      - tapOn: "Back"
+      - tapOn: "Back"
+- scrollUntilVisible:
+    element: "Notices"
+    direction: DOWN
+- tapOn: "Notices"
+- assertVisible: "Trip update: CHECKOUT HOLD CREATED"
+- takeScreenshot: native-notices
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Support & cases"
+    direction: DOWN
+- tapOn: "Support & cases"
+- tapOn:
+    id: "input-Request title"
+- inputText: "Synthetic native support request"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Describe what happened"
+- inputText: "Synthetic acceptance request with no private evidence."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Open support request"
+    direction: DOWN
+- tapOn: "Open support request"
+- assertVisible: "Synthetic native support request"
+- assertVisible: "Synthetic acceptance request with no private evidence."
+- tapOn:
+    id: "input-Reply to case"
+- inputText: "Synthetic follow-up."
+- assertVisible: "Synthetic follow-up."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Send case reply"
+    direction: DOWN
+- tapOn: "Send case reply"
+- assertVisible: "CUSTOMER_REPLY.*"
+- scrollUntilVisible:
+    element: "Synthetic follow-up."
+    direction: UP
+- assertVisible: "Synthetic follow-up."
+- takeScreenshot: native-case
+- runFlow: back.yaml
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Account & devices"
+    direction: DOWN
+- tapOn: "Account & devices"
+- assertVisible: "Log out this device"
+- tapOn: "Log out this device"
+- assertVisible: "Your next drive starts here."
+- tapOn: "Your trips"
+- assertVisible: "Welcome to your next trip."

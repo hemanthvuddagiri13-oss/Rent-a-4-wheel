@@ -335,6 +335,29 @@ it("checks out and resumes one reservation through real Next HTTP, uploads and s
   await context.close();
 }, 180000);
 
+it("does not accept filter edits until hydration can preserve them", async () => {
+  const vehicle = await createTestVehicle({ make: "HydrationFixture", model: "Staging sedan" }); vehicles.push(vehicle.id);
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  let release!: () => void;
+  const scripts = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/_next/static/**/*.js", async route => { await scripts; await route.continue(); });
+  try {
+    await page.goto(base + "/vehicles", { waitUntil: "commit" });
+    const filters = page.getByRole("complementary", { name: "Vehicle filters" });
+    const make = filters.getByLabel("Make", { exact: true });
+    await make.waitFor();
+    expect(await make.isDisabled()).toBe(true);
+    expect(await filters.getByRole("button", { name: "Apply filters" }).isDisabled()).toBe(true);
+    release();
+    await make.selectOption("HydrationFixture");
+    expect(await make.inputValue()).toBe("HydrationFixture");
+    await filters.getByRole("button", { name: "Apply filters" }).click();
+    await page.waitForURL(/make=HydrationFixture/);
+    await page.getByRole("navigation", { name: "Active filters" }).getByText("Make: HydrationFixture").waitFor();
+  } finally { release(); await context.close(); }
+}, 60000);
+
 it("renders discovery and account pages at all requested widths with labeled form controls", async () => {
   const customer = await createTestCustomer(); users.push(customer.id);
   const context: BrowserContext = await login(customer), page = await context.newPage();
