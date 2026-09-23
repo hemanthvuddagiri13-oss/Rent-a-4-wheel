@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { preventScreenCaptureAsync, allowScreenCaptureAsync } from 'expo-screen-capture';
-import { CaptureLock } from './capture-lock';
+import { CaptureLock } from '../../../packages/mobile-client/src/capture-lock';
 const protection = new CaptureLock({
   prevent: () => preventScreenCaptureAsync('private-content'),
   allow: () => allowScreenCaptureAsync('private-content'),

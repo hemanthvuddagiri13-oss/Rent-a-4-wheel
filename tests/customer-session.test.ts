@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { Session, SignInRequired, type Credentials } from '../packages/mobile-client/src/session';
-import { CaptureLock } from '../apps/customer/src/capture-lock';
+import { CaptureLock } from '../packages/mobile-client/src/capture-lock';
 
 it('overlapping private views share one acknowledged native capture lock until the last release', async () => {
   let acknowledge!: () => void;
