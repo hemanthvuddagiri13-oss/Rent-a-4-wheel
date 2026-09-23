@@ -200,6 +200,7 @@ appId: com.renta4wheel.customer.acceptance
     element: "Send case reply"
     direction: DOWN
 - tapOn: "Send case reply"
+- assertVisible: "CUSTOMER_REPLY.*"
 - scrollUntilVisible:
     element: "Synthetic follow-up."
     direction: UP
