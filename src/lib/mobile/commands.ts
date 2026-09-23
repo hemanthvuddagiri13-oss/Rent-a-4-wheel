@@ -21,10 +21,15 @@ import { isVehicleAvailable } from "@/lib/availability";
 import { authenticateMobile, MobileError } from "./auth";
 import { mobileBody, mobileIp } from "./http";
 
+function mobileBookingDates(data: { pickupAt: string; returnAt: string }, timezone: string) {
+  try { return { pickupAt: bookingInstant(data.pickupAt, timezone), returnAt: bookingInstant(data.returnAt, timezone) }; }
+  catch { throw new MobileError("INVALID_REQUEST", 400); }
+}
+
 export async function mobileCommand(req: Request, parts: string[]) {
   if (parts[0] === "vehicles" && parts[2] === "availability" && parts.length === 3) {
     const data = z.object({ pickupAt: z.iso.datetime(), returnAt: z.iso.datetime() }).strict().parse(await mobileBody(req));
-    const pickup = new Date(data.pickupAt), end = new Date(data.returnAt);
+    const { pickupAt: pickup, returnAt: end } = mobileBookingDates(data, (await getSiteSettings()).bookingTimezone);
     if (pickup <= new Date() || end <= pickup || end.getTime() - pickup.getTime() > 366 * 86400000) throw new MobileError("INVALID_REQUEST", 400);
     await mobileQuery(req, ["vehicles", parts[1]]);
     return { available: await isVehicleAvailable(parts[1], pickup, end), authoritativeAt: new Date().toISOString(), holdRequired: true };
@@ -85,7 +90,7 @@ export async function mobileCommand(req: Request, parts: string[]) {
   }
   if (resource === "reservations" && id === "hold" && parts.length === 2) {
     const data = createHoldSchema.parse(input), timezone = (await getSiteSettings()).bookingTimezone;
-    const pickupAt = bookingInstant(data.pickupAt, timezone), returnAt = bookingInstant(data.returnAt, timezone);
+    const { pickupAt, returnAt } = mobileBookingDates(data, timezone);
     return mobileMutation(req, "reservation.hold", data, active, async (tx, userId) => {
       const held = await createOrRefreshHold({ ...data, customerId: userId, bookingTimezone: timezone, pickupAt, returnAt }, tx);
       return { id: held.id };

@@ -8,6 +8,8 @@ import { publicApi, origin, session, mutate, intentKey, friendly, type Output } 
 import { Page, Card, Copy, Hint, Button, Busy, ErrorText, money } from '../ui';
 import { useAction } from '../hooks';
 
+function wholeMinute(value: Date) { const result = new Date(value); result.setSeconds(0, 0); return result; }
+
 export function Home({ navigation }: NativeStackScreenProps<Routes, 'Home'>) {
   const [cursor, setCursor] = useState<string | undefined>();
   const query = useQuery({ queryKey: ['vehicles', cursor], queryFn: ({ signal }) => publicApi.call('vehicles', { query: { limit: 12, cursor } }, signal) });
@@ -29,14 +31,14 @@ function ListingPhoto({ id }: { id: string }) {
 function VehicleCard({ vehicle: v, open }: { vehicle: Output<'vehicle'>; open?: () => void }) { return <Card><ListingPhoto id={v.id} /><Copy>{v.year} {v.make} {v.model}</Copy><Hint>{v.location} · {v.seats} seats · {v.transmission}</Hint><Copy>From {money(v.dailyRateCents)} / day</Copy><Hint>Final fees, protection and taxes appear in your server quote.</Hint>{open && <Button title={`View ${v.make} ${v.model}`} onPress={open} />}</Card>; }
 export function Vehicle({ navigation, route }: NativeStackScreenProps<Routes, 'Vehicle'>) {
   const { id } = route.params, q = useQuery({ queryKey: ['vehicle', id], queryFn: ({ signal }) => publicApi.call('vehicle', { params: { id } }, signal) });
-  const [pickup, setPickup] = useState(() => new Date(Date.now() + 86400000)), [end, setEnd] = useState(() => new Date(Date.now() + 172800000));
+  const [pickup, setPickup] = useState(() => wholeMinute(new Date(Date.now() + 86400000))), [end, setEnd] = useState(() => wholeMinute(new Date(Date.now() + 172800000)));
   const [checked, setChecked] = useState<{ pickupAt: string; returnAt: string; available: boolean } | null>(null), action = useAction();
   const dates = { pickupAt: pickup.toISOString(), returnAt: end.toISOString() };
   const available = checked?.pickupAt === dates.pickupAt && checked.returnAt === dates.returnAt ? checked.available : null;
   return <Page title={q.data ? `${q.data.make} ${q.data.model}` : 'Vehicle details'}>{q.isPending ? <Busy /> : q.isError ? <ErrorText message={friendly(q.error)} /> : <><VehicleCard vehicle={q.data} /><Hint>{q.data.fuelType} · Deposit {money(q.data.securityDepositCents)}</Hint></>}
     <Hint>Dates and times use your device timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). The server receives exact instants.</Hint>
-    <DateField title="Pickup" value={pickup} onChange={d => { setPickup(d); setChecked(null); }} />
-    <DateField title="Return" value={end} onChange={d => { setEnd(d); setChecked(null); }} />
+    <DateField title="Pickup" value={pickup} onChange={d => { setPickup(wholeMinute(d)); setChecked(null); }} />
+    <DateField title="Return" value={end} onChange={d => { setEnd(wholeMinute(d)); setChecked(null); }} />
     <ErrorText message={action.error} />
     <Button title="Check availability" disabled={action.busy || !q.data} onPress={() => void action.run(async () => { const result = await publicApi.call('availability', { params: { id }, body: dates }); setChecked({ ...dates, available: result.available }); })} />
     {available !== null && <Copy>{available ? 'Available at last check. A hold is required to reserve these dates.' : 'These dates are unavailable. Choose another time.'}</Copy>}

@@ -281,6 +281,20 @@ it("HTTP customer availability is dated, gate-protected and never substitutes fo
   await prisma.jurisdiction.update({ where: { code: 'TX' }, data: { mode: 'DISABLED' } });
   expect((await post(path, dates)).status).toBe(404);
 });
+it.each(["2056-04-01T12:00:01.000Z", "2056-04-01T12:00:00.123Z"])("HTTP availability and hold consistently reject sub-minute pickup %s without writes", async pickupAt => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const dates = { pickupAt, returnAt: "2056-04-02T12:00:00.000Z" };
+  const available = await post(`vehicles/${f.vehicle.id}/availability`, dates);
+  expect(available.status).toBe(400);
+  expect((await available.json()).error.code).toBe("INVALID_REQUEST");
+  const held = await post("reservations/hold", { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] }, f.customer.accessToken, crypto.randomUUID());
+  expect(held.status).toBe(400);
+  expect((await held.json()).error.code).toBe("INVALID_REQUEST");
+  expect(await prisma.reservation.count()).toBe(1);
+  expect(await prisma.mobileMutation.count()).toBe(0);
+  expect(await prisma.bookingDraft.count()).toBe(0);
+});
+
 it("HTTP listing photos expose only explicitly designated clean photos of the current host", async () => {
   const f = await tenantFixture(); await fixtureJurisdiction(prisma);
   const data = { vehicleId: f.vehicle.id, hostId: f.host.id, uploadedById: f.host.userId, storageKey: 'local:synthetic.png', mimeType: 'image/png', sha256: 'a'.repeat(64), scanStatus: 'CLEAN', purpose: 'LISTING_PHOTO' };
