@@ -2,27 +2,45 @@ appId: com.renta4wheel.customer.acceptance
 ---
 - launchApp:
     clearState: true
-- takeScreenshot: artifacts/native-launch
+- takeScreenshot: ${EVIDENCE_DIR}/native-launch
 - assertVisible: "Your next drive starts here."
-- takeScreenshot: artifacts/native-home
+- takeScreenshot: ${EVIDENCE_DIR}/native-home
 - tapOn: "Sign in"
 - tapOn:
     id: "input-Email address"
 - inputText: "native-customer@example.test"
-- hideKeyboard
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
 - tapOn: "Send sign-in code"
 - tapOn:
     id: "input-Six-digit email code"
 - inputText: "123456"
-- hideKeyboard
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
 - tapOn: "Verify & sign in"
 - assertVisible: "Your next drive starts here."
 - tapOn: "Your trips"
 - assertVisible: "NATIVE-SYNTHETIC-TRIP"
-- takeScreenshot: artifacts/native-trips
+- takeScreenshot: ${EVIDENCE_DIR}/native-trips
 - tapOn: "View trip NATIVE-SYNTHETIC-TRIP"
 - assertVisible: "Reservation is not financially confirmed"
-- takeScreenshot: artifacts/native-payment-status
+- takeScreenshot: ${EVIDENCE_DIR}/native-payment-status
 - scrollUntilVisible:
     element: "Message your host"
     direction: DOWN
@@ -30,13 +48,33 @@ appId: com.renta4wheel.customer.acceptance
 - tapOn:
     id: "input-Message"
 - inputText: "Synthetic native acceptance message"
-- hideKeyboard
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
 - tapOn: "Send message"
 - assertVisible: "Synthetic native acceptance message"
-- takeScreenshot: artifacts/native-message
-- back
-- back
-- back
+- takeScreenshot: ${EVIDENCE_DIR}/native-message
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+      - back
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Back"
+      - tapOn: "Back"
+      - tapOn: "Back"
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN
