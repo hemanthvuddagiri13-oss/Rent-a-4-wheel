@@ -190,9 +190,11 @@ appId: com.renta4wheel.customer.acceptance
     direction: DOWN
 - tapOn: "Open support request"
 - assertVisible: "Synthetic native support request"
+- assertVisible: "Synthetic acceptance request with no private evidence."
 - tapOn:
     id: "input-Reply to case"
 - inputText: "Synthetic follow-up."
+- assertVisible: "Synthetic follow-up."
 - runFlow: dismiss-keyboard.yaml
 - scrollUntilVisible:
     element: "Send case reply"
