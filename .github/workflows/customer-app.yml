@@ -1,0 +1,145 @@
+name: Customer native app
+on:
+  push:
+    branches: [codex/phase-7b-customer-app]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: customer-native-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rent_a_4wheel_test
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rent_a_4wheel_test
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rent_a_4wheel_test
+      AUTH_SECRET: synthetic-native-ci-only-not-a-deployment-secret
+      CRON_SECRET: synthetic-native-ci-cron-only
+      APP_ENV: test
+      NATIVE_ACCEPTANCE: '1'
+      EXPO_PUBLIC_API_ORIGIN: http://localhost:3000
+      CI: 'true'
+      ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/customer/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci && npm --prefix apps/customer ci
+      - run: npm --prefix apps/customer run typecheck && npm run lint && npm --prefix apps/customer audit --audit-level=low
+      - run: npm run db:deploy && npm run db:seed
+      - name: Generate and build Android release app
+        working-directory: apps/customer
+        run: |
+          npx expo prebuild --platform android --no-install
+          cd android
+          ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --no-daemon
+      - name: Prepare synthetic API backend
+        run: |
+          npx tsx tests/helpers/customer-native-fixture.ts
+          npm run dev -- --hostname 0.0.0.0 > /tmp/native-api.log 2>&1 &
+          curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3000/api/health/live
+          curl -fsSL https://get.maestro.mobile.dev | bash
+      - name: KVM permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Actual Android application journeys
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          script: |
+            adb reverse tcp:3000 tcp:3000
+            adb install apps/customer/android/app/build/outputs/apk/release/app-release.apk
+            mkdir -p artifacts
+            $HOME/.maestro/bin/maestro test apps/customer/.maestro/customer.yaml --format junit --output artifacts/android-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: customer-android-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            artifacts/
+            apps/customer/android/app/build/outputs/apk/release/app-release.apk
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      AUTH_SECRET: synthetic-native-ci-only-not-a-deployment-secret
+      CRON_SECRET: synthetic-native-ci-cron-only
+      APP_ENV: test
+      NATIVE_ACCEPTANCE: '1'
+      EXPO_PUBLIC_API_ORIGIN: http://localhost:3000
+      CI: 'true'
+      ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/customer/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci && npm --prefix apps/customer ci
+      - name: Disposable PostgreSQL
+        run: |
+          brew install postgresql@17
+          brew services start postgresql@17
+          echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+          echo "DATABASE_URL=postgresql://$(whoami)@localhost:5432/rent_a_4wheel_test" >> "$GITHUB_ENV"
+          echo "DIRECT_DATABASE_URL=postgresql://$(whoami)@localhost:5432/rent_a_4wheel_test" >> "$GITHUB_ENV"
+      - run: |
+          for attempt in {1..30}; do pg_isready && break; sleep 1; done
+          createdb rent_a_4wheel_test
+          npm run db:deploy
+          npm run db:seed
+      - name: Build actual iOS simulator release app
+        working-directory: apps/customer
+        run: |
+          npx expo prebuild --platform ios
+          xcodebuild -workspace ios/RentA4Wheel.xcworkspace -scheme RentA4Wheel -configuration Release -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Actual iOS application journeys
+        run: |
+          npx tsx tests/helpers/customer-native-fixture.ts
+          npm run dev -- --hostname 0.0.0.0 > /tmp/native-api.log 2>&1 &
+          curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3000/api/health/live
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          DEVICE=$(xcrun simctl list devices available -j | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>console.log(Object.values(JSON.parse(s).devices).flat().find(d=>d.name.startsWith("iPhone")).udid))')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" apps/customer/build/Build/Products/Release-iphonesimulator/RentA4Wheel.app
+          mkdir -p artifacts
+          $HOME/.maestro/bin/maestro --device "$DEVICE" test apps/customer/.maestro/customer.yaml --format junit --output artifacts/ios-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: customer-ios-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            artifacts/
+            apps/customer/build/Build/Products/Release-iphonesimulator/*.app

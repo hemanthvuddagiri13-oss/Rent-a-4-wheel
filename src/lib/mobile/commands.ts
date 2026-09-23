@@ -16,11 +16,19 @@ import { saveTripReview } from "@/lib/trip-reviews";
 import { tripCommand } from "@/lib/trip-experience";
 import { cancelCustomerReservation, startCustomerTrip } from "@/lib/customer-reservation";
 import { mobileMutation } from "./mutation";
-import { mobileReservationAccess } from "./queries";
+import { mobileReservationAccess, mobileQuery } from "./queries";
+import { isVehicleAvailable } from "@/lib/availability";
 import { authenticateMobile, MobileError } from "./auth";
 import { mobileBody, mobileIp } from "./http";
 
 export async function mobileCommand(req: Request, parts: string[]) {
+  if (parts[0] === "vehicles" && parts[2] === "availability" && parts.length === 3) {
+    const data = z.object({ pickupAt: z.iso.datetime(), returnAt: z.iso.datetime() }).strict().parse(await mobileBody(req));
+    const pickup = new Date(data.pickupAt), end = new Date(data.returnAt);
+    if (pickup <= new Date() || end <= pickup || end.getTime() - pickup.getTime() > 366 * 86400000) throw new MobileError("INVALID_REQUEST", 400);
+    await mobileQuery(req, ["vehicles", parts[1]]);
+    return { available: await isVehicleAvailable(parts[1], pickup, end), authoritativeAt: new Date().toISOString(), holdRequired: true };
+  }
   const actor = await authenticateMobile(req.headers);
   await marketplaceLimit(actor.userId);
   const [resource, id, action] = parts;

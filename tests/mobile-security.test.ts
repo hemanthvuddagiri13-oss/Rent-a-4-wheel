@@ -255,6 +255,54 @@ it("HTTP current host tenancy, employee removal and role changes apply without t
   expect((await get("host/fleet", f.owner.accessToken)).status).toBe(403);
   expect((await get("me", f.owner.accessToken)).status).toBe(200);
 });
+it("HTTP customer availability is dated, gate-protected and never substitutes for a hold", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const path = `vehicles/${f.vehicle.id}/availability`, dates = { pickupAt: '2056-04-01T12:00:00Z', returnAt: '2056-04-02T12:00:00Z' };
+  const available = await post(path, dates); expect(available.status).toBe(200); expect((await available.json()).data).toMatchObject({ available: true, holdRequired: true });
+  expect(await prisma.reservation.count()).toBe(1);
+  const hold = await post('reservations/hold', { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] }, f.customer.accessToken, crypto.randomUUID()); expect(hold.status).toBe(200);
+  expect((await (await post(path, dates)).json()).data.available).toBe(false);
+  expect((await post('reservations/hold', { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] }, f.other.accessToken, crypto.randomUUID())).status).toBe(409);
+  expect((await post(path, { ...dates, returnAt: dates.pickupAt })).status).toBe(400);
+  expect((await post(path, { ...dates, pickupAt: 'not-a-date' })).status).toBe(400);
+  await prisma.jurisdiction.update({ where: { code: 'TX' }, data: { mode: 'DISABLED' } });
+  expect((await post(path, dates)).status).toBe(404);
+});
+it("HTTP listing photos expose only explicitly designated clean photos of the current host", async () => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const data = { vehicleId: f.vehicle.id, hostId: f.host.id, uploadedById: f.host.userId, storageKey: 'local:synthetic.png', mimeType: 'image/png', sha256: 'a'.repeat(64), scanStatus: 'CLEAN', purpose: 'LISTING_PHOTO' };
+  const allowed = await prisma.marketplaceFile.create({ data });
+  await prisma.marketplaceFile.create({ data: { ...data, purpose: 'INSURANCE' } });
+  await prisma.marketplaceFile.create({ data: { ...data, scanStatus: 'QUARANTINED' } });
+  await prisma.vehicleImage.create({ data: { vehicleId: f.vehicle.id, url: 'https://unapproved.invalid/private-sentinel.png' } });
+  const response = await get(`vehicles/${f.vehicle.id}/photos`); expect(response.status).toBe(200);
+  expect((await response.json()).data.items).toEqual([{ id: allowed.id, path: '/api/marketplace/files/' + allowed.id, alt: 'Host-authorized vehicle listing photo' }]);
+  await prisma.vehicle.update({ where: { id: f.vehicle.id }, data: { listingApproval: 'PENDING' } });
+  expect((await get(`vehicles/${f.vehicle.id}/photos`)).status).toBe(404);
+  expect(fixture.storageRead).not.toHaveBeenCalled();
+});
+it("HTTP report photos repeat participation and private-object quarantine checks without public URLs", async () => {
+  const f = await tenantFixture(), key = 'local:condition.png';
+  await prisma.privateObject.create({ data: { key, sha256: 'a'.repeat(64), size: 4, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+  const report = await prisma.conditionReport.create({ data: { reservationId: f.reservation.id, phase: 'PRE_TRIP', submittedByRole: 'CUSTOMER', submittedById: f.user.id, mileage: 100, fuelLevel: 50, photos: { create: { category: 'EXTERIOR', storageKey: key } } }, include: { photos: true } });
+  const path = `reservations/${f.reservation.id}/reports/${report.id}/photos/${report.photos[0].id}`;
+  for (const c of [f.customer, f.owner, f.employee]) { const r = await get(path, c.accessToken); expect(r.status).toBe(200); expect(r.headers.get('cache-control')).toContain('no-store'); expect(r.headers.get('content-type')).toBe('image/png'); }
+  expect((await get(path, f.other.accessToken)).status).toBe(404);
+  await prisma.hostEmployee.delete({ where: { id: f.membership.id } }); expect((await get(path, f.employee.accessToken)).status).toBe(403);
+  await prisma.privateObject.update({ where: { key }, data: { state: 'QUARANTINED' } }); expect((await get(path, f.customer.accessToken)).status).toBe(404);
+  expect(fixture.storageRead).toHaveBeenCalledTimes(3); expect(await prisma.auditLog.count({ where: { action: 'mobile.report_photo.read' } })).toBe(3);
+});
+it("HTTP case history excludes internal notes and checks current membership on every page", async () => {
+  const f = await tenantFixture();
+  const c = await prisma.serviceCase.create({ data: { openedById: f.membership.userId, reservationId: f.reservation.id, vehicleId: f.vehicle.id, kind: 'TICKET', category: 'GENERAL', title: 'Synthetic support', details: {}, dueAt: new Date('2056-01-01'), retainUntil: new Date('2058-01-01') } });
+  for (const internal of [false, true]) await prisma.serviceCaseEvent.create({ data: { caseId: c.id, actorId: f.user.id, action: 'reply', fromState: 'REPORTED', toState: 'REPORTED', body: internal ? 'PRIVATE_OPERATOR_SENTINEL' : 'Customer-visible reply', internal, version: internal ? 2 : 1 } });
+  const path = `cases/${c.id}/events`;
+  const response = await get(path, f.customer.accessToken); expect(response.status).toBe(200); const body = await response.json(); expect(body.data.items).toHaveLength(1); expect(JSON.stringify(body)).not.toContain('PRIVATE_OPERATOR_SENTINEL');
+  expect((await get(path, f.employee.accessToken)).status).toBe(200);
+  await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: { expiresAt: new Date(0) } });
+  expect((await get(path + '?limit=1', f.employee.accessToken)).status).toBe(403);
+  expect((await get(path, f.other.accessToken)).status).toBe(404);
+});
 it("HTTP a second host cannot access another tenant's reservation, documents or messages", async () => {
   const f = await tenantFixture(), user = await prisma.user.update({ where: { email: f.other.email }, data: { role: "HOST" } });
   await prisma.hostProfile.create({ data: { userId: user.id, legalName: "Other synthetic host", onboardingStatus: "APPROVED" } });

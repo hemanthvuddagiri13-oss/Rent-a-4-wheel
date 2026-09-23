@@ -10,6 +10,8 @@ export interface MobileOperations {
   "me": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "role": "CUSTOMER" | "HOST" | "HOST_EMPLOYEE" } };
   "vehicles": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "slug": string; "year": number; "make": string; "model": string; "category": string; "transmission": string; "fuelType": string; "seats": number; "dailyRateCents": number; "securityDepositCents": number; "location": string; "jurisdictionCode": string | null }>; "nextCursor": string | null } };
   "vehicle": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "slug": string; "year": number; "make": string; "model": string; "category": string; "transmission": string; "fuelType": string; "seats": number; "dailyRateCents": number; "securityDepositCents": number; "location": string; "jurisdictionCode": string | null } };
+  "listingPhotos": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "path": string; "alt": string }> } };
+  "availability": { input: { params: { "id": string }; body: { "pickupAt": string; "returnAt": string }; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "available": boolean; "authoritativeAt": string; "holdRequired": true } };
   "reservations": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "confirmationNumber": string; "vehicleId": string; "status": string; "pickupAt": string; "returnAt": string; "bookingTimezone": string; "expiresAt": string | null; "subtotalCents": number; "extrasCents": number; "discountCents": number; "taxCents": number; "feesCents": number; "totalCents": number; "depositCents": number; "bookingFingerprint": string | null }>; "nextCursor": string | null } };
   "reservation": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "confirmationNumber": string; "vehicleId": string; "status": string; "pickupAt": string; "returnAt": string; "bookingTimezone": string; "expiresAt": string | null; "subtotalCents": number; "extrasCents": number; "discountCents": number; "taxCents": number; "feesCents": number; "totalCents": number; "depositCents": number; "bookingFingerprint": string | null } };
   "hold": { input: { params?: never; body: { "draftId": string; "revision": number; "vehicleId": string; "pickupAt": string; "returnAt": string; "extraIds"?: Array<string>; "couponCode"?: string }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
@@ -31,6 +33,7 @@ export interface MobileOperations {
   "documentAccess": { input: { params?: never; body: { "documentId": string }; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "capability": string; "expiresInSeconds": 60; "documentId": string } };
   "privateDocument": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess: string; query?: never }; output: ArrayBuffer };
   "reports": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "phase": string; "submittedByRole": string; "mileage": number; "fuelLevel": number; "damageNotes": string | null; "acceptedAt": string | null; "photos": Array<{ "id": string; "category": "EXTERIOR" | "INTERIOR" | "ODOMETER" | "FUEL_GAUGE" | "DAMAGE" }> }> } };
+  "reportPhoto": { input: { params: { "id": string; "reportId": string; "photoId": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: ArrayBuffer };
   "submitReport": { input: { params: { "id": string }; body: { "phase": "PRE_TRIP" | "POST_TRIP"; "mileage": number; "fuelLevel": number; "damageNotes"?: string; "photos": Array<{ "uploadId": string; "category": "EXTERIOR" | "INTERIOR" | "ODOMETER" | "FUEL_GAUGE" | "DAMAGE" }> }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
   "acceptReport": { input: { params: { "id": string; "reportId": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
   "conversations": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "reservationId": string | null; "vehicleId": string; "updatedAt": string }>; "nextCursor": string | null } };
@@ -40,6 +43,7 @@ export interface MobileOperations {
   "notifications": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "category": string; "title": string; "readAt": string | null; "createdAt": string; "resourceType": string; "resourceId": string }>; "nextCursor": string | null } };
   "cases": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "kind": string; "category": string; "title": string; "state": string; "version": number; "reservationId": string | null }>; "nextCursor": string | null } };
   "serviceCase": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "kind": string; "category": string; "title": string; "state": string; "version": number; "reservationId": string | null } };
+  "caseEvents": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "body": string; "action": string; "createdAt": string }>; "nextCursor": string | null } };
   "openCase": { input: { params?: never; body: { "kind": "CLAIM" | "DISPUTE" | "INCIDENT" | "TICKET"; "reservationId"?: string; "category": string; "title": string; "body": string; "linkedCaseId"?: string; "location"?: string; "severity"?: "MINOR" | "MODERATE" | "SEVERE"; "occurredAt"?: string; "people"?: string; "policeReport"?: string; "provider"?: string; "originalPhotoIds"?: Array<string> }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
   "replyCase": { input: { params: { "id": string }; body: { "body": string; "version": number }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
   "saveReview": { input: { params?: never; body: { "reservationId": string; "subject": "VEHICLE" | "HOST" | "CUSTOMER"; "rating": number; "body": string; "cleanliness": number; "communication": number; "accuracy": number; "version"?: number }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
@@ -105,6 +109,18 @@ export const operationMetadata = {
   "vehicle": {
     "path": "/vehicles/{id}",
     "method": "GET",
+    "auth": false,
+    "binary": null
+  },
+  "listingPhotos": {
+    "path": "/vehicles/{id}/photos",
+    "method": "GET",
+    "auth": false,
+    "binary": null
+  },
+  "availability": {
+    "path": "/vehicles/{id}/availability",
+    "method": "POST",
     "auth": false,
     "binary": null
   },
@@ -234,6 +250,12 @@ export const operationMetadata = {
     "auth": true,
     "binary": null
   },
+  "reportPhoto": {
+    "path": "/reservations/{id}/reports/{reportId}/photos/{photoId}",
+    "method": "GET",
+    "auth": true,
+    "binary": "response"
+  },
   "submitReport": {
     "path": "/reservations/{id}/reports",
     "method": "POST",
@@ -284,6 +306,12 @@ export const operationMetadata = {
   },
   "serviceCase": {
     "path": "/cases/{id}",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "caseEvents": {
+    "path": "/cases/{id}/events",
     "method": "GET",
     "auth": true,
     "binary": null

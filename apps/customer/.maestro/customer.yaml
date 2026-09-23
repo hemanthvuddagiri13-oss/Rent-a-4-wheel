@@ -1,0 +1,44 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Your next drive starts here."
+- takeScreenshot: artifacts/native-home
+- tapOn: "Sign in"
+- tapOn: "Email address"
+- inputText: "native-customer@example.test"
+- hideKeyboard
+- tapOn: "Send sign-in code"
+- tapOn: "Six-digit email code"
+- inputText: "123456"
+- hideKeyboard
+- tapOn: "Verify & sign in"
+- assertVisible: "Your next drive starts here."
+- tapOn: "Your trips"
+- assertVisible: "NATIVE-SYNTHETIC-TRIP"
+- takeScreenshot: artifacts/native-trips
+- tapOn: "View trip NATIVE-SYNTHETIC-TRIP"
+- assertVisible: "Reservation is not financially confirmed"
+- takeScreenshot: artifacts/native-payment-status
+- scrollUntilVisible:
+    element: "Message your host"
+    direction: DOWN
+- tapOn: "Message your host"
+- tapOn: "Message"
+- inputText: "Synthetic native acceptance message"
+- hideKeyboard
+- tapOn: "Send message"
+- assertVisible: "Synthetic native acceptance message"
+- takeScreenshot: artifacts/native-message
+- back
+- back
+- back
+- scrollUntilVisible:
+    element: "Account & devices"
+    direction: DOWN
+- tapOn: "Account & devices"
+- assertVisible: "Log out this device"
+- tapOn: "Log out this device"
+- assertVisible: "Your next drive starts here."
+- tapOn: "Your trips"
+- assertVisible: "Welcome to your next trip."

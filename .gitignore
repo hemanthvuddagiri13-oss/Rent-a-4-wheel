@@ -2,6 +2,13 @@
 
 # dependencies
 /node_modules
+**/node_modules/
+apps/customer/.expo/
+apps/customer/android/
+apps/customer/ios/
+apps/customer/dist/
+apps/customer/build/
+/artifacts/
 /test-artifacts/
 /.pnp
 .pnp.*
