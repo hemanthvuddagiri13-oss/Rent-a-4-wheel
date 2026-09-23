@@ -44,6 +44,8 @@ export function Vehicle({ navigation, route }: NativeStackScreenProps<Routes, 'V
     {available !== null && <Copy>{available ? 'Available at last check. A hold is required to reserve these dates.' : 'These dates are unavailable. Choose another time.'}</Copy>}
     <Button title="Hold dates & review price" disabled={action.busy || available !== true} onPress={() => void action.run(async () => {
       await session.token(); const me = await session.call('me', {});
+      const methods = await session.call('loginMethods', {});
+      if (!methods.emailLinked) { navigation.navigate('LoginMethods'); return; }
       const draftId = await intentKey(me.id + ':holdDraft', { id, ...dates });
       const result = await mutate('hold', { body: { vehicleId: id, ...dates, draftId, revision: 1, extraIds: [] } }); navigation.navigate('Reservation', { id: result.id });
     })} /><Hint>Sign in before placing a hold. Availability can change until the hold succeeds.</Hint></Page>;

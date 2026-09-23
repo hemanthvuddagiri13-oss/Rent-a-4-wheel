@@ -38,21 +38,28 @@ export async function mobileSignIn(input: unknown, ip: string, db: PrismaClient 
   const verified = await verifyAuthCode({ email: data.email, code: data.code, ip, purpose: "MOBILE_SIGN_IN" });
   if (!verified.ok) throw new MobileError("UNAUTHORIZED", 401);
   return db.$transaction(async tx => {
-    // Upsert is safe against simultaneous web/native first sign-in. Never alter
-    // an existing account's role or reactivate an inactive account.
-    const user = await tx.user.upsert({ where: { email: data.email }, update: {}, create: { email: data.email, emailVerified: new Date(), customer: { create: {} } } });
-    const current = await lockUser(tx, user.id);
+    const user = await tx.user.findUnique({ where: { email: data.email } });
+    if (!user?.emailVerified || user.email.endsWith("@phone.identity.invalid")) throw new MobileError("UNAUTHORIZED", 401);
+    await lockUser(tx, user.id);
+    const linked = await tx.user.findUniqueOrThrow({ where: { id: user.id } });
+    if (linked.email !== data.email || !linked.emailVerified) throw new MobileError("UNAUTHORIZED", 401);
+    return issueMobileSession(tx, user.id, data);
+  });
+}
+
+/** Shared issuance keeps phone and linked-email login on identical revocation rules. */
+export async function issueMobileSession(tx: Prisma.TransactionClient, userId: string, data: z.infer<typeof mobileDeviceSchema>) {
+    const current = await lockUser(tx, userId);
     if (!current?.isActive || !nativeRole(current.role)) throw new MobileError("UNAUTHORIZED", 401);
-    await tx.mobileSession.updateMany({ where: { userId: user.id, deviceId: data.deviceId, revokedAt: null }, data: { revokedAt: new Date(), revocationReason: "REAUTHENTICATED" } });
-    const active = await tx.mobileSession.findMany({ where: { userId: user.id, revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: [{ lastUsedAt: "desc" }, { id: "desc" }], skip: 19, select: { id: true } });
+    await tx.mobileSession.updateMany({ where: { userId, deviceId: data.deviceId, revokedAt: null }, data: { revokedAt: new Date(), revocationReason: "REAUTHENTICATED" } });
+    const active = await tx.mobileSession.findMany({ where: { userId, revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: [{ lastUsedAt: "desc" }, { id: "desc" }], skip: 19, select: { id: true } });
     for (const old of active) {
       await tx.mobileSession.update({ where: { id: old.id }, data: { revokedAt: new Date(), revocationReason: "DEVICE_LIMIT" } });
-      await audit(tx, user.id, old.id, "mobile.device_limit_revoked");
+      await audit(tx, userId, old.id, "mobile.device_limit_revoked");
     }
-    const session = await tx.mobileSession.create({ data: { userId: user.id, deviceId: data.deviceId, platform: data.platform, appVersion: data.appVersion, expiresAt: new Date(Date.now() + FAMILY_MS) } });
-    await audit(tx, user.id, session.id, "mobile.signed_in");
+    const session = await tx.mobileSession.create({ data: { userId, deviceId: data.deviceId, platform: data.platform, appVersion: data.appVersion, expiresAt: new Date(Date.now() + FAMILY_MS) } });
+    await audit(tx, userId, session.id, "mobile.signed_in");
     return issue(tx, session.id, 0, session.expiresAt);
-  });
 }
 
 export async function refreshMobileCredential(token: string, db: PrismaClient = prisma) {

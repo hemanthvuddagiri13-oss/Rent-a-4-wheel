@@ -13,9 +13,19 @@ appId: com.renta4wheel.customer.acceptance
 - assertVisible: "Your next drive starts here."
 - takeScreenshot: native-home
 - tapOn: "Sign in"
+- scrollUntilVisible:
+    element: "Use verified email instead"
+    direction: DOWN
+- tapOn: "Use verified email instead"
+- assertVisible: "Sign in with linked email"
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element:
+      id: "input-Mobile phone number"
+    direction: UP
 - tapOn:
-    id: "input-Email address"
-- inputText: "native-customer@example.test"
+    id: "input-Mobile phone number"
+- inputText: "+12025550101"
 - runFlow:
     when:
       platform: Android
@@ -26,9 +36,13 @@ appId: com.renta4wheel.customer.acceptance
       platform: iOS
     commands:
       - tapOn: "Done editing"
-- tapOn: "Send sign-in code"
+- tapOn: "Send text code"
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit text code"
+    direction: DOWN
 - tapOn:
-    id: "input-Six-digit email code"
+    id: "input-Six-digit text code"
 - inputText: "123456"
 - runFlow:
     when:
@@ -40,7 +54,10 @@ appId: com.renta4wheel.customer.acceptance
       platform: iOS
     commands:
       - tapOn: "Done editing"
-- tapOn: "Verify & sign in"
+- scrollUntilVisible:
+    element: "Verify phone & continue"
+    direction: DOWN
+- tapOn: "Verify phone & continue"
 - assertVisible: "Your next drive starts here."
 - scrollUntilVisible:
     element: "View Synthetic Acceptance Car"
@@ -126,7 +143,7 @@ appId: com.renta4wheel.customer.acceptance
     element: "Notices"
     direction: DOWN
 - tapOn: "Notices"
-- assertVisible: "You’re all caught up."
+- assertVisible: "Trip update: CHECKOUT HOLD CREATED"
 - takeScreenshot: native-notices
 - runFlow: back.yaml
 - scrollUntilVisible:

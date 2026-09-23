@@ -40,6 +40,14 @@ export class Session {
       this.identityEpoch++; this.loaded = true; this.credentials = credentials; this.onChange(true);
     });
   }
+  async signInPhone(input: MobileOperations['phoneSignIn']['input']) {
+    return this.serial(async () => {
+      const credentials = await this.client(null).call('phoneSignIn', input);
+      await this.vault.set(JSON.stringify({ credentials }));
+      this.identityEpoch++; this.loaded = true; this.credentials = credentials; this.onChange(true);
+    });
+  }
+  async forgetRevokedSession() { return this.serial(() => this.clear()); }
   async token(rejectedToken?: string): Promise<string> {
     return this.serial(async () => {
       const c = this.credentials; if (!c) throw new SignInRequired();

@@ -31,6 +31,8 @@ jobs:
       EXPO_PUBLIC_API_ORIGIN: http://localhost:3000
       CI: 'true'
       ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+      MOBILE_SMS_PROVIDER: fixture
+      MOBILE_SMS_FIXTURE_CODE: '123456'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,6 +95,8 @@ jobs:
       EXPO_PUBLIC_API_ORIGIN: http://localhost:3000
       CI: 'true'
       ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+      MOBILE_SMS_PROVIDER: fixture
+      MOBILE_SMS_FIXTURE_CODE: '123456'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -129,8 +133,10 @@ jobs:
           # No Apple account or distribution certificate is used.
           xcodebuild -workspace ios/RentA4Wheel.xcworkspace -scheme RentA4Wheel -configuration Release -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
           codesign --verify --deep --strict build/Build/Products/Release-iphonesimulator/RentA4Wheel.app
-          codesign --display --entitlements - build/Build/Products/Release-iphonesimulator/RentA4Wheel.app > /tmp/customer-entitlements.plist
-          /usr/libexec/PlistBuddy -c 'Print :application-identifier' /tmp/customer-entitlements.plist
+          # Simulator entitlements are linked into __TEXT, not the device signature.
+          ENTITLEMENTS=build/Build/Intermediates.noindex/RentA4Wheel.build/Release-iphonesimulator/RentA4Wheel.build/RentA4Wheel.app-Simulated.xcent
+          test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$ENTITLEMENTS")" = 'FAKETEAMID.com.renta4wheel.customer.acceptance'
+          strings build/Build/Products/Release-iphonesimulator/RentA4Wheel.app/RentA4Wheel | grep -F 'FAKETEAMID.com.renta4wheel.customer.acceptance'
       - name: Actual iOS application journeys
         run: |
           npm run dev -- --hostname 0.0.0.0 > /tmp/native-api.log 2>&1 &

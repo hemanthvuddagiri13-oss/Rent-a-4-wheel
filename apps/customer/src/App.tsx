@@ -8,7 +8,8 @@ import { session } from './runtime';
 import { colors, Page, Hint, Busy } from './ui';
 import type { Routes } from './navigation';
 import { Home, Vehicle } from './screens/discovery';
-import { SignIn, Account } from './screens/account';
+import { SignIn, EmailSignIn, Account } from './screens/account';
+import { LoginMethods } from './screens/login-methods';
 import { Reservation, Reservations } from './screens/reservations';
 import { Checkout } from './screens/checkout';
 import { Inspection } from './screens/inspection';
@@ -28,6 +29,7 @@ export default function App() {
   }, []);
   return <SafeAreaProvider><QueryClientProvider client={queries}>{!ready ? <Page title="Opening securely"><Busy /><Hint>Checking this device’s secure session.</Hint></Page> : <NavigationContainer key={signedIn ? 'signed-in' : 'signed-out'} theme={{ ...DarkTheme, colors: { ...DarkTheme.colors, primary: colors.gold, background: colors.bg, card: colors.card, text: colors.text, border: colors.border } }}><Stack.Navigator screenOptions={{ headerBackTitle: 'Back', headerTintColor: colors.gold, contentStyle: { backgroundColor: colors.bg } }}>
     <Stack.Screen name="Home" component={Home} options={{ title: 'Rent A 4Wheel' }} /><Stack.Screen name="Vehicle" component={Vehicle} options={{ title: 'Explore a vehicle' }} /><Stack.Screen name="SignIn" component={SignIn} options={{ title: 'Sign in' }} />
+    <Stack.Screen name="EmailSignIn" component={EmailSignIn} options={{ title: 'Email fallback' }} /><Stack.Screen name="LoginMethods" component={signedIn ? LoginMethods : SignIn} options={{ title: 'Login & recovery' }} />
     <Stack.Screen name="Reservations" component={signedIn ? Reservations : SignIn} options={{ title: 'Your trips' }} />
     <Stack.Screen name="Reservation" component={signedIn ? Reservation : SignIn} options={{ title: 'Trip details' }} />
     <Stack.Screen name="Checkout" component={signedIn ? Checkout : SignIn} options={{ title: 'Checkout preparation' }} />

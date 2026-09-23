@@ -54,6 +54,22 @@ it('offline logout preserves credentials for a deliberate revocation retry', asy
   const f = setup(); await f.session.restore(); f.transport.mockRejectedValue(new TypeError('offline'));
   await expect(f.session.logout()).rejects.toThrow('offline'); expect(f.stored()).not.toBeNull();
 });
+it('phone sign-in stores credentials before activating and uses the shared rotation protocol', async () => {
+  const f = setup(); await f.vault.clear(); await f.session.restore();
+  const changed = vi.fn(() => expect(f.stored()).not.toBeNull()); f.session.onChange = changed;
+  f.transport.mockResolvedValueOnce(response(credentials('phone', true))).mockResolvedValueOnce(response(credentials('rotated-phone')));
+  await f.session.signInPhone({ body: { challengeId: 'synthetic-challenge', code: '123456', deviceId: 'synthetic-device', platform: 'IOS', appVersion: '1.0.0' } });
+  expect(String(f.transport.mock.calls[0][0])).toMatch(/\/auth\/phone-sign-in$/); expect(changed).toHaveBeenCalledWith(true);
+  expect(await f.session.token()).toBe('rotated-phone'); expect(f.transport).toHaveBeenCalledTimes(2);
+});
+it('phone sign-in never activates if secure credential storage fails', async () => {
+  const f = setup(); await f.vault.clear(); await f.session.restore();
+  const changed = vi.fn(); f.session.onChange = changed; f.vault.set.mockRejectedValue(new Error('keychain unavailable'));
+  f.transport.mockResolvedValue(response(credentials('phone')));
+  await expect(f.session.signInPhone({ body: { challengeId: 'synthetic-challenge', code: '123456', deviceId: 'synthetic-device', platform: 'IOS', appVersion: '1.0.0' } })).rejects.toThrow('keychain unavailable');
+  expect(changed).not.toHaveBeenCalled(); await expect(f.session.token()).rejects.toBeInstanceOf(SignInRequired);
+  expect(f.transport).toHaveBeenCalledTimes(1);
+});
 it.each([200, 401])('discards an old account response (%s) without retrying its operation under a new sign-in', async status => {
   const f = setup(); await f.session.restore();
   let finish!: (value: Response) => void;

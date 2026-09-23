@@ -5,7 +5,8 @@ const db = new PrismaClient();
 if (process.env.CI !== 'true' || !new URL(process.env.DATABASE_URL!).pathname.endsWith('_test')) throw new Error('Disposable CI database only');
 async function main() {
 await fixtureJurisdiction(db);
-const user = await db.user.create({ data: { email: 'native-customer@example.test', name: 'Synthetic customer', role: 'CUSTOMER' } });
+const user = await db.user.create({ data: { email: 'native-customer@example.test', emailVerified: new Date(), name: 'Synthetic customer', role: 'CUSTOMER' } });
+await db.mobilePhoneIdentity.create({ data: { userId: user.id, phone: '+12025550101' } });
 // Delivery boundary fixture: the app still exercises the real issuance, bcrypt,
 // consumption, native-session, refresh and logout HTTP routes. No production bypass.
 for (let i = 0; i < 5; i++) await db.authCode.create({ data: { email: user.email, purpose: 'MOBILE_SIGN_IN', codeHash: await bcrypt.hash('123456', 4), createdAt: new Date(Date.now() - (5 - i) * 1000), expiresAt: new Date(Date.now() + 600000), consumedAt: i < 4 ? new Date() : null } });

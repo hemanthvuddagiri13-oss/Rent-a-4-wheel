@@ -14,6 +14,7 @@ import { calculatePricing, isCouponValid } from "@/lib/pricing";
 import { getSiteSettings } from "@/lib/settings";
 import { generateConfirmationNumber } from "@/lib/confirmation";
 import { transitionReservation } from "@/lib/reservation-state-machine";
+import { hasVerifiedBookingContact } from "@/lib/booking-contact";
 
 export const HOLD_DURATION_MINUTES = 15;
 
@@ -53,6 +54,7 @@ export async function createOrRefreshHold(params: {
         await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id" = ${vehicleId} FOR UPDATE`;
         const jurisdiction=await requireVehicleJurisdiction(tx,vehicleId,"CHECKOUT");
         await requireReleaseFeature("booking",tx,jurisdiction.code);
+        if (!await hasVerifiedBookingContact(tx, customerId)) throw new HoldError("Verify your account email before booking.", 409);
         if (params.draftId) {
           let draft = await tx.bookingDraft.upsert({ where: { id: params.draftId }, update: {}, create: { id: params.draftId, customerId, vehicleId } });
           if (draft.customerId !== customerId || draft.vehicleId !== vehicleId) throw new HoldError("Booking draft unavailable", 403);
