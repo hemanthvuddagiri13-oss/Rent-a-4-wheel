@@ -10,7 +10,6 @@ appId: com.renta4wheel.host.acceptance
     element:
       id: "input-Six-digit text code"
     direction: DOWN
-    centerElement: true
 - tapOn:
     id: "input-Six-digit text code"
 - inputText: "123456"
@@ -18,6 +17,5 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Verify phone & continue"
     direction: DOWN
-    centerElement: true
 - tapOn: "Verify phone & continue"
 - assertVisible: "Host dashboard"

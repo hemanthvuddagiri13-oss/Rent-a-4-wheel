@@ -4,23 +4,19 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Refresh host access"
     direction: DOWN
-    centerElement: true
 - tapOn: "Refresh host access"
 - scrollUntilVisible:
     element: "Hosting requires a current owner or employee membership.*"
     direction: UP
-    centerElement: true
 - assertVisible: "This action is not available for your current access.*"
 - takeScreenshot: host-revoked
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN
-    centerElement: true
 - tapOn: "Account & devices"
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
-    centerElement: true
 - tapOn: "Log out this device"
 - runFlow:
     file: login.yaml

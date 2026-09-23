@@ -1,5 +1,5 @@
 // CI-only reverse proxy: real Next routes/PostgreSQL execute first; one committed
-// support reply and upload response are discarded to exercise app recovery.
+// support reply and upload response bodies are truncated to exercise app recovery.
 import { createServer as httpServer, request } from 'node:http';
 import { createServer as tcpServer } from 'node:net';
 if (process.env.CI !== 'true' || process.env.APP_ENV !== 'test' || !new URL(process.env.DATABASE_URL).pathname.endsWith('_test')) throw new Error('Disposable CI only');
@@ -8,7 +8,15 @@ httpServer((req, res) => {
   const upstream = request({ hostname: '127.0.0.1', port: 3001, path: req.url, method: req.method, headers: { ...req.headers, host: 'localhost:3001' } }, response => {
     const kind = req.method === 'POST' && /\/cases\/[^/]+\/reply$/.test(req.url) ? 'reply' : req.method === 'POST' && /\/uploads\/[^/]+\/finalize$/.test(req.url) ? 'upload' : null;
     if (kind && response.statusCode === 200 && !dropped.has(kind)) {
-      dropped.add(kind); response.resume(); response.on('end', () => { console.log(JSON.stringify({ event: 'synthetic.response_dropped_after_commit', kind })); res.destroy(); }); return;
+      dropped.add(kind); response.resume(); response.on('end', () => {
+        // Closing before headers lets native networking transparently resend the
+        // request. Deliver an incomplete JSON envelope after consuming the real
+        // committed response instead: parsing must fail on both platforms and
+        // the app retains the original intent until an explicit user retry.
+        console.log(JSON.stringify({ event: 'synthetic.response_truncated_after_commit', kind }));
+        res.writeHead(200, { 'content-type': 'application/json', 'x-api-version': '1', 'cache-control': 'no-store', 'content-length': '1' });
+        res.end('{');
+      }); return;
     }
     res.writeHead(response.statusCode, response.headers); response.pipe(res);
   });

@@ -8,19 +8,16 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Owner financial statements are not available to employees."
     direction: DOWN
-    centerElement: true
 - assertNotVisible: "Owner earnings"
 - takeScreenshot: host-employee-dashboard
 - scrollUntilVisible:
     element: "Fleet & calendar"
     direction: UP
-    centerElement: true
 - tapOn: "Fleet & calendar"
 - tapOn: "Manage Synthetic Host Car"
 - scrollUntilVisible:
     element: "Calendar changes require owner or manager access."
     direction: DOWN
-    centerElement: true
 - assertNotVisible: "Save calendar block"
 - takeScreenshot: host-employee-calendar
 - runFlow: back.yaml

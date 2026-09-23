@@ -22,12 +22,10 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Save calendar block"
     direction: DOWN
-    centerElement: true
 - tapOn: "Save calendar block"
 - scrollUntilVisible:
     element: "Remove calendar block"
     direction: UP
-    centerElement: true
 - takeScreenshot: host-calendar
 - tapOn: "Remove calendar block"
 - runFlow: back.yaml
@@ -49,43 +47,36 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Compare identity in person"
     direction: DOWN
-    centerElement: true
 - tapOn: "Compare identity in person"
 # Private screens intentionally have no screenshot command.
 - scrollUntilVisible:
     element: "View private license front"
     direction: DOWN
-    centerElement: true
 - tapOn: "View private license front"
 - assertVisible: "Close private preview"
 - tapOn: "Close private preview"
 - scrollUntilVisible:
     element: "Unchecked: physical license matches upload"
     direction: DOWN
-    centerElement: true
 - tapOn: "Unchecked: physical license matches upload"
 - tapOn: "Unchecked: physical license is unexpired"
 - scrollUntilVisible:
     element: "Unchecked: guest matches selfie"
     direction: DOWN
-    centerElement: true
 - tapOn: "Unchecked: guest matches selfie"
 - scrollUntilVisible:
     element: "Record identity comparison"
     direction: DOWN
-    centerElement: true
 - tapOn: "Record identity comparison"
 - assertVisible: "Comparison recorded. Other trip gates still apply."
 - runFlow: back.yaml
 - scrollUntilVisible:
     element: "Refresh handoff & trip gates"
     direction: DOWN
-    centerElement: true
 - tapOn: "Refresh handoff & trip gates"
 - scrollUntilVisible:
     element: "Record keys handed to customer"
     direction: UP
-    centerElement: true
 - assertVisible:
     text: "Record keys handed to customer"
     enabled: false
@@ -93,7 +84,6 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Reservation support"
     direction: DOWN
-    centerElement: true
 - tapOn: "Reservation support"
 - tapOn:
     id: "input-Request title"
@@ -106,7 +96,6 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Open support request"
     direction: DOWN
-    centerElement: true
 - tapOn: "Open support request"
 - tapOn:
     id: "input-Reply to case"
@@ -115,18 +104,22 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Send case reply"
     direction: DOWN
-    centerElement: true
 - tapOn: "Send case reply"
 - extendedWaitUntil:
     visible: "Connection interrupted.*"
     timeout: 25000
 - takeScreenshot: host-reply-interrupted
+- scrollUntilVisible:
+    element: "Refresh case"
+    direction: DOWN
 - tapOn: "Refresh case"
+- scrollUntilVisible:
+    element: "Send case reply"
+    direction: DOWN
 - tapOn: "Send case reply"
 - scrollUntilVisible:
     element: "HOST_REPLY.*"
     direction: UP
-    centerElement: true
 - assertVisible: "Synthetic interrupted reply."
 - takeScreenshot: host-reply-recovered
 - runFlow: back.yaml
@@ -136,12 +129,10 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Begin return inspection"
     direction: DOWN
-    centerElement: true
 - tapOn: "Begin return inspection"
 - scrollUntilVisible:
     element: "Host photos & condition reports"
     direction: UP
-    centerElement: true
 - tapOn: "Host photos & condition reports"
 - tapOn: "Pre-trip selected.*"
 - tapOn:
@@ -167,35 +158,29 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Submit condition report"
     direction: DOWN
-    centerElement: true
 - tapOn: "Submit condition report"
 - scrollUntilVisible:
     element: "Accept my report as accurate"
     direction: DOWN
-    centerElement: true
 - tapOn: "Accept my report as accurate"
 - assertNotVisible: "Accept my report as accurate"
 - runFlow: back.yaml
 - scrollUntilVisible:
     element: "Complete return after both reports"
     direction: DOWN
-    centerElement: true
 - tapOn: "Complete return after both reports"
 - scrollUntilVisible:
     element: "COMPLETED.*"
     direction: UP
-    centerElement: true
 - takeScreenshot: host-return-complete
 - runFlow: back.yaml
 - scrollUntilVisible:
     element: "Open HOST-READY"
     direction: DOWN
-    centerElement: true
 - tapOn: "Open HOST-READY"
 - scrollUntilVisible:
     element: "Host photos & condition reports"
     direction: DOWN
-    centerElement: true
 - tapOn: "Host photos & condition reports"
 - tapOn:
     id: "input-Odometer mileage"
@@ -220,23 +205,19 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Submit condition report"
     direction: DOWN
-    centerElement: true
 - tapOn: "Submit condition report"
 - scrollUntilVisible:
     element: "Accept my report as accurate"
     direction: DOWN
-    centerElement: true
 - tapOn: "Accept my report as accurate"
 - runFlow: back.yaml
 - scrollUntilVisible:
     element: "Refresh handoff & trip gates"
     direction: DOWN
-    centerElement: true
 - tapOn: "Refresh handoff & trip gates"
 - scrollUntilVisible:
     element: "Record keys handed to customer"
     direction: UP
-    centerElement: true
 - tapOn: "Record keys handed to customer"
 - assertVisible: "Keys handoff recorded"
 - assertNotVisible: "Start trip"
@@ -244,19 +225,16 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Report damage or incident"
     direction: DOWN
-    centerElement: true
 - tapOn: "Report damage or incident"
 - tapOn: "Damage claim selected.*"
 - scrollUntilVisible:
     element: "LOST_KEY"
     direction: DOWN
-    centerElement: true
 - tapOn: "LOST_KEY"
 - scrollUntilVisible:
     element:
       id: "input-Incident title"
     direction: DOWN
-    centerElement: true
 - tapOn:
     id: "input-Incident title"
 - inputText: "Synthetic lost spare key"
@@ -268,7 +246,6 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Submit incident for review"
     direction: DOWN
-    centerElement: true
 - tapOn: "Submit incident for review"
 - assertVisible: "Synthetic lost spare key"
 - takeScreenshot: host-incident
@@ -279,7 +256,6 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Owner earnings"
     direction: DOWN
-    centerElement: true
 - tapOn: "Owner earnings"
 - assertVisible: "No accounted earnings yet."
 - takeScreenshot: host-owner-earnings
@@ -287,11 +263,9 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN
-    centerElement: true
 - tapOn: "Account & devices"
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
-    centerElement: true
 - tapOn: "Log out this device"
 - assertVisible: "Your hosting day, in hand."

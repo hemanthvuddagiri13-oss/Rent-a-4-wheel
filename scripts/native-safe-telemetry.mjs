@@ -9,7 +9,7 @@ for (const path of ['/tmp/native-api.log', '/tmp/native-proxy.log']) {
     const start = line.indexOf('{'); if (start < 0) continue;
     try { const row = JSON.parse(line.slice(start));
       if (row.event === 'mobile.request') rows.push({ event: row.event, operation: row.operation, requestId: row.requestId, status: row.status, durationMs: row.durationMs });
-      if (row.event === 'synthetic.response_dropped_after_commit') rows.push({ event: row.event, kind: row.kind });
+      if (row.event === 'synthetic.response_truncated_after_commit') rows.push({ event: row.event, kind: row.kind });
     } catch { /* Other backend output is not an artifact. */ }
   }
 }

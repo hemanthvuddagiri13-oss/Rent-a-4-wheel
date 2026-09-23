@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { usePreventScreenCapture } from 'expo-screen-capture';
 import { useQuery } from '@tanstack/react-query';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -12,7 +12,8 @@ import { Pricing } from './reservations';
 type Driver = MobileOperations['checkout']['input']['body']['driver'];
 const labels: Record<keyof Driver, string> = { firstName: 'First name', lastName: 'Last name', dob: 'Date of birth (YYYY-MM-DD)', email: 'Email', phone: 'Phone', address: 'Street address', city: 'City', state: 'State (two letters)', zip: 'ZIP code', country: 'Country (two letters)', licenseNumber: 'License number', licenseState: 'License state (two letters)', licenseExpiration: 'License expiration (YYYY-MM-DD)' };
 export function Checkout({ route }: NativeStackScreenProps<Routes, 'Checkout'>) {
-  usePreventScreenCapture();
+  const captureKey = useId();
+  usePreventScreenCapture(captureKey);
   const { id } = route.params, action = useAction();
   const [driver, setDriver] = useState<Driver>({ firstName: '', lastName: '', dob: '', email: '', phone: '', address: '', city: '', state: '', zip: '', country: 'US', licenseNumber: '', licenseState: '', licenseExpiration: '' });
   const [docs, setDocs] = useState<{ front?: string; back?: string; selfie?: string }>({}), [acceptedEvidence, setAcceptedEvidence] = useState<string | null>(null), [prepared, setPrepared] = useState(false);

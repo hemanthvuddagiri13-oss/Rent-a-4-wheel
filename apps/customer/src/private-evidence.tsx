@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useId, useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Image } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { usePreventScreenCapture } from 'expo-screen-capture';
@@ -10,7 +10,8 @@ import { Button, Hint, ErrorText } from './ui';
 /** Bytes remain in memory, never a public URL or image/disk cache. Re-open
  * obtains fresh authorization; background/blur/expiry destroys the preview. */
 export function PrivateEvidence({ documentId, label, report }: { documentId?: string; label: string; report?: { id: string; reportId: string; photoId: string } }) {
-  usePreventScreenCapture();
+  const captureKey = useId();
+  usePreventScreenCapture(captureKey);
   const [uri, setUri] = useState<string | null>(null), action = useAction(), generation = useRef(0);
   const clear = useCallback(() => { generation.current++; setUri(null); }, []);
   useFocusEffect(useCallback(() => clear, [clear]));
