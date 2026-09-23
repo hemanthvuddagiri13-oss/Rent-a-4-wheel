@@ -1049,20 +1049,17 @@ it.each(['revoke', 'handoff'] as const)('host membership race: %s commits first 
   } finally { release.resolve(); await Promise.allSettled([winner, ...(results ? [results] : [])]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
 });
 
-it('host calendar uses the booking availability states, including durable payment recovery and expired transient holds', async () => {
+it.each([
+  ['DRAFT', new Date('2058-01-01'), false], ['CHECKOUT_HOLD', new Date('2058-01-01'), true], ['CHECKOUT_HOLD', new Date(0), false],
+  ['AWAITING_PAYMENT', new Date('2058-01-01'), true], ['AWAITING_PAYMENT', new Date(0), false],
+  ['PAYMENT_FAILED', new Date(0), true], ['CONFIRMED', null, true],
+  ['COMPLETED', null, false], ['CANCELLED_BY_CUSTOMER', null, false], ['EXPIRED', null, false],
+] as const)('host calendar reflects booking availability for %s with expiration %s', async (status, expiresAt, blocks) => {
+  // Each case has independent persisted state; cancelled reservations must never be reopened by a fixture.
   const f = await tenantFixture(), path = `host/vehicles/${f.vehicle.id}/calendar`;
   const window = { startAt: '2055-04-01T00:00:00Z', endAt: '2055-05-01T00:00:00Z' };
-  const future = new Date('2058-01-01'), expired = new Date(0);
-  const cases = [
-    ['DRAFT', future, false], ['CHECKOUT_HOLD', future, true], ['CHECKOUT_HOLD', expired, false],
-    ['AWAITING_PAYMENT', future, true], ['AWAITING_PAYMENT', expired, false],
-    ['PAYMENT_FAILED', expired, true], ['CONFIRMED', null, true],
-    ['COMPLETED', null, false], ['CANCELLED_BY_CUSTOMER', null, false], ['EXPIRED', null, false],
-  ] as const;
-  for (const [status, expiresAt, blocks] of cases) {
-    await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status, expiresAt } });
-    const response = await post(path, window, f.employee.accessToken); expect(response.status).toBe(200);
-    expect((await response.json()).data.reservations.map((r: { id: string }) => r.id), status).toEqual(blocks ? [f.reservation.id] : []);
-  }
+  await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status, expiresAt } });
+  const response = await post(path, window, f.employee.accessToken); expect(response.status).toBe(200);
+  expect((await response.json()).data.reservations.map((r: { id: string }) => r.id), status).toEqual(blocks ? [f.reservation.id] : []);
   expect(await prisma.financialOperation.count()).toBe(0);
 });

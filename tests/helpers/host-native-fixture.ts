@@ -22,6 +22,8 @@ async function main() {
     if (completed.status !== 'COMPLETED') throw new Error('Return journey did not complete');
     const ready = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-READY' } });
     if (ready.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: ready.id, step: 'KEYS_RELEASED' } }) !== 1 || await db.trip.count({ where: { reservationId: ready.id } })) throw new Error('Keys must not start the guest trip');
+    if (await db.tripEvent.count({ where: { reservationId: ready.id, type: 'TRIP_KEYS' } }) !== 1) throw new Error('Repeated keys taps must commit once');
+    for (const type of ['TRIP_COMPLETE', 'RETURN_REVIEWED']) if (await db.tripEvent.count({ where: { reservationId: completed.id, type } }) !== 1) throw new Error('Repeated completion taps must commit once');
     if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native acceptance must not issue provider work');
     console.log('Native database assertions: one reply, one handoff, blocked start/keys, completed return, zero provider operations/payouts.');
     return;

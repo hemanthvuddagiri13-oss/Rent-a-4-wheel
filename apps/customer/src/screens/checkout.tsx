@@ -1,5 +1,5 @@
-import React, { useId, useState } from 'react';
-import { usePreventScreenCapture } from 'expo-screen-capture';
+import React, { useState } from 'react';
+import { useCaptureProtection } from '../screen-privacy';
 import { useQuery } from '@tanstack/react-query';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { MobileOperations } from '../../../../packages/mobile-client/src';
@@ -12,8 +12,7 @@ import { Pricing } from './reservations';
 type Driver = MobileOperations['checkout']['input']['body']['driver'];
 const labels: Record<keyof Driver, string> = { firstName: 'First name', lastName: 'Last name', dob: 'Date of birth (YYYY-MM-DD)', email: 'Email', phone: 'Phone', address: 'Street address', city: 'City', state: 'State (two letters)', zip: 'ZIP code', country: 'Country (two letters)', licenseNumber: 'License number', licenseState: 'License state (two letters)', licenseExpiration: 'License expiration (YYYY-MM-DD)' };
 export function Checkout({ route }: NativeStackScreenProps<Routes, 'Checkout'>) {
-  const captureKey = useId();
-  usePreventScreenCapture(captureKey);
+  const captureReady = useCaptureProtection();
   const { id } = route.params, action = useAction();
   const [driver, setDriver] = useState<Driver>({ firstName: '', lastName: '', dob: '', email: '', phone: '', address: '', city: '', state: '', zip: '', country: 'US', licenseNumber: '', licenseState: '', licenseExpiration: '' });
   const [docs, setDocs] = useState<{ front?: string; back?: string; selfie?: string }>({}), [acceptedEvidence, setAcceptedEvidence] = useState<string | null>(null), [prepared, setPrepared] = useState(false);
@@ -22,6 +21,7 @@ export function Checkout({ route }: NativeStackScreenProps<Routes, 'Checkout'>) 
   } });
   const agreementEvidence = q.data ? id + ':' + q.data.agreement.contentHash : null;
   const accepted = agreementEvidence !== null && acceptedEvidence === agreementEvidence;
+  if (!captureReady) return <Page title="Private screen"><Hint>Preparing screen protection. Restart the app if this persists.</Hint></Page>;
   return <Page title="Prepare your reservation"><Hint>Private identity and driver information stays in memory only. If the app closes, re-enter it. Existing uploaded documents remain on the server.</Hint>
     {q.isPending ? <Busy /> : q.isError ? <ErrorText message={friendly(q.error)} /> : <><Pricing value={q.data.pricing} />
       <Hint>Agreements, receipts and booking notices use your verified account email.</Hint>

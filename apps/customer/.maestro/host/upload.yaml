@@ -15,7 +15,7 @@ appId: com.renta4wheel.host.acceptance
     commands:
       - tapOn: "Allow all"
 - tapOn:
-    text: "Photo.*"
+    text: "Photo[ ,].*"
     index: ${INDEX}
 - runFlow:
     when:

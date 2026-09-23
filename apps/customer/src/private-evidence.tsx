@@ -1,7 +1,7 @@
-import React, { useId, useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Image } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { usePreventScreenCapture } from 'expo-screen-capture';
+import { useCaptureProtection } from './screen-privacy';
 import { fromByteArray } from 'base64-js';
 import { session } from './runtime';
 import { useAction } from './hooks';
@@ -10,13 +10,13 @@ import { Button, Hint, ErrorText } from './ui';
 /** Bytes remain in memory, never a public URL or image/disk cache. Re-open
  * obtains fresh authorization; background/blur/expiry destroys the preview. */
 export function PrivateEvidence({ documentId, label, report }: { documentId?: string; label: string; report?: { id: string; reportId: string; photoId: string } }) {
-  const captureKey = useId();
-  usePreventScreenCapture(captureKey);
+  const captureReady = useCaptureProtection();
   const [uri, setUri] = useState<string | null>(null), action = useAction(), generation = useRef(0);
   const clear = useCallback(() => { generation.current++; setUri(null); }, []);
   useFocusEffect(useCallback(() => clear, [clear]));
   useEffect(() => { const listener = AppState.addEventListener('change', clear); return () => { listener.remove(); clear(); }; }, [clear]);
   useEffect(() => { if (uri) { const timer = setTimeout(clear, 30000); return () => clearTimeout(timer); } }, [uri, clear]);
+  if (!captureReady) return <Hint>Private preview unavailable until screen protection is ready. Restart the app if this persists.</Hint>;
   return <><Button title={uri ? "Close private preview" : `View private ${label.replaceAll('_', ' ').toLowerCase()}`} disabled={action.busy} onPress={uri ? clear : () => void action.run(async () => {
     clear(); const epoch = generation.current;
     let result: ArrayBuffer;

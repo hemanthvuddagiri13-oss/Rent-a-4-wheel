@@ -168,7 +168,9 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Complete return after both reports"
     direction: DOWN
-- tapOn: "Complete return after both reports"
+- tapOn:
+    text: "Complete return after both reports"
+    repeat: 2
 - scrollUntilVisible:
     element: "COMPLETED.*"
     direction: UP
@@ -218,7 +220,9 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Record keys handed to customer"
     direction: UP
-- tapOn: "Record keys handed to customer"
+- tapOn:
+    text: "Record keys handed to customer"
+    repeat: 2
 - assertVisible: "Keys handoff recorded"
 - assertNotVisible: "Start trip"
 - takeScreenshot: host-keys

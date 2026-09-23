@@ -1,5 +1,5 @@
-import React, { useId, useState } from 'react';
-import { usePreventScreenCapture } from 'expo-screen-capture';
+import React, { useState } from 'react';
+import { useCaptureProtection } from '../screen-privacy';
 import { useQuery } from '@tanstack/react-query';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { Routes } from '../navigation';
@@ -9,12 +9,12 @@ import { Upload } from '../upload';
 import { PrivateEvidence } from '../private-evidence';
 import { useAction } from '../hooks';
 export function Inspection({ route }: NativeStackScreenProps<Routes, 'Inspection'>) {
-  const captureKey = useId();
-  usePreventScreenCapture(captureKey);
+  const captureReady = useCaptureProtection();
   const { id } = route.params, action = useAction();
   const [phase, setPhase] = useState<'PRE_TRIP' | 'POST_TRIP'>('PRE_TRIP'), [mileage, setMileage] = useState(''), [fuel, setFuel] = useState(''), [notes, setNotes] = useState('');
   const [photos, setPhotos] = useState<Array<{ uploadId: string; category: 'EXTERIOR' | 'INTERIOR' | 'DAMAGE' }>>([]);
   const q = useQuery({ queryKey: ['reports', id], queryFn: ({ signal }) => session.call('reports', { params: { id } }, signal) });
+  if (!captureReady) return <Page title="Private screen"><Hint>Preparing screen protection. Restart the app if this persists.</Hint></Page>;
   return <Page title="Vehicle condition"><Hint>Record the vehicle before departure and at return. Include exterior, interior and any damage. Each party performs and accepts their own report. Do not include people, licenses or payment information in condition photos.</Hint>
     <Button title={phase === 'PRE_TRIP' ? 'Pre-trip selected — switch to return' : 'Return selected — switch to pre-trip'} onPress={() => setPhase(p => p === 'PRE_TRIP' ? 'POST_TRIP' : 'PRE_TRIP')} />
     <Field label="Odometer mileage" value={mileage} onChangeText={setMileage} keyboardType="number-pad" /><Field label="Fuel level (0–100 percent)" value={fuel} onChangeText={setFuel} keyboardType="number-pad" /><Field label="Damage notes" value={notes} onChangeText={setNotes} multiline maxLength={2000} />
