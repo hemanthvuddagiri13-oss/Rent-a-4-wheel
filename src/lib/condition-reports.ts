@@ -10,6 +10,7 @@ export async function saveConditionReport(userId: string, reservationId: string,
   photos: Array<{ category: ConditionPhotoCategory; storageKey: string }>;
 }, db: DomainDatabase = prisma) {
   return withReservationLock(reservationId, async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
     const fresh = await tripParticipant(tx, userId, reservationId);
     const allowed = input.phase === "PRE_TRIP" ? ["CONFIRMED", "DOCUMENTS_REQUIRED", "READY_FOR_CHECK_IN", "CHECK_IN_PROGRESS", "READY_TO_START"] : ["RETURN_IN_PROGRESS"];
     if (!allowed.includes(fresh.reservation.status)) throw new MarketplaceError("Inspection is not open for this trip phase.", 409);
@@ -21,6 +22,7 @@ export async function saveConditionReport(userId: string, reservationId: string,
 }
 export async function acceptConditionReport(userId: string, reservationId: string, reportId: string, db: DomainDatabase = prisma) {
   return withReservationLock(reservationId, async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
     const { reservation } = await tripParticipant(tx, userId, reservationId);
     const report = await tx.conditionReport.findFirst({ where: { id: reportId, reservationId } });
     if (!report) throw new MarketplaceError("Not found", 404);

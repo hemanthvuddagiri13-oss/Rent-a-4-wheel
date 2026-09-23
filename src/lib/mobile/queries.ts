@@ -50,9 +50,12 @@ export async function mobileQuery(req: Request, parts: string[]) {
     });
   }
   const actor = await authenticateMobile(req.headers);
+  if (resource === "host" && (id === "context" || parts.length > 2)) {
+    const { hostRead } = await import("./host"); return hostRead(actor.userId, parts);
+  }
   if (resource === "reservations" && action === "reports" && parts[4] === "photos" && parts.length === 6) {
     const { readReportPhoto } = await import("./report-photo");
-    return readReportPhoto(actor.userId, id, parts[3], parts[5]);
+    return readReportPhoto(req, actor.userId, id, parts[3], parts[5]);
   }
   if (resource === "files" && id && parts.length === 2) {
     const { readMobileDocument } = await import("./files"); return readMobileDocument(req, id);
@@ -88,7 +91,7 @@ export async function mobileQuery(req: Request, parts: string[]) {
       if (action === "agreements") return { items: await tx.agreementAcceptance.findMany({ where: { reservationId: id }, select: { id: true, type: true, documentVersion: true, contentHash: true, signedAt: true }, take: 20, orderBy: { signedAt: "desc" } }) };
       if (action === "trip") return { trip: await tx.trip.findUnique({ where: { reservationId: id }, select: { startedAt: true, endedAt: true, startMileage: true, endMileage: true, startFuelLevel: true, endFuelLevel: true } }), gate: await evaluateTripStartGate(id, tx) };
       if (action === "documents") return { items: await tx.driverDocument.findMany({ where: { reservationId: id, deletedAt: null }, select: { id: true, type: true, status: true, malwareScanStatus: true }, take: 20, orderBy: { createdAt: "desc" } }) };
-      if (action === "reports") return { items: await tx.conditionReport.findMany({ where: { reservationId: id }, select: { id: true, phase: true, submittedByRole: true, mileage: true, fuelLevel: true, damageNotes: true, acceptedAt: true, photos: { select: { id: true, category: true } } }, take: 4, orderBy: { createdAt: "asc" } }) };
+      if (action === "reports") return { items: (await tx.conditionReport.findMany({ where: { reservationId: id }, select: { id: true, phase: true, submittedByRole: true, submittedById: true, mileage: true, fuelLevel: true, damageNotes: true, acceptedAt: true, photos: { select: { id: true, category: true } } }, take: 4, orderBy: { createdAt: "asc" } })).map(({ submittedById, ...report }) => ({ ...report, own: submittedById === actor.userId })) };
       throw new MobileError("NOT_FOUND", 404);
     });
   }

@@ -1,0 +1,175 @@
+name: Host native app
+on:
+  push:
+    branches: [codex/phase-7c-host-app]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: host-native-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rent_a_4wheel_test
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rent_a_4wheel_test
+      DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rent_a_4wheel_test
+      AUTH_SECRET: synthetic-native-ci-only-not-a-deployment-secret
+      CRON_SECRET: synthetic-native-ci-cron-only
+      APP_ENV: test
+      NATIVE_ACCEPTANCE: '1'
+      EXPO_PUBLIC_APP_MODE: host
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '3310'
+      EXPO_PUBLIC_API_ORIGIN: http://localhost:3000
+      CI: 'true'
+      ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+      MOBILE_SMS_PROVIDER: fixture
+      MOBILE_SMS_FIXTURE_CODE: '123456'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/customer/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci && npm --prefix apps/customer ci
+      - run: npm --prefix apps/customer run typecheck && npm run lint && npm --prefix apps/customer audit --audit-level=low
+      - run: npm run db:deploy && npm run db:seed
+      - name: Build production API backend
+        run: npm run build
+      - name: Generate and build Android release app
+        working-directory: apps/customer
+        run: |
+          npx expo prebuild --platform android --no-install
+          cd android
+          ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --no-daemon
+      - name: Prepare synthetic API backend
+        run: |
+          npx tsx tests/helpers/host-native-fixture.ts
+          node scripts/host-native-proxy.mjs > /tmp/native-proxy.log 2>&1 &
+          npm run dev -- --hostname 0.0.0.0 --port 3001 > /tmp/native-api.log 2>&1 &
+          curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3001/api/health/live
+          curl --fail --max-time 180 http://localhost:3000/api/v1/mobile/vehicles > /dev/null
+          curl --fail --max-time 180 -H 'Content-Type: application/json' --data '{"email":"compile-only@example.test"}' http://localhost:3000/api/v1/mobile/auth/request-code > /dev/null
+          curl -fsSL https://get.maestro.mobile.dev | bash
+      - name: KVM permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Actual Android application journeys
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          script: bash scripts/host-android-journeys.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-android-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            artifacts/
+            apps/customer/android/app/build/outputs/apk/release/app-release.apk
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      AUTH_SECRET: synthetic-native-ci-only-not-a-deployment-secret
+      CRON_SECRET: synthetic-native-ci-cron-only
+      APP_ENV: test
+      NATIVE_ACCEPTANCE: '1'
+      EXPO_PUBLIC_APP_MODE: host
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '3310'
+      EXPO_PUBLIC_API_ORIGIN: http://localhost:3000
+      CI: 'true'
+      ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+      MOBILE_SMS_PROVIDER: fixture
+      MOBILE_SMS_FIXTURE_CODE: '123456'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/customer/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci && npm --prefix apps/customer ci
+      - name: Disposable PostgreSQL
+        run: |
+          brew install postgresql@17
+          brew services start postgresql@17
+          echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+          echo "DATABASE_URL=postgresql://$(whoami)@localhost:5432/rent_a_4wheel_test" >> "$GITHUB_ENV"
+          echo "DIRECT_DATABASE_URL=postgresql://$(whoami)@localhost:5432/rent_a_4wheel_test" >> "$GITHUB_ENV"
+      - run: |
+          for attempt in {1..30}; do pg_isready && break; sleep 1; done
+          createdb rent_a_4wheel_test
+          npm run db:deploy
+          npm run db:seed
+      - name: Build production API backend
+        run: npm run build
+      - name: Build actual iOS simulator release app
+        working-directory: apps/customer
+        run: |
+          npx expo prebuild --platform ios
+          # Simulator ad-hoc signing retains application/keychain entitlements.
+          # No Apple account or distribution certificate is used.
+          xcodebuild -workspace ios/RentA4WheelHost.xcworkspace -scheme RentA4WheelHost -configuration Release -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
+          codesign --verify --deep --strict build/Build/Products/Release-iphonesimulator/RentA4WheelHost.app
+          # Simulator entitlements are linked into __TEXT, not the device signature.
+          ENTITLEMENTS=build/Build/Intermediates.noindex/RentA4WheelHost.build/Release-iphonesimulator/RentA4WheelHost.build/RentA4WheelHost.app-Simulated.xcent
+          test "$(/usr/libexec/PlistBuddy -c 'Print :application-identifier' "$ENTITLEMENTS")" = 'FAKETEAMID.com.renta4wheel.host.acceptance'
+          strings build/Build/Products/Release-iphonesimulator/RentA4WheelHost.app/RentA4WheelHost | grep -F 'FAKETEAMID.com.renta4wheel.host.acceptance'
+      - name: Actual iOS application journeys
+        run: |
+          node scripts/host-native-proxy.mjs > /tmp/native-proxy.log 2>&1 &
+          npm run dev -- --hostname 0.0.0.0 --port 3001 > /tmp/native-api.log 2>&1 &
+          curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3001/api/health/live
+          curl --fail --max-time 180 http://localhost:3000/api/v1/mobile/vehicles > /dev/null
+          curl --fail --max-time 180 -H 'Content-Type: application/json' --data '{"email":"compile-only@example.test"}' http://localhost:3000/api/v1/mobile/auth/request-code > /dev/null
+          curl -fsSL https://get.maestro.mobile.dev | bash
+          DEVICE=$(xcrun simctl list devices available -j | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>console.log(Object.values(JSON.parse(s).devices).flat().find(d=>d.name.startsWith("iPhone")).udid))')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" apps/customer/build/Build/Products/Release-iphonesimulator/RentA4WheelHost.app
+          npx tsx tests/helpers/host-native-fixture.ts
+          mkdir -p artifacts
+          xcrun simctl addmedia "$DEVICE" /tmp/host-native-fixtures/condition.png
+          trap 'node scripts/native-safe-telemetry.mjs; xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4WheelHost"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
+          for journey in owner employee; do
+            $HOME/.maestro/bin/maestro --device "$DEVICE" test "apps/customer/.maestro/host/$journey.yaml" --test-output-dir "$PWD/artifacts/$journey" --format junit --output "artifacts/ios-$journey.xml"
+          done
+          npx tsx tests/helpers/host-native-fixture.ts --revoke
+          $HOME/.maestro/bin/maestro --device "$DEVICE" test apps/customer/.maestro/host/revoked.yaml --test-output-dir "$PWD/artifacts/revoked" --format junit --output artifacts/ios-revoked.xml
+          npx tsx tests/helpers/host-native-fixture.ts --assert
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-ios-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            artifacts/
+            apps/customer/build/Build/Products/Release-iphonesimulator/*.app

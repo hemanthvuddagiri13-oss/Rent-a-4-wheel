@@ -20,6 +20,7 @@ export async function tripParticipant(tx: Prisma.TransactionClient, userId: stri
 
 export async function tripCommand(userId: string, id: string, action: "keys" | "return" | "complete", db: DomainDatabase = prisma) {
   return withReservationLock(id, async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
     const { reservation: r, role } = await tripParticipant(tx, userId, id);
     if (action === "keys") {
       if (role !== "HOST") throw new MarketplaceError("Only the assigned host can release keys.", 403);

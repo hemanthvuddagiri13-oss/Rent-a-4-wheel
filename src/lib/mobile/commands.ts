@@ -42,6 +42,7 @@ export async function mobileCommand(req: Request, parts: string[]) {
     const { finalizeMobileUpload } = await import("./uploads"); return finalizeMobileUpload(req, id);
   }
   const input = await mobileBody(req);
+  if (resource === "host") { const { hostWrite } = await import("./host"); return hostWrite(req, actor.userId, parts, input); }
   if (resource === "uploads" && !id) {
     const { initializeMobileUpload } = await import("./uploads"); return initializeMobileUpload(req, input);
   }

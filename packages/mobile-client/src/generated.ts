@@ -37,7 +37,7 @@ export interface MobileOperations {
   "finalizeUpload": { input: { params: { "id": string }; body: Uint8Array; idempotencyKey: string; fileAccess?: never; query?: never; contentType: "image/png" | "image/jpeg" | "image/webp" }; output: { "id": string } };
   "documentAccess": { input: { params?: never; body: { "documentId": string }; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "capability": string; "expiresInSeconds": 60; "documentId": string } };
   "privateDocument": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess: string; query?: never }; output: ArrayBuffer };
-  "reports": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "phase": string; "submittedByRole": string; "mileage": number; "fuelLevel": number; "damageNotes": string | null; "acceptedAt": string | null; "photos": Array<{ "id": string; "category": "EXTERIOR" | "INTERIOR" | "ODOMETER" | "FUEL_GAUGE" | "DAMAGE" }> }> } };
+  "reports": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "phase": string; "submittedByRole": string; "own": boolean; "mileage": number; "fuelLevel": number; "damageNotes": string | null; "acceptedAt": string | null; "photos": Array<{ "id": string; "category": "EXTERIOR" | "INTERIOR" | "ODOMETER" | "FUEL_GAUGE" | "DAMAGE" }> }> } };
   "reportPhoto": { input: { params: { "id": string; "reportId": string; "photoId": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: ArrayBuffer };
   "submitReport": { input: { params: { "id": string }; body: { "phase": "PRE_TRIP" | "POST_TRIP"; "mileage": number; "fuelLevel": number; "damageNotes"?: string; "photos": Array<{ "uploadId": string; "category": "EXTERIOR" | "INTERIOR" | "ODOMETER" | "FUEL_GAUGE" | "DAMAGE" }> }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
   "acceptReport": { input: { params: { "id": string; "reportId": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
@@ -53,6 +53,12 @@ export interface MobileOperations {
   "replyCase": { input: { params: { "id": string }; body: { "body": string; "version": number }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
   "saveReview": { input: { params?: never; body: { "reservationId": string; "subject": "VEHICLE" | "HOST" | "CUSTOMER"; "rating": number; "body": string; "cleanliness": number; "communication": number; "accuracy": number; "version"?: number }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string } };
   "hostFleet": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "slug": string; "year": number; "make": string; "model": string; "category": string; "transmission": string; "fuelType": string; "seats": number; "dailyRateCents": number; "securityDepositCents": number; "location": string; "jurisdictionCode": string | null; "status": string; "listingApproval": string }>; "nextCursor": string | null } };
+  "hostContext": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "role": "OWNER" | "MANAGER" | "STAFF"; "name": string; "canManageFleet": boolean; "canViewEarnings": boolean; "fleetCount": number; "upcomingCount": number; "activeCount": number; "liveFinanceEnabled": false } };
+  "hostVehicle": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "year": number; "make": string; "model": string; "description": string | null; "rules": string | null; "location": string; "mileage": number; "status": string; "listingApproval": string; "isDemo": boolean; "isBookable": boolean } };
+  "hostCalendar": { input: { params: { "id": string }; body: { "startAt": string; "endAt": string }; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "blocks": Array<{ "id": string; "startAt": string; "endAt": string; "reason": string; "notes": string | null }>; "reservations": Array<{ "id": string; "confirmationNumber": string; "status": string; "pickupAt": string; "returnAt": string }>; "truncated": boolean } };
+  "hostAvailability": { input: { params: { "id": string }; body: { "action": "block"; "startAt": string; "endAt": string; "reason": "MAINTENANCE" | "OWNER_REQUEST" | "OTHER"; "notes": string } | { "action": "unblock"; "id": string } | { "action": "availability"; "isBookable": boolean }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
+  "hostTrip": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "customerName": string; "handoffVerified": boolean; "keysReleased": boolean; "keyReleaseGate": { "canStart": boolean; "reasons": Array<string> } } };
+  "hostHandoff": { input: { params: { "id": string }; body: { "licenseMatchesUpload": boolean; "physicalLicenseUnexpired": boolean; "selfieMatchesCustomer": boolean; "notes"?: string }; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "id": string; "verified": boolean } };
   "hostReservations": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "confirmationNumber": string; "vehicleId": string; "status": string; "pickupAt": string; "returnAt": string; "bookingTimezone": string; "pickupLocation": string; "expiresAt": string | null; "subtotalCents": number; "extrasCents": number; "discountCents": number; "taxCents": number; "feesCents": number; "totalCents": number; "depositCents": number; "bookingFingerprint": string | null }>; "nextCursor": string | null } };
   "hostEarnings": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "reservationId": string; "currency": string; "grossCents": number; "commissionCents": number; "hostDiscountCents": number; "netCents": number; "refundedCents": number; "adjustmentCents": number; "held": boolean; "payoutEnabled": false }>; "nextCursor": string | null } };
 }
@@ -372,6 +378,42 @@ export const operationMetadata = {
   "hostFleet": {
     "path": "/host/fleet",
     "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "hostContext": {
+    "path": "/host/context",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "hostVehicle": {
+    "path": "/host/vehicles/{id}",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "hostCalendar": {
+    "path": "/host/vehicles/{id}/calendar",
+    "method": "POST",
+    "auth": true,
+    "binary": null
+  },
+  "hostAvailability": {
+    "path": "/host/vehicles/{id}/availability",
+    "method": "POST",
+    "auth": true,
+    "binary": null
+  },
+  "hostTrip": {
+    "path": "/host/trips/{id}",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "hostHandoff": {
+    "path": "/host/trips/{id}/handoff",
+    "method": "POST",
     "auth": true,
     "binary": null
   },

@@ -1,0 +1,21 @@
+appId: com.renta4wheel.host.acceptance
+---
+- tapOn: "Sign in to hosting"
+- tapOn:
+    id: "input-Mobile phone number"
+- inputText: "${PHONE}"
+- runFlow: dismiss-keyboard.yaml
+- tapOn: "Send text code"
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit text code"
+    direction: DOWN
+- tapOn:
+    id: "input-Six-digit text code"
+- inputText: "123456"
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Verify phone & continue"
+    direction: DOWN
+- tapOn: "Verify phone & continue"
+- assertVisible: "Host dashboard"

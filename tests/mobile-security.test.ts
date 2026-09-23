@@ -865,3 +865,129 @@ it("phone-only accounts cannot acquire a hold before linking a verified email", 
   expect((await post("reservations/hold", input, c.accessToken, key)).status).toBe(409);
   expect(await prisma.reservation.count()).toBe(2);
 });
+
+// Phase 7C: real HTTP handlers and disposable PostgreSQL; only external delivery,
+// malware and storage boundaries above are fixtures.
+it.each(['removed', 'inactive', 'expired'])('host mobile %s membership blocks every new tenant operation with the same token', async change => {
+  const f = await tenantFixture(), id = f.reservation.id;
+  for (const c of [f.owner, f.employee]) {
+    expect((await get('host/context', c.accessToken)).status).toBe(200);
+    expect((await get(`host/vehicles/${f.vehicle.id}`, c.accessToken)).status).toBe(200);
+    expect((await get(`host/trips/${id}`, c.accessToken)).status).toBe(200);
+  }
+  expect((await (await get('host/context', f.employee.accessToken)).json()).data).toMatchObject({ role: 'STAFF', canViewEarnings: false, canManageFleet: false, liveFinanceEnabled: false });
+  const window = { startAt: '2055-04-01T00:00:00Z', endAt: '2055-05-01T00:00:00Z' };
+  expect((await post(`host/vehicles/${f.vehicle.id}/calendar`, window, f.employee.accessToken)).status).toBe(200);
+  expect((await post(`host/vehicles/${f.vehicle.id}/availability`, { action: 'availability', isBookable: false }, f.employee.accessToken, crypto.randomUUID())).status).toBe(403);
+  if (change === 'removed') await prisma.hostEmployee.delete({ where: { id: f.membership.id } });
+  else await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: change === 'inactive' ? { isActive: false } : { expiresAt: new Date(0) } });
+  for (const path of ['host/context', `host/vehicles/${f.vehicle.id}`, `host/trips/${id}`]) expect((await get(path, f.employee.accessToken)).status).toBe(403);
+  expect((await post(`host/vehicles/${f.vehicle.id}/calendar`, window, f.employee.accessToken)).status).toBe(403);
+  expect((await post(`host/trips/${id}/handoff`, { licenseMatchesUpload: false, physicalLicenseUnexpired: false, selfieMatchesCustomer: false }, f.employee.accessToken, crypto.randomUUID())).status).toBe(403);
+  expect(await prisma.identityHandoffVerification.count()).toBe(0);
+  expect((await get('host/context', f.owner.accessToken)).status).toBe(200);
+  expect((await get('host/context', f.customer.accessToken)).status).toBe(403);
+  const unrelated = await prisma.user.update({ where: { email: f.other.email }, data: { role: 'HOST' } });
+  await prisma.hostProfile.create({ data: { userId: unrelated.id, legalName: 'Other host', onboardingStatus: 'APPROVED' } });
+  expect((await get(`host/vehicles/${f.vehicle.id}`, f.other.accessToken)).status).toBe(404);
+  expect((await get(`host/trips/${id}`, f.other.accessToken)).status).toBe(404);
+});
+async function cleanHandoffEvidence(f: Awaited<ReturnType<typeof tenantFixture>>) {
+  for (const type of ['LICENSE_FRONT', 'LICENSE_BACK', 'SELFIE_WITH_LICENSE'] as const) await prisma.driverDocument.create({ data: { userId: f.user.id, reservationId: f.reservation.id, type, storageKey: `local:synthetic-${type}.png`, mimeType: 'image/png', fileSizeBytes: 4, contentSha256: 'a'.repeat(64), malwareScanStatus: 'CLEAN', retentionExpiresAt: new Date('2058-01-01') } });
+}
+const positiveHandoff = { licenseMatchesUpload: true, physicalLicenseUnexpired: true, selfieMatchesCustomer: true };
+it('host HTTP handoff requires clean evidence, replays once, and cannot start or unlock a financially blocked trip', async () => {
+  const f = await tenantFixture(), path = `host/trips/${f.reservation.id}/handoff`, key = crypto.randomUUID();
+  expect((await post(path, positiveHandoff, f.owner.accessToken, key)).status).toBe(409);
+  await cleanHandoffEvidence(f);
+  for (let i = 0; i < 2; i++) expect((await post(path, positiveHandoff, f.owner.accessToken, key)).status).toBe(200);
+  expect(await prisma.identityHandoffVerification.count()).toBe(1);
+  expect(await prisma.tripEvent.count({ where: { type: 'IDENTITY_HANDOFF_RECORDED' } })).toBe(1);
+  expect((await post(`reservations/${f.reservation.id}/start`, {}, f.owner.accessToken, crypto.randomUUID())).status).toBe(404);
+  expect((await post(`reservations/${f.reservation.id}/keys`, {}, f.owner.accessToken, crypto.randomUUID())).status).toBe(409);
+  expect(await prisma.tripChecklist.count()).toBe(0); expect(await prisma.trip.count()).toBe(0);
+  expect(await prisma.reservation.findUnique({ where: { id: f.reservation.id } })).toMatchObject({ status: 'CONFIRMED', financialDisposition: 'OPEN' });
+  expect(await prisma.financialOperation.count()).toBe(0);
+  await prisma.driverDocument.updateMany({ data: { malwareScanStatus: 'QUARANTINED' } });
+  expect((await post(path, positiveHandoff, f.employee.accessToken, crypto.randomUUID())).status).toBe(409);
+});
+it('host calendar blocks preserve overlap guards and receipt idempotency', async () => {
+  const f = await tenantFixture(), path = `host/vehicles/${f.vehicle.id}/availability`;
+  const body = { action: 'block', startAt: '2055-04-01T12:00:00Z', endAt: '2055-04-02T12:00:00Z', reason: 'MAINTENANCE' };
+  expect((await post(path, body, f.owner.accessToken, crypto.randomUUID())).status).toBe(409);
+  const safe = { ...body, startAt: '2055-04-03T12:00:00Z', endAt: '2055-04-04T12:00:00Z' }, key = crypto.randomUUID();
+  for (let i = 0; i < 2; i++) expect((await post(path, safe, f.owner.accessToken, key)).status).toBe(200);
+  expect(await prisma.vehicleBlock.count()).toBe(1);
+  const window = { startAt: '2055-04-01T00:00:00Z', endAt: '2055-05-01T00:00:00Z' };
+  const response = await post(`host/vehicles/${f.vehicle.id}/calendar`, window, f.employee.accessToken); expect(response.status).toBe(200);
+  expect((await response.json()).data).toMatchObject({ blocks: [{ reason: 'MAINTENANCE' }], reservations: [{ id: f.reservation.id }], truncated: false });
+});
+it.each(['identity', 'condition'])('host private %s read fails closed when membership is revoked during storage IO', async kind => {
+  const f = await tenantFixture(); let path: string, capability: string | undefined;
+  if (kind === 'identity') {
+    await cleanHandoffEvidence(f); const doc = await prisma.driverDocument.findFirstOrThrow(); path = 'files/' + doc.id;
+    capability = (await (await post('files/access', { documentId: doc.id }, f.employee.accessToken)).json()).data.capability;
+  } else {
+    const key = 'local:barrier.png'; await prisma.privateObject.create({ data: { key, sha256: 'a'.repeat(64), size: 4, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+    const report = await prisma.conditionReport.create({ data: { reservationId: f.reservation.id, phase: 'PRE_TRIP', submittedByRole: 'HOST', submittedById: f.membership.userId, mileage: 100, fuelLevel: 50, photos: { create: { category: 'EXTERIOR', storageKey: key } } }, include: { photos: true } });
+    path = `reservations/${f.reservation.id}/reports/${report.id}/photos/${report.photos[0].id}`;
+  }
+  const entered = deferred<void>(), release = deferred<void>();
+  fixture.storageRead.mockImplementation(async () => { entered.resolve(); await release.promise; return { buffer: Buffer.from('PRIVATE_SENTINEL') }; });
+  const pending = fetch(base + '/api/v1/mobile/' + path, { headers: { authorization: 'Bearer ' + f.employee.accessToken, ...(capability ? { 'x-file-access': capability } : {}) } });
+  await entered.promise;
+  try { await prisma.hostEmployee.delete({ where: { id: f.membership.id } }); } finally { release.resolve(); }
+  const result = await pending; expect(result.status).toBe(403); expect(await result.text()).not.toContain('PRIVATE_SENTINEL');
+  expect(fixture.storageRead).toHaveBeenCalledTimes(1);
+});
+it('host concurrent return uses independent connections and a reservation-lock barrier, committing the transition once', async () => {
+  const { tripCommand } = await import('@/lib/trip-experience');
+  const f = await tenantFixture(); await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: 'ACTIVE' } });
+  const [a, b] = await independentClients(), barrier = deferred<void>(); let arrivals = 0;
+  const wrap = (db: PrismaClient) => db.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    if (operation === '$queryRaw' && JSON.stringify(args).includes('release-control')) { if (++arrivals === 2) barrier.resolve(); await barrier.promise; } return query(args);
+  } } }) as unknown as PrismaClient;
+  try {
+    await Promise.all([tripCommand(f.host.userId, f.reservation.id, 'return', wrap(a)), tripCommand(f.membership.userId, f.reservation.id, 'return', wrap(b))]);
+    expect(arrivals).toBe(2); expect(await prisma.tripEvent.count({ where: { type: 'TRIP_RETURN' } })).toBe(1);
+    expect(await prisma.reservation.findUnique({ where: { id: f.reservation.id } })).toMatchObject({ status: 'RETURN_IN_PROGRESS' });
+    expect(await prisma.financialOperation.count()).toBe(0);
+  } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it('host handoff waiting behind return sees the committed phase and cannot attest after pickup closed', async () => {
+  const { tripCommand } = await import('@/lib/trip-experience'), { recordIdentityHandoff } = await import('@/lib/identity-handoff');
+  const f = await tenantFixture(); await cleanHandoffEvidence(f); await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: 'ACTIVE' } });
+  const [a, b] = await independentClients(), held = deferred<void>(), release = deferred<void>(), waiting = deferred<void>();
+  const first = a.$extends({ query: { reservation: { async updateMany({ args, query }) { const value = await query(args); held.resolve(); await release.promise; return value; } } } }) as unknown as PrismaClient;
+  const second = b.$extends({ query: { $allOperations: async ({ operation, args, query }) => { if (operation === '$queryRaw' && JSON.stringify(args).includes('vehicle:')) waiting.resolve(); return query(args); } } }) as unknown as PrismaClient;
+  try {
+    const returning = tripCommand(f.host.userId, f.reservation.id, 'return', first); await held.promise;
+    const handoff = recordIdentityHandoff(f.membership.userId, f.reservation.id, positiveHandoff, second); const rejected = expect(handoff).rejects.toThrow('Pickup phase is closed');
+    await waiting.promise; release.resolve(); await returning; await rejected;
+    expect(await prisma.identityHandoffVerification.count()).toBe(0); expect(await prisma.tripEvent.count({ where: { type: 'TRIP_RETURN' } })).toBe(1);
+  } finally { release.resolve(); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it('interrupted support reply freezes its version across refreshed case state and HTTP replay commits exactly one reply', async () => {
+  const { PendingReply } = await import('../apps/customer/src/pending-reply');
+  const f = await tenantFixture();
+  const opened = await post('cases', { kind: 'TICKET', reservationId: f.reservation.id, category: 'GENERAL', title: 'Synthetic recovery', body: 'Synthetic interrupted support reply.' }, f.owner.accessToken, crypto.randomUUID()); expect(opened.status).toBe(200);
+  const { id } = (await opened.json()).data;
+  const initial = (await (await get('cases/' + id, f.owner.accessToken)).json()).data;
+  let drop = true; const requests: string[] = [];
+  const client = createMobileClient({ baseUrl: base, allowLocalHttp: true, accessToken: async () => f.owner.accessToken, fetch: async (url, init) => {
+    requests.push(String(init?.body)); const response = await fetch(url, init);
+    if (drop) { drop = false; expect(response.status).toBe(200); await response.arrayBuffer(); throw new TypeError('Synthetic response lost after database commit'); }
+    return response;
+  } });
+  const pending = new PendingReply(), key = crypto.randomUUID();
+  const send = (input: { id: string; body: string; version: number }) => client.call('replyCase', { params: { id: input.id }, body: { body: input.body, version: input.version }, idempotencyKey: key });
+  await expect(pending.send({ id, body: 'One synthetic reply', version: initial.version }, send)).rejects.toThrow('Synthetic response lost');
+  expect(pending.pending).toBe(true);
+  const current = (await (await get('cases/' + id, f.owner.accessToken)).json()).data; expect(current.version).toBe(initial.version + 1);
+  await pending.send({ id, body: 'One synthetic reply', version: current.version }, send);
+  expect(pending.pending).toBe(false); expect(requests).toHaveLength(2); expect(requests[0]).toBe(requests[1]);
+  expect(await prisma.serviceCaseEvent.count({ where: { caseId: id, body: 'One synthetic reply' } })).toBe(1);
+  expect(await prisma.mobileMutation.count({ where: { operation: 'case.reply' } })).toBe(1);
+});
+
+function deferred<T>() { let resolve!: (value: T | PromiseLike<T>) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
