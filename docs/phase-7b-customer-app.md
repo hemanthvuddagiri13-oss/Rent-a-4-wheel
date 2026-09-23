@@ -14,7 +14,7 @@ References: [Expo SDK compatibility](https://docs.expo.dev/versions/latest/), [S
 
 ## Credentials, retries and privacy
 
-One process-wide coordinator serializes refreshes. Credentials are stored together in SecureStore with WHEN_UNLOCKED_THIS_DEVICE_ONLY. Before sending a one-use refresh token, the app persists a refreshing marker. A lost response, provider rejection, storage failure or restart with that marker requires fresh email-code authentication. It never retries an uncertain refresh. Concurrent late 401s share the new generation. Logout revokes on the server before erasing storage; offline logout honestly reports failure and retains credentials for a revocation retry.
+One process-wide coordinator serializes refreshes. Credentials are stored together in SecureStore with WHEN_UNLOCKED_THIS_DEVICE_ONLY. Before sending a one-use refresh token, the app persists a refreshing marker. A lost response, provider rejection, storage failure or restart with that marker requires fresh phone-code or linked-email authentication. It never retries an uncertain refresh. Concurrent late 401s share the new generation. Logout revokes on the server before erasing storage; offline logout honestly reports failure and retains credentials for a revocation retry.
 
 Domain mutations are not automatically retried on network failure. User-triggered retries reuse a secure, account-scoped random idempotency key bound to a hash of the exact request. No mutation payload is persisted. Completed intentions release their key; upload initialization retains its identity through a later failed finalize. Upload bytes stay in memory and app-owned picker cache; cache copies are deleted on completion or screen disposal. A killed app requires photo reselection; server document status is available on the checkout screen. Expired or uncertain upload intents remain blocked rather than allocating replacement storage automatically. Restarting such an expired intent needs future explicit recovery UX and server reconciliation policy.
 
@@ -33,7 +33,7 @@ The authorized reservation DTO also includes its stored pickup location; unrelat
 
 Native date pickers normalize to whole minutes. Availability and hold creation use the same booking-time parser; seconds or milliseconds are rejected as INVALID_REQUEST before any hold or idempotency record is written.
 
-OpenAPI and typed client are regenerated from the same runtime schemas. All four additions have real PostgreSQL/HTTP regression coverage. Prior mobile/security tests remain intact.
+OpenAPI and typed client are regenerated from the same runtime schemas. All four customer-flow additions have real PostgreSQL/HTTP regression coverage. The five phone/login-method operations and identity migration are described in [the phone identity design](phase-7b-phone-identity.md). Prior mobile/security tests remain intact.
 
 ## Journeys and deliberate unavailable states
 

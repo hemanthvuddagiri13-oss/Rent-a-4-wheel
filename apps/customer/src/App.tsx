@@ -4,8 +4,8 @@ import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
-import { session } from './runtime';
-import { colors, Page, Hint, Busy } from './ui';
+import { session, friendly } from './runtime';
+import { colors, Page, Hint, Busy, ErrorText } from './ui';
 import type { Routes } from './navigation';
 import { Home, Vehicle } from './screens/discovery';
 import { SignIn, EmailSignIn, Account } from './screens/account';
@@ -19,15 +19,16 @@ const queries = new QueryClient({ defaultOptions: { queries: { retry: false, sta
 const subscribeAppState = (changed: () => void) => { const subscription = AppState.addEventListener('change', changed); return () => subscription.remove(); };
 export default function App() {
   const [signedIn, setSignedIn] = useState(false), [ready, setReady] = useState(false);
+  const [authRevision, setAuthRevision] = useState(0), [startupError, setStartupError] = useState('');
   const appState = useSyncExternalStore(subscribeAppState, () => AppState.currentState);
   const privateScreen = appState !== 'active';
   useEffect(() => {
-    session.onChange = value => { void queries.cancelQueries(); queries.clear(); setSignedIn(value); };
-    void session.restore().finally(() => setReady(true));
+    session.onChange = value => { void queries.cancelQueries(); queries.clear(); setSignedIn(value); setAuthRevision(revision => revision + 1); };
+    void session.restore().catch(error => setStartupError(friendly(error))).finally(() => setReady(true));
     const listener = AppState.addEventListener('change', state => { focusManager.setFocused(state === 'active'); });
     return () => { listener.remove(); session.onChange = () => {}; };
   }, []);
-  return <SafeAreaProvider><QueryClientProvider client={queries}>{!ready ? <Page title="Opening securely"><Busy /><Hint>Checking this device’s secure session.</Hint></Page> : <NavigationContainer key={signedIn ? 'signed-in' : 'signed-out'} theme={{ ...DarkTheme, colors: { ...DarkTheme.colors, primary: colors.gold, background: colors.bg, card: colors.card, text: colors.text, border: colors.border } }}><Stack.Navigator screenOptions={{ headerBackTitle: 'Back', headerTintColor: colors.gold, contentStyle: { backgroundColor: colors.bg } }}>
+  return <SafeAreaProvider><QueryClientProvider client={queries}>{startupError ? <Page title="Secure storage needs attention"><ErrorText message={startupError} /><Hint>Unlock your device and reopen the app. Credentials will not be stored outside secure device storage.</Hint></Page> : !ready ? <Page title="Opening securely"><Busy /><Hint>Checking this device’s secure session.</Hint></Page> : <NavigationContainer key={`${signedIn}:${authRevision}`} theme={{ ...DarkTheme, colors: { ...DarkTheme.colors, primary: colors.gold, background: colors.bg, card: colors.card, text: colors.text, border: colors.border } }}><Stack.Navigator screenOptions={{ headerBackTitle: 'Back', headerTintColor: colors.gold, contentStyle: { backgroundColor: colors.bg } }}>
     <Stack.Screen name="Home" component={Home} options={{ title: 'Rent A 4Wheel' }} /><Stack.Screen name="Vehicle" component={Vehicle} options={{ title: 'Explore a vehicle' }} /><Stack.Screen name="SignIn" component={SignIn} options={{ title: 'Sign in' }} />
     <Stack.Screen name="EmailSignIn" component={EmailSignIn} options={{ title: 'Email fallback' }} /><Stack.Screen name="LoginMethods" component={signedIn ? LoginMethods : SignIn} options={{ title: 'Login & recovery' }} />
     <Stack.Screen name="Reservations" component={signedIn ? Reservations : SignIn} options={{ title: 'Your trips' }} />

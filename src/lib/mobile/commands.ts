@@ -18,6 +18,7 @@ import { cancelCustomerReservation, startCustomerTrip } from "@/lib/customer-res
 import { mobileMutation } from "./mutation";
 import { mobileReservationAccess, mobileQuery } from "./queries";
 import { isVehicleAvailable } from "@/lib/availability";
+import { hasVerifiedBookingContact } from "@/lib/booking-contact";
 import { authenticateMobile, MobileError } from "./auth";
 import { mobileBody, mobileIp } from "./http";
 
@@ -73,6 +74,7 @@ export async function mobileCommand(req: Request, parts: string[]) {
     return mobileMutation(req, "reservation.checkout", { id, ...data, agreementContentHash }, async (tx, userId) => {
       await mobileReservationAccess(tx, userId, id, true);
       const current = await lockReservation(tx, id);
+      if (!await hasVerifiedBookingContact(tx, userId, data.driver.email)) throw new MobileError("CONFLICT", 409);
       if (current.financialDisposition !== "OPEN" || !["CHECKOUT_HOLD", "AWAITING_PAYMENT"].includes(current.status) || !current.expiresAt || current.expiresAt <= new Date()) throw new MobileError("CONFLICT", 409);
       await requireCheckoutAdmission(tx, id);
       const signed = current.checkoutFingerprint ? await tx.agreementAcceptance.findFirst({ where: { reservationId: id, type: "RENTAL_AGREEMENT" }, orderBy: { signedAt: "desc" }, select: { contentHash: true } }) : null;
@@ -91,7 +93,7 @@ export async function mobileCommand(req: Request, parts: string[]) {
   if (resource === "reservations" && id === "hold" && parts.length === 2) {
     const data = createHoldSchema.parse(input), timezone = (await getSiteSettings()).bookingTimezone;
     const { pickupAt, returnAt } = mobileBookingDates(data, timezone);
-    return mobileMutation(req, "reservation.hold", data, active, async (tx, userId) => {
+    return mobileMutation(req, "reservation.hold", data, async (tx, userId) => { await active(tx, userId); if (!await hasVerifiedBookingContact(tx, userId)) throw new MobileError("CONFLICT", 409); }, async (tx, userId) => {
       const held = await createOrRefreshHold({ ...data, customerId: userId, bookingTimezone: timezone, pickupAt, returnAt }, tx);
       return { id: held.id };
     });

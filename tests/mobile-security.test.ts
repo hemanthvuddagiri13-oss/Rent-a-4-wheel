@@ -492,8 +492,9 @@ it("HTTP logout is per-device while logout-all revokes every native device", asy
   expect((await post("auth/logout-all", {}, second.accessToken)).status).toBe(200);
   for (const c of [first, second]) expect((await get("me", c.accessToken)).status).toBe(401);
 });
-it("HTTP checkout binds the displayed agreement and commits one immutable acceptance on retry", async () => {
+it.each([false, true])("HTTP checkout (phone identity %s) binds verified contact and agreement with one immutable acceptance on retry", async phoneIdentity => {
   const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  if (phoneIdentity) await prisma.mobilePhoneIdentity.create({ data: { userId: f.user.id, phone: "+12025550101" } });
   const content = "SYNTHETIC TEST AGREEMENT ONLY", contentHash = createHash("sha256").update(content).digest("hex");
   await prisma.legalDocument.create({ data: { type: "RENTAL_AGREEMENT", title: "Synthetic agreement", version: "synthetic-v1", content, needsAttorneyReview: false } });
   const data = { draftId: crypto.randomUUID(), revision: 1, vehicleId: f.vehicle.id, pickupAt: "2056-04-01T12:00:00Z", returnAt: "2056-04-02T12:00:00Z", extraIds: [] };
@@ -505,10 +506,19 @@ it("HTTP checkout binds the displayed agreement and commits one immutable accept
   const key = crypto.randomUUID(), route = `reservations/${id}/checkout`;
   expect((await post(route, { ...checkout, agreementContentHash: "0".repeat(64) }, f.customer.accessToken, key)).status).toBe(409);
   expect(await prisma.agreementAcceptance.count()).toBe(0);
+  if (phoneIdentity) {
+    expect((await post(route, { ...checkout, driver: { ...driver, email: "unverified-other@example.test" } }, f.customer.accessToken, crypto.randomUUID())).status).toBe(409);
+    expect(await prisma.agreementAcceptance.count()).toBe(0);
+  }
   for (let i = 0; i < 2; i++) expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(200);
   expect(await prisma.agreementAcceptance.count()).toBe(1); expect(await prisma.financeSnapshot.count()).toBe(1);
   expect(await prisma.operationsJob.count({ where: { kind: "AGREEMENT" } })).toBe(1);
   const acceptance = await prisma.agreementAcceptance.findFirstOrThrow(); expect(acceptance.contentHash).toBe(contentHash);
+  if (phoneIdentity) {
+    await prisma.user.update({ where: { id: f.user.id }, data: { emailVerified: null } });
+    expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(409);
+    expect(await prisma.agreementAcceptance.findMany()).toEqual([acceptance]);
+  }
   expect((await prisma.reservation.findUniqueOrThrow({ where: { id } })).status).toBe("AWAITING_PAYMENT");
   await prisma.reservation.update({ where: { id }, data: { expiresAt: new Date(0) } });
   expect((await post(route, checkout, f.customer.accessToken, key)).status).toBe(409);
@@ -727,6 +737,9 @@ it("lost-phone recovery creates one review case, preserves identity and cannot b
   const id = await identityChallenge(c.accessToken, "RECOVERY", "+12025550102"), response = await verifyIdentity(c.accessToken, id);
   expect(response.status).toBe(200); expect((await response.json()).data).toMatchObject({ outcome: "REVIEW_REQUIRED", requiresSignIn: false });
   for (let i = 0; i < 3; i++) expect((await verifyIdentity(c.accessToken, id)).status).toBe(401);
+  await agePhoneCooldown();
+  const repeated = await identityChallenge(c.accessToken, "RECOVERY", "+12025550102");
+  expect((await verifyIdentity(c.accessToken, repeated)).status).toBe(200);
   expect(await prisma.mobilePhoneIdentity.findFirst()).toEqual(before);
   expect(await prisma.mobileIdentityRecovery.count()).toBe(1); expect(await prisma.serviceCase.count()).toBe(1);
   expect(await prisma.payment.count()).toBe(0); expect(await prisma.ledgerJournal.count()).toBe(0);
@@ -734,10 +747,16 @@ it("lost-phone recovery creates one review case, preserves identity and cannot b
 });
 it("phone-only accounts cannot acquire a hold before linking a verified email", async () => {
   const f = await tenantFixture(); await fixtureJurisdiction(prisma); const c = await phoneLogin();
-  const input = { vehicleId: f.vehicle.id, pickupAt: "2056-04-01T12:00:00.000Z", returnAt: "2056-04-02T12:00:00.000Z", extraIds: [] };
+  const input = { draftId: crypto.randomUUID(), revision: 1, vehicleId: f.vehicle.id, pickupAt: "2056-04-01T12:00:00.000Z", returnAt: "2056-04-02T12:00:00.000Z", extraIds: [] };
+  const identity = await prisma.mobilePhoneIdentity.findFirstOrThrow();
+  await expect(createOrRefreshHold({ ...input, customerId: identity.userId, pickupAt: new Date(input.pickupAt), returnAt: new Date(input.returnAt) })).rejects.toMatchObject({ status: 409 });
   expect((await post("reservations/hold", input, c.accessToken, crypto.randomUUID())).status).toBe(409);
   expect(await prisma.reservation.count()).toBe(1); expect(await prisma.mobileMutation.count()).toBe(0);
   await linkEmail(c.accessToken, "booking@example.test");
-  expect((await post("reservations/hold", input, c.accessToken, crypto.randomUUID())).status).toBe(200);
+  const key = crypto.randomUUID();
+  expect((await post("reservations/hold", input, c.accessToken, key)).status).toBe(200);
+  expect(await prisma.reservation.count()).toBe(2);
+  await prisma.user.update({ where: { id: identity.userId }, data: { emailVerified: null } });
+  expect((await post("reservations/hold", input, c.accessToken, key)).status).toBe(409);
   expect(await prisma.reservation.count()).toBe(2);
 });

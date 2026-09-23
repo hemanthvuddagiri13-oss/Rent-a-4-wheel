@@ -18,7 +18,34 @@ appId: com.renta4wheel.customer.acceptance
     direction: DOWN
 - tapOn: "Use verified email instead"
 - assertVisible: "Sign in with linked email"
-- runFlow: back.yaml
+- tapOn:
+    id: "input-Email address"
+- inputText: "native-customer@example.test"
+- runFlow: dismiss-keyboard.yaml
+- tapOn: "Send sign-in code"
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit email code"
+    direction: DOWN
+- tapOn:
+    id: "input-Six-digit email code"
+- inputText: "123456"
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Verify & sign in"
+    direction: DOWN
+- tapOn: "Verify & sign in"
+- assertVisible: "Your next drive starts here."
+- scrollUntilVisible:
+    element: "Account & devices"
+    direction: DOWN
+- tapOn: "Account & devices"
+- scrollUntilVisible:
+    element: "Log out this device"
+    direction: DOWN
+- tapOn: "Log out this device"
+- assertVisible: "Your next drive starts here."
+- tapOn: "Sign in"
 - scrollUntilVisible:
     element:
       id: "input-Mobile phone number"
