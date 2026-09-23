@@ -959,11 +959,13 @@ it('host handoff waiting behind return sees the committed phase and cannot attes
   const f = await tenantFixture(); await cleanHandoffEvidence(f); await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: 'ACTIVE' } });
   const [a, b] = await independentClients(), held = deferred<void>(), release = deferred<void>(), waiting = deferred<void>();
   const first = a.$extends({ query: { reservation: { async updateMany({ args, query }) { const value = await query(args); held.resolve(); await release.promise; return value; } } } }) as unknown as PrismaClient;
-  const second = b.$extends({ query: { $allOperations: async ({ operation, args, query }) => { if (operation === '$queryRaw' && JSON.stringify(args).includes('vehicle:')) waiting.resolve(); return query(args); } } }) as unknown as PrismaClient;
+  const observedStatuses: string[] = [];
+  const second = b.$extends({ query: { reservation: { async findUnique({ args, query }) { const row = await query(args); if (args.include?.vehicle && row) observedStatuses.push(row.status ?? 'MISSING_STATUS'); return row; } }, $allOperations: async ({ operation, args, query }) => { if (operation === '$queryRaw' && JSON.stringify(args).includes('vehicle:')) waiting.resolve(); return query(args); } } }) as unknown as PrismaClient;
   try {
     const returning = tripCommand(f.host.userId, f.reservation.id, 'return', first); await held.promise;
     const handoff = recordIdentityHandoff(f.membership.userId, f.reservation.id, positiveHandoff, second); const rejected = expect(handoff).rejects.toThrow('Pickup phase is closed');
     await waiting.promise; release.resolve(); await returning; await rejected;
+    expect(observedStatuses).toEqual(['RETURN_IN_PROGRESS']);
     expect(await prisma.identityHandoffVerification.count()).toBe(0); expect(await prisma.tripEvent.count({ where: { type: 'TRIP_RETURN' } })).toBe(1);
   } finally { release.resolve(); await Promise.all([a.$disconnect(), b.$disconnect()]); }
 });
