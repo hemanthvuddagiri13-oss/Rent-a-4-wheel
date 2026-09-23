@@ -128,9 +128,12 @@ appId: com.renta4wheel.customer.acceptance
     direction: UP
 - tapOn: "Your trips"
 - assertVisible: "NATIVE-SYNTHETIC-TRIP"
+- assertVisible: "Open trip to verify payment and deposit."
+- assertNotVisible: "Server status: CONFIRMED"
 - takeScreenshot: native-trips
 - tapOn: "View trip NATIVE-SYNTHETIC-TRIP"
 - assertVisible: "Reservation is not financially confirmed"
+- assertNotVisible: "Reservation confirmed by server"
 - takeScreenshot: native-payment-status
 - scrollUntilVisible:
     element: "Message your host"
