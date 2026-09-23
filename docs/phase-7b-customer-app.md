@@ -31,6 +31,8 @@ Identity and inspection screens prevent capture where the platform supports it. 
 
 The authorized reservation DTO also includes its stored pickup location; unrelated users cannot retrieve that instruction. Agreement consent is bound to the exact reservation and content hash, including across background refreshes.
 
+Native date pickers normalize to whole minutes. Availability and hold creation use the same booking-time parser; seconds or milliseconds are rejected as INVALID_REQUEST before any hold or idempotency record is written.
+
 OpenAPI and typed client are regenerated from the same runtime schemas. All four additions have real PostgreSQL/HTTP regression coverage. Prior mobile/security tests remain intact.
 
 ## Journeys and deliberate unavailable states
@@ -44,6 +46,8 @@ Payment/deposit completion is explicitly unavailable. No approved native-to-web 
 From `apps/customer`: `npm ci`, `npm run typecheck`, `npm start`, `npm run android` or `npm run ios`. Set `EXPO_PUBLIC_API_ORIGIN` to the explicitly approved HTTPS API origin before building. Default configuration uses the staging hostname; it is not evidence that a staging deployment exists. Production signing, bundle ownership, privacy disclosures, store submission and deployment approval remain required.
 
 The native CI workflow builds actual release-mode Android APK and iOS simulator `.app` binaries, installs them, and runs Maestro against the real Next.js development server/PostgreSQL with precompiled API routes with synthetic accounts. Acceptance builds use a different bundle ID ending `.acceptance` and permit only `http://localhost:3000`; regular builds require HTTPS and deny Android cleartext. Only synthetic screenshots/results and app binaries are uploaded; raw backend logs, credentials and real identity evidence are excluded. These development-backend acceptance builds are not signed store releases.
+
+The iOS simulator build uses local ad-hoc code signing and verifies its application entitlement so Keychain can be exercised. It uses no Apple distribution identity or provisioning approval. Secure-storage failures remain blocking and are reported separately from network interruptions; there is no plaintext credential fallback.
 
 The synthetic email-delivery fixture seeds a hashed, single-use code and exercises actual issuance throttling, bcrypt consumption, bearer authentication and logout; it does not prove delivery through a real email provider. Unit tests cover serialized refresh, concurrent 401s, lost refresh, crash marker, revocation, storage failure, offline mutation recovery and logout failure. The existing real PostgreSQL mobile suite covers code reuse, upload failures/retries, revoked access, booking races and trip gates, alongside the four new contracts. Camera hardware, external email/scanner/storage, VoiceOver/TalkBack and production-network behavior require device/staging acceptance; do not infer them from automated unit tests.
 

@@ -125,7 +125,12 @@ jobs:
         working-directory: apps/customer
         run: |
           npx expo prebuild --platform ios
-          xcodebuild -workspace ios/RentA4Wheel.xcworkspace -scheme RentA4Wheel -configuration Release -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+          # Simulator ad-hoc signing retains application/keychain entitlements.
+          # No Apple account or distribution certificate is used.
+          xcodebuild -workspace ios/RentA4Wheel.xcworkspace -scheme RentA4Wheel -configuration Release -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
+          codesign --verify --deep --strict build/Build/Products/Release-iphonesimulator/RentA4Wheel.app
+          codesign --display --entitlements - build/Build/Products/Release-iphonesimulator/RentA4Wheel.app > /tmp/customer-entitlements.plist
+          /usr/libexec/PlistBuddy -c 'Print :application-identifier' /tmp/customer-entitlements.plist
       - name: Actual iOS application journeys
         run: |
           npm run dev -- --hostname 0.0.0.0 > /tmp/native-api.log 2>&1 &
