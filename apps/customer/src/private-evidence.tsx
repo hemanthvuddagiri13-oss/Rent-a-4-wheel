@@ -17,7 +17,7 @@ export function PrivateEvidence({ documentId, label, report }: { documentId?: st
   useFocusEffect(useCallback(() => clear, [clear]));
   useEffect(() => { const listener = AppState.addEventListener('change', clear); return () => { listener.remove(); clear(); }; }, [clear]);
   useEffect(() => { if (uri) { const timer = setTimeout(clear, 30000); return () => clearTimeout(timer); } }, [uri, clear]);
-  return <><Button title={`View private ${label.replaceAll('_', ' ').toLowerCase()}`} disabled={action.busy} onPress={() => void action.run(async () => {
+  return <><Button title={uri ? "Close private preview" : `View private ${label.replaceAll('_', ' ').toLowerCase()}`} disabled={action.busy} onPress={uri ? clear : () => void action.run(async () => {
     clear(); const epoch = generation.current;
     let result: ArrayBuffer;
     if (report) result = await session.call('reportPhoto', { params: report });
@@ -28,5 +28,5 @@ export function PrivateEvidence({ documentId, label, report }: { documentId?: st
     if (epoch !== generation.current || AppState.currentState !== 'active') return;
     const bytes = new Uint8Array(result), mime = bytes[0] === 0x89 ? 'image/png' : bytes[0] === 0xff ? 'image/jpeg' : 'image/webp';
     setUri(`data:${mime};base64,${fromByteArray(bytes)}`);
-  })} />{uri && <><Button title="Close private preview" onPress={clear} /><Image alt={label + ' private preview'} accessible accessibilityLabel={label + ' private preview'} source={{ uri }} resizeMode="contain" style={{ width: '100%', height: 300 }} /><Hint>Preview closes after 30 seconds. Reopen to recheck current access.</Hint></>}<ErrorText message={action.error} /></>;
+  })} />{uri && <><Image alt={label + ' private preview'} accessible accessibilityLabel={label + ' private preview'} source={{ uri }} resizeMode="contain" style={{ width: '100%', height: 300 }} /><Hint>Preview closes after 30 seconds. Reopen to recheck current access.</Hint></>}<ErrorText message={action.error} /></>;
 }

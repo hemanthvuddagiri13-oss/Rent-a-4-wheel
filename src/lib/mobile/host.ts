@@ -1,5 +1,6 @@
 import { handoffSchema, calendarInput, hostAvailabilityInput } from "@/lib/validations/host-mobile";
 import { prisma } from "@/lib/prisma";
+import { DURABLE_BLOCKING_STATUSES, TRANSIENT_HOLD_STATUSES } from "@/lib/reservation-state-machine";
 import { marketplaceHost, marketplaceVehicle, hostCommand } from "@/lib/marketplace";
 import { tripParticipant } from "@/lib/trip-experience";
 import { evaluateTripStartGate } from "@/lib/trip-gate";
@@ -43,7 +44,7 @@ export async function hostWrite(req: Request, userId: string, parts: string[], i
       const { host } = await marketplaceHost(tx, userId);
       if (!await tx.vehicle.findFirst({ where: { id, hostId: host.id }, select: { id: true } })) throw new MobileError("NOT_FOUND", 404);
       const blocks = await tx.vehicleBlock.findMany({ where: { vehicleId: id, startAt: { lt: end }, endAt: { gt: start } }, select: { id: true, startAt: true, endAt: true, reason: true, notes: true }, orderBy: { startAt: "asc" }, take: 201 });
-      const reservations = await tx.reservation.findMany({ where: { vehicleId: id, pickupAt: { lt: end }, returnAt: { gt: start }, OR: [{ status: { notIn: ["CHECKOUT_HOLD", "AWAITING_PAYMENT", "EXPIRED", "CANCELLED_BY_HOST", "CANCELLED_BY_CUSTOMER", "COMPLETED"] } }, { status: { in: ["CHECKOUT_HOLD", "AWAITING_PAYMENT"] }, expiresAt: { gt: new Date() } }] }, select: { id: true, confirmationNumber: true, status: true, pickupAt: true, returnAt: true }, orderBy: { pickupAt: "asc" }, take: 201 });
+      const reservations = await tx.reservation.findMany({ where: { vehicleId: id, pickupAt: { lt: end }, returnAt: { gt: start }, OR: [{ status: { in: DURABLE_BLOCKING_STATUSES } }, { status: { in: TRANSIENT_HOLD_STATUSES }, expiresAt: { gt: new Date() } }] }, select: { id: true, confirmationNumber: true, status: true, pickupAt: true, returnAt: true }, orderBy: { pickupAt: "asc" }, take: 201 });
       return { blocks: blocks.slice(0, 200), reservations: reservations.slice(0, 200), truncated: blocks.length > 200 || reservations.length > 200 };
     });
   }

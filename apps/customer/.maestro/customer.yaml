@@ -107,6 +107,7 @@ appId: com.renta4wheel.customer.acceptance
 - scrollUntilVisible:
     element: "Documents & checkout preparation"
     direction: DOWN
+    centerElement: true
 - tapOn: "Documents & checkout preparation"
 - assertVisible: "Prepare your reservation"
 # Identity entry blocks screenshots intentionally. Do not capture this screen.

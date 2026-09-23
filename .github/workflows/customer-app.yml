@@ -77,6 +77,9 @@ jobs:
           arch: x86_64
           profile: pixel_6
           script: bash scripts/customer-android-journeys.sh
+      - name: Sanitized API timing evidence
+        if: always()
+        run: node scripts/native-safe-telemetry.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -152,6 +155,9 @@ jobs:
           mkdir -p artifacts
           trap 'xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4Wheel"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
           $HOME/.maestro/bin/maestro --device "$DEVICE" test apps/customer/.maestro/customer.yaml --test-output-dir "$PWD/artifacts/maestro" --format junit --output artifacts/ios-results.xml
+      - name: Sanitized API timing evidence
+        if: always()
+        run: node scripts/native-safe-telemetry.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

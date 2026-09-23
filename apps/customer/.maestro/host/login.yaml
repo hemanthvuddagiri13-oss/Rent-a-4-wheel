@@ -4,8 +4,13 @@ appId: com.renta4wheel.host.acceptance
 - tapOn:
     id: "input-Mobile phone number"
 - inputText: "${PHONE}"
+- assertVisible:
+    id: "input-Mobile phone number"
+    text: "[+]${PHONE.slice(1)}"
 - runFlow: dismiss-keyboard.yaml
-- tapOn: "Send text code"
+- tapOn:
+    text: "Send text code"
+    enabled: true
 - scrollUntilVisible:
     element:
       id: "input-Six-digit text code"
