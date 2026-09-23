@@ -27,5 +27,5 @@ export function PrivateEvidence({ documentId, label, report }: { documentId?: st
     if (epoch !== generation.current || AppState.currentState !== 'active') return;
     const bytes = new Uint8Array(result), mime = bytes[0] === 0x89 ? 'image/png' : bytes[0] === 0xff ? 'image/jpeg' : 'image/webp';
     setUri(`data:${mime};base64,${fromByteArray(bytes)}`);
-  })} />{uri && <><Image alt={label + ' private preview'} accessible accessibilityLabel={label + ' private preview'} source={{ uri }} resizeMode="contain" style={{ width: '100%', height: 300 }} /><Hint>Preview closes after 30 seconds. Reopen to recheck current access.</Hint><Button title="Close private preview" onPress={clear} /></>}<ErrorText message={action.error} /></>;
+  })} />{uri && <><Button title="Close private preview" onPress={clear} /><Image alt={label + ' private preview'} accessible accessibilityLabel={label + ' private preview'} source={{ uri }} resizeMode="contain" style={{ width: '100%', height: 300 }} /><Hint>Preview closes after 30 seconds. Reopen to recheck current access.</Hint></>}<ErrorText message={action.error} /></>;
 }

@@ -3,6 +3,7 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Choose ${LABEL} condition photo"
     direction: DOWN
+    centerElement: true
 - tapOn: "Choose ${LABEL} condition photo"
 - runFlow:
     when:
@@ -25,10 +26,15 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Upload ${LABEL} condition photo"
     direction: DOWN
+    centerElement: true
 - tapOn: "Upload ${LABEL} condition photo"
 - runFlow:
     when:
-      visible: "Upload not confirmed.*"
+      true: ${INTERRUPTED == "true"}
     commands:
+      # App transport has a 20s hard deadline; wait for its observable error.
+      - extendedWaitUntil:
+          visible: "Upload not confirmed.*"
+          timeout: 25000
       - tapOn: "Upload ${LABEL} condition photo"
 - assertVisible: "Upload completed and scanned. Eligibility review may still be pending."

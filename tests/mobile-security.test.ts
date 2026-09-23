@@ -1014,3 +1014,37 @@ it('host interrupted inspection upload resumes one durable intent, and another a
   const own = (await (await get(path, f.employee.accessToken)).json()).data.items[0]; expect(own.own).toBe(true);
   const owner = (await (await get(path, f.owner.accessToken)).json()).data.items[0]; expect(owner.own).toBe(false);
 });
+it.each(['revoke', 'handoff'] as const)('host membership race: %s commits first at the shared User lock', async first => {
+  const { hostCommand } = await import('@/lib/marketplace'), { recordIdentityHandoff } = await import('@/lib/identity-handoff');
+  const f = await tenantFixture(); await cleanHandoffEvidence(f);
+  const [a, b] = await independentClients(), locked = signal(), release = signal(); let stopped = false;
+  const [winnerPid] = await a.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const [waiterPid] = await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const fenced = a.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    const result = await query(args);
+    if (!stopped && operation === '$queryRaw' && JSON.stringify(args).includes('User') && JSON.stringify(args).includes('FOR UPDATE')) { stopped = true; locked.resolve(); await release.promise; }
+    return result;
+  } } }) as unknown as PrismaClient;
+  const revoke = (db: PrismaClient) => hostCommand(f.host.userId, { action: 'removeEmployee', id: f.membership.id }, db);
+  const handoff = (db: PrismaClient) => recordIdentityHandoff(f.membership.userId, f.reservation.id, positiveHandoff, db);
+  const winner = (first === 'revoke' ? revoke : handoff)(fenced);
+  let results: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  try {
+    await locked.promise;
+    results = Promise.allSettled([winner, (first === 'revoke' ? handoff : revoke)(b)]);
+    let blocked = false; const deadline = Date.now() + 4000;
+    while (!blocked && Date.now() < deadline) {
+      const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`SELECT ${winnerPid.pid}::int = ANY(pg_blocking_pids(${waiterPid.pid}::int)) AS blocked`;
+      blocked = row.blocked;
+    }
+    expect(blocked).toBe(true); release.resolve(); const outcomes = await results;
+    expect(outcomes[0].status).toBe('fulfilled');
+    expect(outcomes[1].status).toBe(first === 'revoke' ? 'rejected' : 'fulfilled');
+    expect(await prisma.hostEmployee.count()).toBe(0);
+    expect(await prisma.identityHandoffVerification.count()).toBe(first === 'handoff' ? 1 : 0);
+    expect(await prisma.tripEvent.count({ where: { type: 'IDENTITY_HANDOFF_RECORDED' } })).toBe(first === 'handoff' ? 1 : 0);
+    expect((await get(`host/trips/${f.reservation.id}`, f.employee.accessToken)).status).toBe(403);
+    expect((await post(`host/trips/${f.reservation.id}/handoff`, positiveHandoff, f.employee.accessToken, crypto.randomUUID())).status).toBe(403);
+    expect(await prisma.financialOperation.count()).toBe(0); expect(await prisma.mobileSession.count()).toBe(4);
+  } finally { release.resolve(); await Promise.allSettled([winner, ...(results ? [results] : [])]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
