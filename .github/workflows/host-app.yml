@@ -158,7 +158,7 @@ jobs:
           xcrun simctl install "$DEVICE" apps/customer/build/Build/Products/Release-iphonesimulator/RentA4WheelHost.app
           npx tsx tests/helpers/host-native-fixture.ts
           mkdir -p artifacts
-          xcrun simctl addmedia "$DEVICE" /tmp/host-native-fixtures/condition.png
+          xcrun simctl addmedia "$DEVICE" /tmp/host-native-fixtures/condition.png /tmp/host-native-fixtures/interior.png
           trap 'node scripts/native-safe-telemetry.mjs; xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4WheelHost"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
           for journey in owner employee; do
             $HOME/.maestro/bin/maestro --device "$DEVICE" test "apps/customer/.maestro/host/$journey.yaml" --test-output-dir "$PWD/artifacts/$journey" --format junit --output "artifacts/ios-$journey.xml"

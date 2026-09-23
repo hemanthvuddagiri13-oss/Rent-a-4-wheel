@@ -132,17 +132,19 @@ appId: com.renta4wheel.host.acceptance
 - inputText: "120"
 - runFlow: dismiss-keyboard.yaml
 - tapOn:
-    id: "input-Fuel level (0�100 percent)"
+    id: "input-Fuel level .*"
 - inputText: "50"
 - runFlow: dismiss-keyboard.yaml
 - runFlow:
     file: upload.yaml
     env:
       LABEL: "exterior"
+      INDEX: "0"
 - runFlow:
     file: upload.yaml
     env:
       LABEL: "interior"
+      INDEX: "1"
 - scrollUntilVisible:
     element: "Submit condition report"
     direction: DOWN

@@ -38,6 +38,7 @@ async function main() {
   await mkdir('private-storage/documents', { recursive: true }); await writeFile('private-storage/documents/host-synthetic.png', bytes);
   // Synthetic color tile, never an actual identity document or vehicle photo.
   await mkdir('/tmp/host-native-fixtures', { recursive: true }); await writeFile('/tmp/host-native-fixtures/condition.png', bytes);
+  await writeFile('/tmp/host-native-fixtures/interior.png', await sharp({ create: { width: 600, height: 400, channels: 3, background: '#543c24' } }).png().toBuffer());
   const key = 'local:host-synthetic.png';
   await db.privateObject.create({ data: { key, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
   for (const [index, confirmationNumber] of ['HOST-PICKUP', 'HOST-RETURN'].entries()) {

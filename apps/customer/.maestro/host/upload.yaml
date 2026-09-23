@@ -16,7 +16,7 @@ appId: com.renta4wheel.host.acceptance
       - tapOn: "Allow all"
 - tapOn:
     text: "Photo.*"
-    index: 0
+    index: ${INDEX}
 - runFlow:
     when:
       visible: "Add"

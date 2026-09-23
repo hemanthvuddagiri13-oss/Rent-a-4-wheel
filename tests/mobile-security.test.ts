@@ -944,9 +944,9 @@ it('host concurrent return uses independent connections and a reservation-lock b
   const { tripCommand } = await import('@/lib/trip-experience');
   const f = await tenantFixture(); await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: 'ACTIVE' } });
   const [a, b] = await independentClients(), barrier = deferred<void>(); let arrivals = 0;
-  const wrap = (db: PrismaClient) => db.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
-    if (operation === '$queryRaw' && JSON.stringify(args).includes('release-control')) { if (++arrivals === 2) barrier.resolve(); await barrier.promise; } return query(args);
-  } } }) as unknown as PrismaClient;
+  const wrap = (db: PrismaClient) => { let arrived = false; return db.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    if (!arrived && operation === '$queryRaw' && JSON.stringify(args).includes('release-control')) { arrived = true; if (++arrivals === 2) barrier.resolve(); await barrier.promise; } return query(args);
+  } } }) as unknown as PrismaClient; };
   try {
     await Promise.all([tripCommand(f.host.userId, f.reservation.id, 'return', wrap(a)), tripCommand(f.membership.userId, f.reservation.id, 'return', wrap(b))]);
     expect(arrivals).toBe(2); expect(await prisma.tripEvent.count({ where: { type: 'TRIP_RETURN' } })).toBe(1);
@@ -968,7 +968,7 @@ it('host handoff waiting behind return sees the committed phase and cannot attes
   } finally { release.resolve(); await Promise.all([a.$disconnect(), b.$disconnect()]); }
 });
 it('interrupted support reply freezes its version across refreshed case state and HTTP replay commits exactly one reply', async () => {
-  const { PendingReply } = await import('../apps/customer/src/pending-reply');
+  const { PendingReply } = await import('../packages/mobile-client/src/pending-reply');
   const f = await tenantFixture();
   const opened = await post('cases', { kind: 'TICKET', reservationId: f.reservation.id, category: 'GENERAL', title: 'Synthetic recovery', body: 'Synthetic interrupted support reply.' }, f.owner.accessToken, crypto.randomUUID()); expect(opened.status).toBe(200);
   const { id } = (await opened.json()).data;
@@ -991,3 +991,26 @@ it('interrupted support reply freezes its version across refreshed case state an
 });
 
 function deferred<T>() { let resolve!: (value: T | PromiseLike<T>) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+it('host interrupted inspection upload resumes one durable intent, and another author cannot accept the report', async () => {
+  const f = await tenantFixture(), photos: Array<{ uploadId: string; category: 'EXTERIOR' | 'INTERIOR' }> = [];
+  for (const [index, category] of (['EXTERIOR', 'INTERIOR'] as const).entries()) {
+    const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: index ? 'blue' : 'red' } }).png().toBuffer();
+    const input = { reservationId: f.reservation.id, type: 'INSPECTION', mimeType: 'image/png', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }, initKey = crypto.randomUUID();
+    const initialized = await post('uploads', input, f.employee.accessToken, initKey); expect(initialized.status).toBe(200); const id = (await initialized.json()).data.id;
+    const key = crypto.randomUUID(), send = () => fetch(base + `/api/v1/mobile/uploads/${id}/finalize`, { method: 'POST', headers: { authorization: 'Bearer ' + f.employee.accessToken, 'content-type': 'image/png', 'idempotency-key': key }, body: new Uint8Array(bytes) });
+    if (!index) { fixture.storageWrite.mockRejectedValueOnce(new Error('Synthetic interrupted storage write')); expect((await send()).status).toBe(500); }
+    expect((await send()).status).toBe(200); expect((await send()).status).toBe(200);
+    expect((await (await post('uploads', input, f.employee.accessToken, initKey)).json()).data.id).toBe(id);
+    photos.push({ uploadId: id, category });
+  }
+  expect(await prisma.mobileUpload.count()).toBe(2); expect(await prisma.privateObject.count()).toBe(2); expect(await prisma.driverDocument.count()).toBe(0);
+  expect(fixture.storageWrite).toHaveBeenCalledTimes(3); expect(fixture.scan).toHaveBeenCalledTimes(3);
+  const key = crypto.randomUUID(), path = `reservations/${f.reservation.id}/reports`, body = { phase: 'PRE_TRIP', mileage: 100, fuelLevel: 50, photos };
+  const response = await post(path, body, f.employee.accessToken, key); expect(response.status).toBe(200); const { id } = (await response.json()).data;
+  expect((await post(path, body, f.employee.accessToken, key)).status).toBe(200);
+  expect((await post(path + '/' + id + '/accept', {}, f.owner.accessToken, crypto.randomUUID())).status).toBe(403);
+  expect((await post(path + '/' + id + '/accept', {}, f.employee.accessToken, crypto.randomUUID())).status).toBe(200);
+  expect(await prisma.conditionReport.count()).toBe(1); expect(await prisma.conditionPhoto.count()).toBe(2);
+  const own = (await (await get(path, f.employee.accessToken)).json()).data.items[0]; expect(own.own).toBe(true);
+  const owner = (await (await get(path, f.owner.accessToken)).json()).data.items[0]; expect(owner.own).toBe(false);
+});
