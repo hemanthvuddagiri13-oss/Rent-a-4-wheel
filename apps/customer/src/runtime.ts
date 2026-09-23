@@ -27,11 +27,13 @@ export function intentKey(operation: string, input: unknown): Promise<string> {
 }
 export async function mutate<K extends keyof MobileOperations>(op: K, input: Omit<MobileOperations[K]['input'], 'idempotencyKey'>): Promise<Output<K>> {
   // Include account/session identity so an interrupted request cannot cross accounts.
+  const assertIdentity = session.captureIdentity();
   const me = await session.call('me', {});
   const body = (input as { body?: unknown }).body;
   const fingerprint = body instanceof Uint8Array ? { ...input, body: Array.from(new Uint8Array(await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, new Uint8Array(body)))).map(b => b.toString(16).padStart(2, '0')).join('') } : input;
   const scope = me.id + ':' + op;
   const idempotencyKey = await intentKey(scope, fingerprint);
+  assertIdentity();
   const result = await session.call(op, { ...input, idempotencyKey } as MobileOperations[K]['input']);
   // Preserve initialization identity across a later failed finalize. Other completed
   // intentions can be submitted anew; uncertain attempts keep their original key.

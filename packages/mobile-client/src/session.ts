@@ -9,8 +9,13 @@ export class Session {
   private credentials: Credentials | null = null;
   private tail: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  private identityEpoch = 0;
   onChange: (signedIn: boolean) => void = () => {};
   constructor(private vault: Vault, private origin: string, private transport?: typeof fetch, private localTest = false) {}
+  captureIdentity() {
+    const epoch = this.identityEpoch;
+    return () => { if (epoch !== this.identityEpoch || !this.credentials) throw new SignInRequired(); };
+  }
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const next = this.tail.then(work, work); this.tail = next.catch(() => {}); return next;
   }
@@ -27,12 +32,12 @@ export class Session {
       } catch { await this.clear(); return false; }
     });
   }
-  private async clear() { this.credentials = null; this.onChange(false); await this.vault.clear(); }
+  private async clear() { this.identityEpoch++; this.credentials = null; this.onChange(false); await this.vault.clear(); }
   async signIn(input: MobileOperations['signIn']['input']) {
     return this.serial(async () => {
       const credentials = await this.client(null).call('signIn', input);
       await this.vault.set(JSON.stringify({ credentials }));
-      this.loaded = true; this.credentials = credentials; this.onChange(true);
+      this.identityEpoch++; this.loaded = true; this.credentials = credentials; this.onChange(true);
     });
   }
   async token(rejectedToken?: string): Promise<string> {
@@ -49,13 +54,26 @@ export class Session {
     });
   }
   async call<K extends keyof MobileOperations>(op: K, input: MobileOperations[K]['input'], signal?: AbortSignal): Promise<MobileOperations[K]['output']> {
+    const epoch = this.identityEpoch;
     const token = await this.token();
-    try { return await this.client(token).call(op, input, signal); }
+    if (epoch !== this.identityEpoch) throw new SignInRequired();
+    try {
+      const result = await this.client(token).call(op, input, signal);
+      if (epoch !== this.identityEpoch) throw new SignInRequired();
+      return result;
+    }
     catch (e) {
       if (!(e instanceof MobileApiError) || e.status !== 401) throw e;
+      // An old request must never be retried under a newly signed-in account.
+      if (epoch !== this.identityEpoch) throw new SignInRequired();
       const next = await this.token(token);
-      try { return await this.client(next).call(op, input, signal); }
-      catch (again) { if (again instanceof MobileApiError && again.status === 401) await this.serial(() => this.clear()); throw again; }
+      if (epoch !== this.identityEpoch) throw new SignInRequired();
+      try {
+        const result = await this.client(next).call(op, input, signal);
+        if (epoch !== this.identityEpoch) throw new SignInRequired();
+        return result;
+      }
+      catch (again) { if (again instanceof MobileApiError && again.status === 401) await this.serial(async () => { if (epoch === this.identityEpoch) await this.clear(); }); throw again; }
     }
   }
   async logout(all = false) {

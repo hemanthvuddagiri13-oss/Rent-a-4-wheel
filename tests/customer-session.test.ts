@@ -54,3 +54,19 @@ it('offline logout preserves credentials for a deliberate revocation retry', asy
   const f = setup(); await f.session.restore(); f.transport.mockRejectedValue(new TypeError('offline'));
   await expect(f.session.logout()).rejects.toThrow('offline'); expect(f.stored()).not.toBeNull();
 });
+it.each([200, 401])('discards an old account response (%s) without retrying its operation under a new sign-in', async status => {
+  const f = setup(); await f.session.restore();
+  let finish!: (value: Response) => void;
+  const pending = new Promise<Response>(resolve => { finish = resolve; });
+  f.transport.mockImplementation(async url => String(url).endsWith('/sign-in') ? response(credentials('new-account')) : pending);
+  const old = f.session.call('me', {});
+  const assertOriginalIdentity = f.session.captureIdentity();
+  await vi.waitFor(() => expect(f.transport).toHaveBeenCalledTimes(1));
+  await f.session.signIn({ body: { email: 'new@example.test', code: '123456', deviceId: 'synthetic-device', platform: 'IOS', appVersion: '0.1.0' } });
+  finish(response({ id: 'old-account' }, status));
+  await expect(old).rejects.toBeInstanceOf(SignInRequired);
+  expect(assertOriginalIdentity).toThrow(SignInRequired);
+  expect(f.transport).toHaveBeenCalledTimes(2);
+  expect(await f.session.token()).toBe('new-account');
+  expect(JSON.parse(f.stored()!).credentials.accessToken).toBe('new-account');
+});
