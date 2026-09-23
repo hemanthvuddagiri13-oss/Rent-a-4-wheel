@@ -49,7 +49,7 @@ export async function hostWrite(req: Request, userId: string, parts: string[], i
   }
   if (parts.length === 4 && parts[1] === "vehicles" && parts[3] === "availability") {
     const data = hostAvailabilityInput.parse(input);
-    return mobileMutation(req, "host.availability", { vehicleId: id, ...data }, async (tx, actor) => { await marketplaceVehicle(tx, actor, id, true); }, (tx, actor) => hostCommand(actor, { ...data, ...(data.action === "block" ? { notes: data.notes ?? "" } : {}), vehicleId: id }, tx));
+    return mobileMutation(req, "host.availability", { vehicleId: id, ...data }, async (tx, actor) => { await marketplaceVehicle(tx, actor, id, true); }, (tx, actor) => hostCommand(actor, { ...data, vehicleId: id }, tx));
   }
   if (parts.length === 4 && parts[1] === "trips" && parts[3] === "handoff") {
     const data = handoffSchema.parse(input);

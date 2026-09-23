@@ -20,6 +20,8 @@ async function main() {
     if (r.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: r.id } })) throw new Error('Blocked gates were bypassed');
     const completed = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-RETURN' } });
     if (completed.status !== 'COMPLETED') throw new Error('Return journey did not complete');
+    const ready = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-READY' } });
+    if (ready.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: ready.id, step: 'KEYS_RELEASED' } }) !== 1 || await db.trip.count({ where: { reservationId: ready.id } })) throw new Error('Keys must not start the guest trip');
     if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native acceptance must not issue provider work');
     console.log('Native database assertions: one reply, one handoff, blocked start/keys, completed return, zero provider operations/payouts.');
     return;
@@ -41,10 +43,16 @@ async function main() {
   await writeFile('/tmp/host-native-fixtures/interior.png', await sharp({ create: { width: 600, height: 400, channels: 3, background: '#543c24' } }).png().toBuffer());
   const key = 'local:host-synthetic.png';
   await db.privateObject.create({ data: { key, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
-  for (const [index, confirmationNumber] of ['HOST-PICKUP', 'HOST-RETURN'].entries()) {
-    const r = await db.reservation.create({ data: { id: 'host-native-' + index, confirmationNumber, customerId: guest.id, vehicleId: vehicle.id, jurisdictionCode: 'TX', status: index ? 'ACTIVE' : 'CONFIRMED', pickupAt: new Date(index ? '2057-02-01' : '2057-01-01'), returnAt: new Date(index ? '2057-02-02' : '2057-01-02'), rateType: 'DAILY', rateAmountCents: 10000, units: 1, subtotalCents: 10000, totalCents: 10000, depositCents: 0, pickupLocation: 'Synthetic pickup bay A. Compare identity in person.' } });
-    if (!index) for (const type of ['LICENSE_FRONT', 'LICENSE_BACK', 'SELFIE_WITH_LICENSE'] as const) await db.driverDocument.create({ data: { userId: guest.id, reservationId: r.id, type, storageKey: key, mimeType: 'image/png', fileSizeBytes: bytes.length, contentSha256: createHash('sha256').update(bytes).digest('hex'), malwareScanStatus: 'CLEAN', status: 'APPROVED', retentionExpiresAt: new Date('2058-01-01') } });
-    if (index) {
+  for (const [index, confirmationNumber] of ['HOST-PICKUP', 'HOST-RETURN', 'HOST-READY'].entries()) {
+    const r = await db.reservation.create({ data: { id: 'host-native-' + index, confirmationNumber, customerId: guest.id, vehicleId: vehicle.id, jurisdictionCode: 'TX', status: index === 1 ? 'ACTIVE' : 'CONFIRMED', pickupAt: index === 2 ? new Date() : new Date(index ? '2057-02-01' : '2057-01-01'), returnAt: index === 2 ? new Date(Date.now() + 12 * 3600000) : new Date(index ? '2057-02-02' : '2057-01-02'), rateType: 'DAILY', rateAmountCents: 10000, units: 1, subtotalCents: 10000, totalCents: 10000, depositCents: 0, pickupLocation: 'Synthetic pickup bay A. Compare identity in person.' } });
+    if (index !== 1) for (const type of ['LICENSE_FRONT', 'LICENSE_BACK', 'SELFIE_WITH_LICENSE'] as const) await db.driverDocument.create({ data: { userId: guest.id, reservationId: r.id, type, storageKey: key, mimeType: 'image/png', fileSizeBytes: bytes.length, contentSha256: createHash('sha256').update(bytes).digest('hex'), malwareScanStatus: 'CLEAN', status: 'APPROVED', retentionExpiresAt: new Date('2058-01-01') } });
+    if (index === 2) {
+      await db.payment.create({ data: { reservationId: r.id, type: 'RENTAL', amountCents: 10000, currency: 'usd', status: 'SUCCEEDED' } });
+      await db.agreementAcceptance.create({ data: { reservationId: r.id, type: 'RENTAL_AGREEMENT', signedByUserId: guest.id, signerName: 'Synthetic guest', documentVersion: 'FIXTURE-NOT-LEGAL', contentSnapshot: 'Synthetic acceptance only', contentHash: createHash('sha256').update('Synthetic acceptance only').digest('hex') } });
+      await db.identityHandoffVerification.create({ data: { reservationId: r.id, verifiedByHostId: owner.id, licenseMatchesUpload: true, physicalLicenseUnexpired: true, selfieMatchesCustomer: true, verifiedAt: new Date() } });
+      await db.conditionReport.create({ data: { reservationId: r.id, phase: 'PRE_TRIP', submittedByRole: 'CUSTOMER', submittedById: guest.id, mileage: 100, fuelLevel: 50, acceptedAt: new Date(), photos: { create: [{ category: 'EXTERIOR', storageKey: key }, { category: 'INTERIOR', storageKey: key }] } } });
+    }
+    if (index === 1) {
       await db.trip.create({ data: { reservationId: r.id, startedAt: new Date(), startMileage: 100, startFuelLevel: 50, startedByUserId: guest.id } });
       await db.payment.create({ data: { reservationId: r.id, type: 'RENTAL', amountCents: 10000, currency: 'usd', status: 'SUCCEEDED' } });
       // Guest return actions are independent fixture evidence, never performed by

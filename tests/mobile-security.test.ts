@@ -913,7 +913,7 @@ it('host HTTP handoff requires clean evidence, replays once, and cannot start or
 });
 it('host calendar blocks preserve overlap guards and receipt idempotency', async () => {
   const f = await tenantFixture(), path = `host/vehicles/${f.vehicle.id}/availability`;
-  const body = { action: 'block', startAt: '2055-04-01T12:00:00Z', endAt: '2055-04-02T12:00:00Z', reason: 'MAINTENANCE' };
+  const body = { action: 'block', startAt: '2055-04-01T12:00:00Z', endAt: '2055-04-02T12:00:00Z', reason: 'MAINTENANCE', notes: '' };
   expect((await post(path, body, f.owner.accessToken, crypto.randomUUID())).status).toBe(409);
   const safe = { ...body, startAt: '2055-04-03T12:00:00Z', endAt: '2055-04-04T12:00:00Z' }, key = crypto.randomUUID();
   for (let i = 0; i < 2; i++) expect((await post(path, safe, f.owner.accessToken, key)).status).toBe(200);

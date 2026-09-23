@@ -86,3 +86,15 @@ it.each([200, 401])('discards an old account response (%s) without retrying its 
   expect(await f.session.token()).toBe('new-account');
   expect(JSON.parse(f.stored()!).credentials.accessToken).toBe('new-account');
 });
+
+it('pending reply releases an authoritative conflict but retains uncertain service failures', async () => {
+  const { PendingReply } = await import('../packages/mobile-client/src/pending-reply');
+  const { MobileApiError } = await import('../packages/mobile-client/src');
+  const pending = new PendingReply(), first = { id: 'synthetic', body: 'One reply', version: 1 };
+  await expect(pending.send(first, async () => { throw new MobileApiError(503, 'UNAVAILABLE', 'synthetic'); })).rejects.toMatchObject({ status: 503 });
+  expect(pending.pending).toBe(true);
+  await expect(pending.send({ ...first, version: 2 }, async frozen => { expect(frozen.version).toBe(1); throw new MobileApiError(409, 'CONFLICT', 'synthetic'); })).rejects.toMatchObject({ status: 409 });
+  expect(pending.pending).toBe(false);
+  await pending.send({ ...first, version: 3 }, async frozen => { expect(frozen.version).toBe(3); });
+  expect(pending.pending).toBe(false);
+});

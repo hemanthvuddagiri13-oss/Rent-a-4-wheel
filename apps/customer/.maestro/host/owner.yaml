@@ -164,6 +164,82 @@ appId: com.renta4wheel.host.acceptance
     direction: UP
 - takeScreenshot: host-return-complete
 - runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Open HOST-READY"
+    direction: DOWN
+- tapOn: "Open HOST-READY"
+- scrollUntilVisible:
+    element: "Host photos & condition reports"
+    direction: DOWN
+- tapOn: "Host photos & condition reports"
+- tapOn:
+    id: "input-Odometer mileage"
+- inputText: "100"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Fuel level .*"
+- inputText: "50"
+- runFlow: dismiss-keyboard.yaml
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: "exterior"
+      INDEX: "0"
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: "interior"
+      INDEX: "1"
+- scrollUntilVisible:
+    element: "Submit condition report"
+    direction: DOWN
+- tapOn: "Submit condition report"
+- scrollUntilVisible:
+    element: "Accept my report as accurate"
+    direction: DOWN
+- tapOn: "Accept my report as accurate"
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Refresh handoff & trip gates"
+    direction: DOWN
+- tapOn: "Refresh handoff & trip gates"
+- scrollUntilVisible:
+    element: "Record keys handed to customer"
+    direction: UP
+- tapOn: "Record keys handed to customer"
+- assertVisible: "Keys handoff recorded"
+- assertNotVisible: "Start trip"
+- takeScreenshot: host-keys
+- scrollUntilVisible:
+    element: "Report damage or incident"
+    direction: DOWN
+- tapOn: "Report damage or incident"
+- tapOn: "Damage claim selected.*"
+- scrollUntilVisible:
+    element: "LOST_KEY"
+    direction: DOWN
+- tapOn: "LOST_KEY"
+- scrollUntilVisible:
+    element:
+      id: "input-Incident title"
+    direction: DOWN
+- tapOn:
+    id: "input-Incident title"
+- inputText: "Synthetic lost spare key"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Incident description"
+- inputText: "Synthetic incident for host acceptance only."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Submit incident for review"
+    direction: DOWN
+- tapOn: "Submit incident for review"
+- assertVisible: "Synthetic lost spare key"
+- takeScreenshot: host-incident
+- runFlow: back.yaml
+- runFlow: back.yaml
+- runFlow: back.yaml
 - runFlow: back.yaml
 - scrollUntilVisible:
     element: "Owner earnings"
