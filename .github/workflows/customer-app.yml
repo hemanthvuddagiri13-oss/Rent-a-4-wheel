@@ -71,10 +71,11 @@ jobs:
           arch: x86_64
           profile: pixel_6
           script: |
+            mkdir -p artifacts
+            trap 'adb logcat -d -s ReactNativeJS AndroidRuntime > artifacts/android-runtime.txt; adb exec-out screencap -p > artifacts/android-final.png' EXIT
             adb reverse tcp:3000 tcp:3000
             adb install apps/customer/android/app/build/outputs/apk/release/app-release.apk
-            mkdir -p artifacts
-            $HOME/.maestro/bin/maestro test apps/customer/.maestro/customer.yaml --format junit --output artifacts/android-results.xml
+            $HOME/.maestro/bin/maestro test apps/customer/.maestro/customer.yaml --debug-output artifacts/maestro --format junit --output artifacts/android-results.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -135,7 +136,8 @@ jobs:
           xcrun simctl bootstatus "$DEVICE" -b
           xcrun simctl install "$DEVICE" apps/customer/build/Build/Products/Release-iphonesimulator/RentA4Wheel.app
           mkdir -p artifacts
-          $HOME/.maestro/bin/maestro --device "$DEVICE" test apps/customer/.maestro/customer.yaml --format junit --output artifacts/ios-results.xml
+          trap 'xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4Wheel"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
+          $HOME/.maestro/bin/maestro --device "$DEVICE" test apps/customer/.maestro/customer.yaml --debug-output artifacts/maestro --format junit --output artifacts/ios-results.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:

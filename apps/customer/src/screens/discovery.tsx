@@ -30,14 +30,15 @@ function VehicleCard({ vehicle: v, open }: { vehicle: Output<'vehicle'>; open?: 
 export function Vehicle({ navigation, route }: NativeStackScreenProps<Routes, 'Vehicle'>) {
   const { id } = route.params, q = useQuery({ queryKey: ['vehicle', id], queryFn: ({ signal }) => publicApi.call('vehicle', { params: { id } }, signal) });
   const [pickup, setPickup] = useState(() => new Date(Date.now() + 86400000)), [end, setEnd] = useState(() => new Date(Date.now() + 172800000));
-  const [available, setAvailable] = useState<boolean | null>(null), action = useAction();
+  const [checked, setChecked] = useState<{ pickupAt: string; returnAt: string; available: boolean } | null>(null), action = useAction();
   const dates = { pickupAt: pickup.toISOString(), returnAt: end.toISOString() };
+  const available = checked?.pickupAt === dates.pickupAt && checked.returnAt === dates.returnAt ? checked.available : null;
   return <Page title={q.data ? `${q.data.make} ${q.data.model}` : 'Vehicle details'}>{q.isPending ? <Busy /> : q.isError ? <ErrorText message={friendly(q.error)} /> : <><VehicleCard vehicle={q.data} /><Hint>{q.data.fuelType} · Deposit {money(q.data.securityDepositCents)}</Hint></>}
     <Hint>Dates and times use your device timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}). The server receives exact instants.</Hint>
-    <DateField title="Pickup" value={pickup} onChange={d => { setPickup(d); setAvailable(null); }} />
-    <DateField title="Return" value={end} onChange={d => { setEnd(d); setAvailable(null); }} />
+    <DateField title="Pickup" value={pickup} onChange={d => { setPickup(d); setChecked(null); }} />
+    <DateField title="Return" value={end} onChange={d => { setEnd(d); setChecked(null); }} />
     <ErrorText message={action.error} />
-    <Button title="Check availability" disabled={action.busy || !q.data} onPress={() => void action.run(async () => { const result = await publicApi.call('availability', { params: { id }, body: dates }); setAvailable(result.available); })} />
+    <Button title="Check availability" disabled={action.busy || !q.data} onPress={() => void action.run(async () => { const result = await publicApi.call('availability', { params: { id }, body: dates }); setChecked({ ...dates, available: result.available }); })} />
     {available !== null && <Copy>{available ? 'Available at last check. A hold is required to reserve these dates.' : 'These dates are unavailable. Choose another time.'}</Copy>}
     <Button title="Hold dates & review price" disabled={action.busy || available !== true} onPress={() => void action.run(async () => {
       await session.token(); const me = await session.call('me', {});

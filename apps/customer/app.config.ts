@@ -4,6 +4,7 @@ const apiOrigin = process.env.EXPO_PUBLIC_API_ORIGIN ?? 'https://staging.renta4w
 if (acceptance && apiOrigin !== 'http://localhost:3000') throw new Error('Native acceptance builds require the local synthetic backend');
 const config: ExpoConfig = {
   name: 'Rent A 4Wheel', slug: 'rent-a-4wheel-customer', version: '0.1.0',
+  icon: './assets/icon.png',
   platforms: ['ios', 'android'],
   orientation: 'default', userInterfaceStyle: 'dark', scheme: 'renta4wheel',
   ios: { bundleIdentifier: 'com.renta4wheel.customer' + (acceptance ? '.acceptance' : ''), supportsTablet: true, config: { usesNonExemptEncryption: false }, ...(acceptance ? { infoPlist: { NSAppTransportSecurity: { NSAllowsLocalNetworking: true, NSExceptionDomains: { localhost: { NSExceptionAllowsInsecureHTTPLoads: true } } } } } : {}) },

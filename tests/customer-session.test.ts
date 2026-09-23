@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { Session, SignInRequired, type Credentials } from '../apps/customer/src/session';
+import { Session, SignInRequired, type Credentials } from '../packages/mobile-client/src/session';
 const credentials = (accessToken = 'access-old', expired = false): Credentials => ({ tokenType: 'Bearer', accessToken, refreshToken: 'refresh-' + accessToken, sessionId: 'synthetic-session', accessExpiresAt: new Date(Date.now() + (expired ? -1000 : 300000)).toISOString(), refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() });
 const response = (data: unknown, status = 200) => new Response(JSON.stringify({ data, error: status >= 400 ? { code: 'UNAUTHORIZED' } : null, requestId: 'synthetic-request' }), { status, headers: { 'x-api-version': '1' } });
 function setup(c = credentials()) {

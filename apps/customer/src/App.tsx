@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { AppState, View, Text } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -15,12 +15,15 @@ import { Inspection } from './screens/inspection';
 import { Inbox, Messages, Notices, Cases, Case, Review } from './screens/community';
 const Stack = createNativeStackNavigator<Routes>();
 const queries = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0, refetchOnWindowFocus: true }, mutations: { retry: false } } });
+const subscribeAppState = (changed: () => void) => { const subscription = AppState.addEventListener('change', changed); return () => subscription.remove(); };
 export default function App() {
-  const [signedIn, setSignedIn] = useState(false), [ready, setReady] = useState(false), [privateScreen, setPrivateScreen] = useState(AppState.currentState !== 'active');
+  const [signedIn, setSignedIn] = useState(false), [ready, setReady] = useState(false);
+  const appState = useSyncExternalStore(subscribeAppState, () => AppState.currentState);
+  const privateScreen = appState !== 'active';
   useEffect(() => {
     session.onChange = value => { void queries.cancelQueries(); queries.clear(); setSignedIn(value); };
     void session.restore().finally(() => setReady(true));
-    const listener = AppState.addEventListener('change', state => { focusManager.setFocused(state === 'active'); setPrivateScreen(state !== 'active'); });
+    const listener = AppState.addEventListener('change', state => { focusManager.setFocused(state === 'active'); });
     return () => { listener.remove(); session.onChange = () => {}; };
   }, []);
   return <SafeAreaProvider><QueryClientProvider client={queries}>{!ready ? <Page title="Opening securely"><Busy /><Hint>Checking this device’s secure session.</Hint></Page> : <NavigationContainer theme={{ ...DarkTheme, colors: { ...DarkTheme.colors, primary: colors.gold, background: colors.bg, card: colors.card, text: colors.text, border: colors.border } }}><Stack.Navigator key={signedIn ? 'signed-in' : 'signed-out'} screenOptions={{ headerBackTitle: 'Back', headerTintColor: colors.gold, contentStyle: { backgroundColor: colors.bg } }}>

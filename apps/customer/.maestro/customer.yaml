@@ -2,14 +2,17 @@ appId: com.renta4wheel.customer.acceptance
 ---
 - launchApp:
     clearState: true
+- takeScreenshot: artifacts/native-launch
 - assertVisible: "Your next drive starts here."
 - takeScreenshot: artifacts/native-home
 - tapOn: "Sign in"
-- tapOn: "Email address"
+- tapOn:
+    id: "input-Email address"
 - inputText: "native-customer@example.test"
 - hideKeyboard
 - tapOn: "Send sign-in code"
-- tapOn: "Six-digit email code"
+- tapOn:
+    id: "input-Six-digit email code"
 - inputText: "123456"
 - hideKeyboard
 - tapOn: "Verify & sign in"
@@ -24,7 +27,8 @@ appId: com.renta4wheel.customer.acceptance
     element: "Message your host"
     direction: DOWN
 - tapOn: "Message your host"
-- tapOn: "Message"
+- tapOn:
+    id: "input-Message"
 - inputText: "Synthetic native acceptance message"
 - hideKeyboard
 - tapOn: "Send message"
