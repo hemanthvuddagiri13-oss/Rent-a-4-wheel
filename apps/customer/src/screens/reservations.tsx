@@ -24,6 +24,7 @@ export function Reservation({ navigation, route }: NativeStackScreenProps<Routes
   const refresh = async () => { await Promise.all([r.refetch(), payment.refetch(), pricing.refetch(), trip.refetch()]); };
   return <Page title={r.data?.confirmationNumber ?? 'Your reservation'}><Button title="Refresh reservation status" onPress={() => void refresh()} />{r.isPending && <Busy />}{[r, payment, pricing, trip].filter(q => q.isError).map((q, i) => <ErrorText key={i} message={friendly(q.error)} />)}
     {r.data && <Hint>{new Date(r.data.pickupAt).toLocaleString()} → {new Date(r.data.returnAt).toLocaleString()}{r.data.expiresAt ? ` · Hold deadline ${new Date(r.data.expiresAt).toLocaleString()}` : ''}</Hint>}
+    {r.data && <Hint>Pickup location: {r.data.pickupLocation}</Hint>}
     {payment.data && !payment.isError && <FinancialStatus value={payment.data} />}{pricing.data && <Pricing value={pricing.data} />}
     <Card><Copy>Payment and deposit completion unavailable in this app</Copy><Hint>No secure web-session handoff has been approved. Preparing checkout does not pay or confirm a reservation. Live payments remain disabled.</Hint></Card>
     {r.data && ['CHECKOUT_HOLD', 'AWAITING_PAYMENT'].includes(r.data.status) && <Button title="Documents & checkout preparation" onPress={() => navigation.navigate('Checkout', { id })} />}

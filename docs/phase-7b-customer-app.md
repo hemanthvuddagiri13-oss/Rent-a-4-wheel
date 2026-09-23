@@ -29,6 +29,8 @@ Identity and inspection screens prevent capture where the platform supports it. 
 | GET `/reservations/{id}/reports/{reportId}/photos/{photoId}` | Native bearer, current reservation participation, exact report/photo association, CLEAN/STORED/nondeleted private object, audit before private read, no-store binary |
 | GET `/cases/{id}/events` | Current case access on every page; internal notes excluded; strict DTO and bounded pagination |
 
+The authorized reservation DTO also includes its stored pickup location; unrelated users cannot retrieve that instruction. Agreement consent is bound to the exact reservation and content hash, including across background refreshes.
+
 OpenAPI and typed client are regenerated from the same runtime schemas. All four additions have real PostgreSQL/HTTP regression coverage. Prior mobile/security tests remain intact.
 
 ## Journeys and deliberate unavailable states

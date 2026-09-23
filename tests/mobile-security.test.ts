@@ -255,6 +255,19 @@ it("HTTP current host tenancy, employee removal and role changes apply without t
   expect((await get("host/fleet", f.owner.accessToken)).status).toBe(403);
   expect((await get("me", f.owner.accessToken)).status).toBe(200);
 });
+it("HTTP reservation instructions expose the stored pickup location only to current participants", async () => {
+  const f = await tenantFixture();
+  await prisma.reservation.update({ where: { id: f.reservation.id }, data: { pickupLocation: "Synthetic host handoff point" } });
+  for (const actor of [f.customer, f.owner]) {
+    const response = await get(`reservations/${f.reservation.id}`, actor.accessToken);
+    expect(response.status).toBe(200);
+    expect((await response.json()).data.pickupLocation).toBe("Synthetic host handoff point");
+  }
+  const denied = await get(`reservations/${f.reservation.id}`, f.other.accessToken);
+  expect(denied.status).toBe(404);
+  expect(await denied.text()).not.toContain("Synthetic host handoff point");
+});
+
 it("HTTP customer availability is dated, gate-protected and never substitutes for a hold", async () => {
   const f = await tenantFixture(); await fixtureJurisdiction(prisma);
   const path = `vehicles/${f.vehicle.id}/availability`, dates = { pickupAt: '2056-04-01T12:00:00Z', returnAt: '2056-04-02T12:00:00Z' };

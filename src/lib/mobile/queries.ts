@@ -13,7 +13,7 @@ import { authenticateMobile, MobileError } from "./auth";
 import { pageInput } from "./http";
 
 export const mobileVehicleSelect = { id: true, slug: true, year: true, make: true, model: true, category: true, transmission: true, fuelType: true, seats: true, dailyRateCents: true, securityDepositCents: true, location: true, jurisdictionCode: true } satisfies Prisma.VehicleSelect;
-export const mobileReservationSelect = { id: true, confirmationNumber: true, vehicleId: true, status: true, pickupAt: true, returnAt: true, bookingTimezone: true, expiresAt: true, subtotalCents: true, extrasCents: true, discountCents: true, taxCents: true, feesCents: true, totalCents: true, depositCents: true, bookingFingerprint: true } satisfies Prisma.ReservationSelect;
+export const mobileReservationSelect = { id: true, confirmationNumber: true, vehicleId: true, status: true, pickupAt: true, returnAt: true, bookingTimezone: true, pickupLocation: true, expiresAt: true, subtotalCents: true, extrasCents: true, discountCents: true, taxCents: true, feesCents: true, totalCents: true, depositCents: true, bookingFingerprint: true } satisfies Prisma.ReservationSelect;
 export async function mobileReservationAccess(tx: Prisma.TransactionClient, userId: string, id: string, ownerOnly = false) {
   const reservation = await tx.reservation.findUnique({ where: { id }, select: { customerId: true, vehicleId: true } });
   if (!reservation || ownerOnly && reservation.customerId !== userId) throw new MobileError("NOT_FOUND", 404);

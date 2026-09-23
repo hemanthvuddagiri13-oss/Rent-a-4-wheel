@@ -42,6 +42,46 @@ appId: com.renta4wheel.customer.acceptance
       - tapOn: "Done editing"
 - tapOn: "Verify & sign in"
 - assertVisible: "Your next drive starts here."
+- scrollUntilVisible:
+    element: "View Synthetic Acceptance Car"
+    direction: DOWN
+- tapOn: "View Synthetic Acceptance Car"
+- scrollUntilVisible:
+    element: "Check availability"
+    direction: DOWN
+- tapOn: "Check availability"
+- assertVisible: "Available at last check. A hold is required to reserve these dates."
+- takeScreenshot: native-availability
+- tapOn: "Hold dates & review price"
+- scrollUntilVisible:
+    element: "Server price breakdown"
+    direction: DOWN
+- assertVisible: "Server price breakdown"
+- takeScreenshot: native-price
+- scrollUntilVisible:
+    element: "Documents & checkout preparation"
+    direction: DOWN
+- tapOn: "Documents & checkout preparation"
+- assertVisible: "Prepare your reservation"
+# Identity entry blocks screenshots intentionally. Do not capture this screen.
+- scrollUntilVisible:
+    element:
+      id: "input-First name"
+    direction: DOWN
+- assertVisible:
+    id: "input-First name"
+- scrollUntilVisible:
+    element: "I have read and accept this agreement"
+    direction: DOWN
+- tapOn: "I have read and accept this agreement"
+- assertVisible: "Agreement selected — tap to withdraw"
+- tapOn: "Agreement selected — tap to withdraw"
+- runFlow: back.yaml
+- runFlow: back.yaml
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Your trips"
+    direction: UP
 - tapOn: "Your trips"
 - assertVisible: "NATIVE-SYNTHETIC-TRIP"
 - takeScreenshot: native-trips
@@ -82,6 +122,45 @@ appId: com.renta4wheel.customer.acceptance
       - tapOn: "Back"
       - tapOn: "Back"
       - tapOn: "Back"
+- scrollUntilVisible:
+    element: "Notices"
+    direction: DOWN
+- tapOn: "Notices"
+- assertVisible: "You’re all caught up."
+- takeScreenshot: native-notices
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Support & cases"
+    direction: DOWN
+- tapOn: "Support & cases"
+- tapOn:
+    id: "input-Request title"
+- inputText: "Synthetic native support request"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Describe what happened"
+- inputText: "Synthetic acceptance request with no private evidence."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Open support request"
+    direction: DOWN
+- tapOn: "Open support request"
+- assertVisible: "Synthetic native support request"
+- tapOn:
+    id: "input-Reply to case"
+- inputText: "Synthetic follow-up."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Send case reply"
+    direction: DOWN
+- tapOn: "Send case reply"
+- scrollUntilVisible:
+    element: "Synthetic follow-up."
+    direction: UP
+- assertVisible: "Synthetic follow-up."
+- takeScreenshot: native-case
+- runFlow: back.yaml
+- runFlow: back.yaml
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN

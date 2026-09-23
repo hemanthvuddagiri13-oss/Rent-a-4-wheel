@@ -15,17 +15,19 @@ export function Checkout({ route }: NativeStackScreenProps<Routes, 'Checkout'>) 
   usePreventScreenCapture();
   const { id } = route.params, action = useAction();
   const [driver, setDriver] = useState<Driver>({ firstName: '', lastName: '', dob: '', email: '', phone: '', address: '', city: '', state: '', zip: '', country: 'US', licenseNumber: '', licenseState: '', licenseExpiration: '' });
-  const [docs, setDocs] = useState<{ front?: string; back?: string; selfie?: string }>({}), [accepted, setAccepted] = useState(false), [prepared, setPrepared] = useState(false);
+  const [docs, setDocs] = useState<{ front?: string; back?: string; selfie?: string }>({}), [acceptedEvidence, setAcceptedEvidence] = useState<string | null>(null), [prepared, setPrepared] = useState(false);
   const q = useQuery({ queryKey: ['checkoutReview', id], queryFn: async ({ signal }) => {
     const [r, pricing, agreement, documents] = await Promise.all([session.call('reservation', { params: { id } }, signal), session.call('pricing', { params: { id } }, signal), session.call('agreementPreview', { params: { id } }, signal), session.call('reservationDocuments', { params: { id } }, signal)]); return { r, pricing, agreement, documents };
   } });
+  const agreementEvidence = q.data ? id + ':' + q.data.agreement.contentHash : null;
+  const accepted = agreementEvidence !== null && acceptedEvidence === agreementEvidence;
   return <Page title="Prepare your reservation"><Hint>Private identity and driver information stays in memory only. If the app closes, re-enter it. Existing uploaded documents remain on the server.</Hint>
     {q.isPending ? <Busy /> : q.isError ? <ErrorText message={friendly(q.error)} /> : <><Pricing value={q.data.pricing} />
       {Object.entries(labels).map(([key, label]) => <Field key={key} label={label} value={driver[key as keyof Driver] ?? ''} onChangeText={value => setDriver(d => ({ ...d, [key]: value }))} autoCorrect={false} autoCapitalize={['email'].includes(key) ? 'none' : 'sentences'} />)}
       {(['front', 'back', 'selfie'] as const).map((key, i) => <React.Fragment key={key}><Upload label={['license front', 'license back', 'selfie with license'][i]} kind={(['LICENSE_FRONT', 'LICENSE_BACK', 'SELFIE_WITH_LICENSE'] as const)[i]} reservationId={id} done={documentId => { setDocs(d => ({ ...d, [key]: documentId })); void q.refetch(); }} />{q.data.documents.items.filter(d => d.type === ['LICENSE_FRONT', 'LICENSE_BACK', 'SELFIE_WITH_LICENSE'][i]).map(d => <Card key={d.id}><Hint>{d.type}: review {d.status}, scan {d.malwareScanStatus}</Hint><Button title={`Use uploaded ${key}`} disabled={d.malwareScanStatus !== 'CLEAN'} onPress={() => setDocs(old => ({ ...old, [key]: d.id }))} /></Card>)}<Hint>{docs[key] ? 'Document selected' : 'Document required'}</Hint></React.Fragment>)}
-      <Card><Copy>Rental agreement · {q.data.agreement.version}</Copy>{q.data.agreement.needsAttorneyReview && <Hint>Draft agreement: attorney review still required. This is staging preparation only.</Hint>}<Copy>{q.data.agreement.content}</Copy><Button title={accepted ? 'Agreement selected — tap to withdraw' : 'I have read and accept this agreement'} onPress={() => setAccepted(v => !v)} /></Card>
+      <Card><Copy>Rental agreement · {q.data.agreement.version}</Copy>{q.data.agreement.needsAttorneyReview && <Hint>Draft agreement: attorney review still required. This is staging preparation only.</Hint>}<Copy>{q.data.agreement.content}</Copy><Button title={accepted ? 'Agreement selected — tap to withdraw' : 'I have read and accept this agreement'} onPress={() => setAcceptedEvidence(accepted ? null : agreementEvidence)} /></Card>
       <Button title="Prepare checkout — no payment" disabled={action.busy || !accepted || !docs.front || !docs.back || !docs.selfie || prepared} onPress={() => void action.run(async () => { await mutate('checkout', { params: { id }, body: { driver, documentIds: docs, agreementAccepted: true, agreementContentHash: q.data.agreement.contentHash, bookingFingerprint: q.data.r.bookingFingerprint ?? undefined } }); setPrepared(true); })} />
     </>}
     <ErrorText message={action.error} />{prepared && <Copy>Checkout prepared. Payment and deposit completion are unavailable; this is not a confirmed booking.</Copy>}
-    <Button title="Refresh review from server" onPress={() => { setAccepted(false); void q.refetch(); }} /></Page>;
+    <Button title="Refresh review from server" onPress={() => { setAcceptedEvidence(null); void q.refetch(); }} /></Page>;
 }

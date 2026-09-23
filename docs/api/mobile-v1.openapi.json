@@ -2023,6 +2023,9 @@
                               "bookingTimezone": {
                                 "type": "string"
                               },
+                              "pickupLocation": {
+                                "type": "string"
+                              },
                               "expiresAt": {
                                 "anyOf": [
                                   {
@@ -2085,6 +2088,7 @@
                               "pickupAt",
                               "returnAt",
                               "bookingTimezone",
+                              "pickupLocation",
                               "expiresAt",
                               "subtotalCents",
                               "extrasCents",
@@ -2260,6 +2264,9 @@
                         "bookingTimezone": {
                           "type": "string"
                         },
+                        "pickupLocation": {
+                          "type": "string"
+                        },
                         "expiresAt": {
                           "anyOf": [
                             {
@@ -2322,6 +2329,7 @@
                         "pickupAt",
                         "returnAt",
                         "bookingTimezone",
+                        "pickupLocation",
                         "expiresAt",
                         "subtotalCents",
                         "extrasCents",
@@ -8409,6 +8417,9 @@
                               "bookingTimezone": {
                                 "type": "string"
                               },
+                              "pickupLocation": {
+                                "type": "string"
+                              },
                               "expiresAt": {
                                 "anyOf": [
                                   {
@@ -8471,6 +8482,7 @@
                               "pickupAt",
                               "returnAt",
                               "bookingTimezone",
+                              "pickupLocation",
                               "expiresAt",
                               "subtotalCents",
                               "extrasCents",

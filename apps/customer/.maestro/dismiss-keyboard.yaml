@@ -1,0 +1,12 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
