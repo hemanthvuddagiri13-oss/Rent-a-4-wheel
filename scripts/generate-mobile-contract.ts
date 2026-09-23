@@ -31,7 +31,7 @@ for (const op of mobileOperations) {
   if (op.idempotent) parameters.push({ name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", pattern: "^[A-Za-z0-9_-]{16,128}$" } });
   if (op.capability) parameters.push({ name: "X-File-Access", in: "header", required: true, schema: { type: "string", maxLength: 1024 }, description: "60-second purpose-bound capability; bearer authentication remains required" });
   const response = schema(op.response), responses: Record<string, unknown> = {
-    "200": { description: "Completed request; authority and availability remain subject to current state", headers, content: op.binary === "response" ? { "application/octet-stream": { schema: { type: "string", format: "binary" } } } : { "application/json": { schema: { type: "object", additionalProperties: false, required: ["data", "error", "requestId"], properties: { data: response, error: { type: "null" }, requestId: { type: "string", format: "uuid" } } } } } },
+    "200": { description: "Completed request; authority and availability remain subject to current state", headers, content: op.binary === "response" ? Object.fromEntries((op.responseMediaTypes ?? ["application/octet-stream"]).map(type => [type, { schema: { type: "string", format: "binary" } }])) : { "application/json": { schema: { type: "object", additionalProperties: false, required: ["data", "error", "requestId"], properties: { data: response, error: { type: "null" }, requestId: { type: "string", format: "uuid" } } } } } },
   };
   for (const status of [400, 401, 403, 404, 409, 413, 415, 429, 500, 503]) responses[status] = { $ref: "#/components/responses/TypedError" };
   const path = "/api/v1/mobile" + op.path; paths[path] ??= {};

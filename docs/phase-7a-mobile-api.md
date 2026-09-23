@@ -136,3 +136,11 @@ ALLOCATION_REQUIRED remains unresolved and held. An **Authorized legacy REFUND_S
 | GET | /api/v1/mobile/host/fleet | hostFleet |
 | GET | /api/v1/mobile/host/reservations | hostReservations |
 | GET | /api/v1/mobile/host/earnings | hostEarnings |
+
+## Focused PR #7 authorization correction
+
+Reservation-linked case lists and detail access use current reservation participation, including current host employee membership and expiry. Opening a linked case does not preserve access after revocation. Standalone tickets retain opener access. The web case queue uses the same narrowed database scope and retains its per-case authorization check. Native HTTP regressions reuse the same token after removal, deactivation and expiry; the production web regression repeats these checks with the same encrypted session cookie.
+
+Reservation pricing includes `hostCommissionCents`, `hostEarningsCents` and `reserveCents` only for the current owner of the reservation vehicle's host account. These optional fields are absent for customers and employees, including managers and customers who own another host account. Authorized viewers retain subtotal, extras, discounts, taxes, deposit, total and guest platform/protection/processing amounts. Frozen quote data is unchanged; no financial authority is granted by these read responses.
+
+Private document success responses declare `image/jpeg`, `image/png` and `image/webp` in generated OpenAPI. The typed client still returns an ArrayBuffer. HTTP tests check all three MIME types against the generated specification using synthetic images and the private-storage boundary; quarantine, current authorization and short-lived capability checks remain required. No schema or migration changes, live payment activation or payout activation are part of this correction.

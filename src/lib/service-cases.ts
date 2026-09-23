@@ -27,7 +27,7 @@ export async function caseAccess(tx: Prisma.TransactionClient, userId: string, i
   const c = await tx.serviceCase.findUnique({ where: { id } });
   if (!c) throw new MarketplaceError("Not found.", 404);
   const r = c.reservationId ? await reservationScope(tx, c.reservationId) : null;
-  const access = await participant(tx, userId, { customerId: r?.customerId ?? c.openedById, vehicleId: c.vehicleId }, c.kind as ServiceKind);
+  const access = await participant(tx, userId, { customerId: r?.customerId ?? c.openedById, vehicleId: r ? r.vehicleId : c.vehicleId }, c.kind as ServiceKind);
   return { c, ...access };
 }
 export async function createServiceCase(userId: string, input: unknown, db: DomainDatabase = prisma) {

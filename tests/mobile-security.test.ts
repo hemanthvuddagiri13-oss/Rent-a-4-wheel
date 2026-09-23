@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, afterAll, afterEach, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { createHash, createHmac } from "node:crypto";
@@ -180,6 +180,69 @@ async function tenantFixture() {
   const reservation = await prisma.reservation.create({ data: { confirmationNumber: id, customerId: user.id, vehicleId: vehicle.id, jurisdictionCode: "TX", status: "CONFIRMED", pickupAt: new Date("2055-04-01T12:00:00Z"), returnAt: new Date("2055-04-02T12:00:00Z"), rateType: "DAILY", rateAmountCents: 10000, units: 1, subtotalCents: 10000, totalCents: 10000 } });
   return { customer, owner, employee, other, user, host, membership, vehicle, reservation };
 }
+it.each(["removed", "inactive", "expired"])("HTTP %s employee loses linked cases with the same native token but keeps standalone tickets", async change => {
+  const f = await tenantFixture();
+  const data = { kind: "TICKET", category: "OTHER", openedById: f.membership.userId, details: {}, dueAt: new Date("2056-01-01"), retainUntil: new Date("2058-01-01") };
+  const linked = await prisma.serviceCase.create({ data: { ...data, title: "Synthetic linked request", reservationId: f.reservation.id, vehicleId: f.vehicle.id } });
+  const standalone = await prisma.serviceCase.create({ data: { ...data, title: "Synthetic standalone request" } });
+  const ids = async (token: string) => { const response = await get("cases", token); expect(response.status).toBe(200); return (await response.json()).data.items.map((item: { id: string }) => item.id); };
+  expect(await ids(f.employee.accessToken)).toEqual(expect.arrayContaining([linked.id, standalone.id]));
+  expect((await get(`cases/${linked.id}`, f.employee.accessToken)).status).toBe(200);
+  // A missing cached case vehicle must not override the current reservation scope.
+  await prisma.serviceCase.update({ where: { id: linked.id }, data: { vehicleId: null } });
+  expect(await ids(f.employee.accessToken)).toContain(linked.id);
+  expect((await get(`cases/${linked.id}`, f.employee.accessToken)).status).toBe(200);
+  if (change === "removed") await prisma.hostEmployee.delete({ where: { id: f.membership.id } });
+  else await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: change === "inactive" ? { isActive: false } : { expiresAt: new Date(Date.now() - 1000) } });
+  expect(await ids(f.employee.accessToken)).toEqual([standalone.id]);
+  expect((await get(`cases/${linked.id}`, f.employee.accessToken)).status).toBe(403);
+  expect((await get(`cases/${standalone.id}`, f.employee.accessToken)).status).toBe(200);
+  for (const c of [f.owner, f.customer]) {
+    expect(await ids(c.accessToken)).toEqual([linked.id]);
+    expect((await get(`cases/${linked.id}`, c.accessToken)).status).toBe(200);
+    expect((await get(`cases/${standalone.id}`, c.accessToken)).status).toBe(404);
+  }
+  expect(await ids(f.other.accessToken)).toEqual([]);
+  expect((await get(`cases/${linked.id}`, f.other.accessToken)).status).toBe(404);
+  expect((await prisma.mobileSession.findUniqueOrThrow({ where: { id: f.employee.sessionId } })).revokedAt).toBeNull();
+});
+it("HTTP pricing exposes host financial fields only to the reservation's current tenant owner", async () => {
+  const f = await tenantFixture();
+  const terms = { amounts: { guestServiceCents: 100, protectionCents: 200, guestProcessingCents: 300, commissionCents: 400, hostNetCents: 9000, riskReserveCents: 600 } };
+  await prisma.financeQuote.create({ data: { reservationId: f.reservation.id, terms } });
+  const route = `reservations/${f.reservation.id}/pricing`;
+  const price = async (token: string) => { const response = await get(route, token); expect(response.status).toBe(200); return (await response.json()).data; };
+  expect(await price(f.owner.accessToken)).toMatchObject({ hostCommissionCents: 400, hostEarningsCents: 9000, reserveCents: 600 });
+  const guestOnly = async (token: string) => {
+    const body = await price(token);
+    expect(body).toMatchObject({ subtotalCents: 10000, totalCents: 10000, extrasCents: 0, discountCents: 0, taxCents: 0, depositCents: 0, platformFeeCents: 100, protectionCents: 200, processingCents: 300 });
+    for (const field of ["hostCommissionCents", "hostEarningsCents", "reserveCents"]) expect(body).not.toHaveProperty(field);
+  };
+  await guestOnly(f.customer.accessToken); await guestOnly(f.employee.accessToken);
+  await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: { role: "MANAGER" } });
+  await guestOnly(f.employee.accessToken);
+  // Owning a different host account does not expose this booking's host finances.
+  await prisma.user.update({ where: { id: f.user.id }, data: { role: "HOST" } });
+  await prisma.hostProfile.create({ data: { userId: f.user.id, legalName: "Other synthetic owner", onboardingStatus: "APPROVED" } });
+  await guestOnly(f.customer.accessToken);
+  expect((await get(route, f.other.accessToken)).status).toBe(404);
+  expect((await prisma.financeQuote.findUniqueOrThrow({ where: { reservationId: f.reservation.id } })).terms).toEqual(terms);
+  expect(await prisma.reservation.findUnique({ where: { id: f.reservation.id } })).toEqual(f.reservation);
+});
+it.each(["jpeg", "png", "webp"] as const)("HTTP private %s response matches the generated OpenAPI media types", async format => {
+  const f = await tenantFixture(), mimeType = `image/${format}`;
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: "blue" } }).toFormat(format).toBuffer();
+  fixture.storageRead.mockResolvedValue({ buffer: bytes });
+  const doc = await prisma.driverDocument.create({ data: { userId: f.user.id, reservationId: f.reservation.id, type: "LICENSE_FRONT", storageKey: `local:synthetic.${format}`, mimeType, fileSizeBytes: bytes.length, contentSha256: createHash("sha256").update(bytes).digest("hex"), malwareScanStatus: "CLEAN", retentionExpiresAt: new Date("2058-01-01") } });
+  const issued = await post("files/access", { documentId: doc.id }, f.customer.accessToken); expect(issued.status).toBe(200);
+  const response = await fetch(base + "/api/v1/mobile/files/" + doc.id, { headers: { authorization: "Bearer " + f.customer.accessToken, "x-file-access": (await issued.json()).data.capability } });
+  expect(response.status).toBe(200); expect(response.headers.get("content-type")).toBe(mimeType); expect(response.headers.get("cache-control")).toContain("no-store");
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes); expect(fixture.storageRead).toHaveBeenCalledTimes(1);
+  const spec = JSON.parse(readFileSync("docs/api/mobile-v1.openapi.json", "utf8"));
+  const content = spec.paths["/api/v1/mobile/files/{id}"].get.responses["200"].content;
+  expect(Object.keys(content).sort()).toEqual(["image/jpeg", "image/png", "image/webp"]);
+  expect(content[mimeType].schema).toEqual({ type: "string", format: "binary" });
+});
 it("HTTP current host tenancy, employee removal and role changes apply without token renewal", async () => {
   const f = await tenantFixture();
   for (const c of [f.owner, f.employee]) { expect((await get("host/fleet", c.accessToken)).status).toBe(200); expect((await get(`reservations/${f.reservation.id}`, c.accessToken)).status).toBe(200); }

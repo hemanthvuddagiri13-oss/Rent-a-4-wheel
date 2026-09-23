@@ -15,7 +15,7 @@ const caseInput = z.object({ kind: z.enum(["CLAIM", "DISPUTE", "INCIDENT", "TICK
 const photoCategory = z.enum(["EXTERIOR", "INTERIOR", "ODOMETER", "FUEL_GAUGE", "DAMAGE"]);
 export const reportInput = z.object({ phase: z.enum(["PRE_TRIP", "POST_TRIP"]), mileage: z.number().int().min(0).max(10000000), fuelLevel: z.number().int().min(0).max(100), damageNotes: z.string().max(2000).optional(), photos: z.array(z.object({ uploadId: z.uuid(), category: photoCategory }).strict()).min(2).max(10) }).strict();
 export const mobileUploadInput = z.object({ reservationId: id.optional(), type: z.enum(["LICENSE_FRONT", "LICENSE_BACK", "SELFIE_WITH_LICENSE", "INSPECTION"]), mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]), sha256: z.string().regex(/^[0-9a-f]{64}$/), size: z.number().int().min(1).max(8388608) }).strict();
-export type MobileOperation = { operationId: string; method: "GET" | "POST"; path: string; auth: boolean; response: z.ZodType; body?: z.ZodType; idempotent?: boolean; paginated?: boolean; binary?: "request" | "response"; capability?: boolean };
+export type MobileOperation = { operationId: string; method: "GET" | "POST"; path: string; auth: boolean; response: z.ZodType; body?: z.ZodType; idempotent?: boolean; paginated?: boolean; binary?: "request" | "response"; capability?: boolean; responseMediaTypes?: readonly string[] };
 const get = (operationId: string, path: string, response: z.ZodType, options: Partial<MobileOperation> = {}): MobileOperation => ({ operationId, method: "GET", path, auth: true, response, ...options });
 const post = (operationId: string, path: string, body: z.ZodType, response: z.ZodType, options: Partial<MobileOperation> = {}): MobileOperation => ({ operationId, method: "POST", path, auth: true, body, response, idempotent: true, ...options });
 export const mobileOperations: MobileOperation[] = [
@@ -33,7 +33,7 @@ export const mobileOperations: MobileOperation[] = [
   post("hold", "/reservations/hold", createHoldSchema, identifier),
   post("checkout", "/reservations/{id}/checkout", checkoutSchema.extend({ agreementContentHash: z.string().regex(/^[0-9a-f]{64}$/) }), identifier.extend({ success: z.literal(true) })),
   get("agreementPreview", "/reservations/{id}/agreement-preview", z.object({ type: z.literal("RENTAL_AGREEMENT"), version: z.string(), content: z.string(), contentHash: z.string(), needsAttorneyReview: z.boolean() }).strict()),
-  get("pricing", "/reservations/{id}/pricing", z.object({ subtotalCents: cents, extrasCents: cents, discountCents: cents, taxCents: cents, totalCents: cents, depositCents: cents, platformFeeCents: cents.nullable(), protectionCents: cents.nullable(), processingCents: cents.nullable(), hostCommissionCents: cents.nullable(), hostEarningsCents: cents.nullable(), reserveCents: cents.nullable(), approval: z.literal("SAMPLE_UNAPPROVED") }).strict()),
+  get("pricing", "/reservations/{id}/pricing", z.object({ subtotalCents: cents, extrasCents: cents, discountCents: cents, taxCents: cents, totalCents: cents, depositCents: cents, platformFeeCents: cents.nullable(), protectionCents: cents.nullable(), processingCents: cents.nullable(), hostCommissionCents: cents.nullable().optional(), hostEarningsCents: cents.nullable().optional(), reserveCents: cents.nullable().optional(), approval: z.literal("SAMPLE_UNAPPROVED") }).strict()),
   ...["cancel", "start", "keys", "return", "complete"].map(action => post("trip" + action[0].toUpperCase() + action.slice(1), `/reservations/{id}/${action}`, empty, success)),
   get("paymentStatus", "/reservations/{id}/payment-status", z.object({ status: z.string(), depositRequired: z.boolean(), outcome: z.string(), paidCents: cents, refundedCents: cents, pendingRefundCents: cents, refundStatus: z.string(), depositValid: z.boolean(), moneyAvailable: z.boolean(), financialEligible: z.boolean(), rentalPaymentStatus: z.string().nullable(), depositStatus: z.string().nullable() }).strict()),
   get("agreements", "/reservations/{id}/agreements", items(z.object({ id, type: z.string(), documentVersion: z.string(), contentHash: z.string(), signedAt: date }).strict())),
@@ -43,7 +43,7 @@ export const mobileOperations: MobileOperation[] = [
   post("initializeUpload", "/uploads", mobileUploadInput, z.object({ id, expiresAt: date, maxBytes: z.number().int() }).strict()),
   post("finalizeUpload", "/uploads/{id}/finalize", z.string(), identifier, { binary: "request" }),
   post("documentAccess", "/files/access", z.object({ documentId: id }).strict(), z.object({ capability: z.string(), expiresInSeconds: z.literal(60), documentId: id }).strict(), { idempotent: false }),
-  get("privateDocument", "/files/{id}", z.string(), { binary: "response", capability: true }),
+  get("privateDocument", "/files/{id}", z.string(), { binary: "response", capability: true, responseMediaTypes: ["image/jpeg", "image/png", "image/webp"] }),
   get("reports", "/reservations/{id}/reports", items(z.object({ id, phase: z.string(), submittedByRole: z.string(), mileage: cents, fuelLevel: cents, damageNotes: z.string().nullable(), acceptedAt: date.nullable(), photos: z.array(z.object({ id, category: photoCategory }).strict()) }).strict())),
   post("submitReport", "/reservations/{id}/reports", reportInput, identifier),
   post("acceptReport", "/reservations/{id}/reports/{reportId}/accept", empty, success),

@@ -61,8 +61,12 @@ export async function mobileQuery(req: Request, parts: string[]) {
         const quote = await tx.financeQuote.findUnique({ where: { reservationId: id }, select: { terms: true } });
         const terms = quote?.terms as { amounts?: { guestServiceCents?: number; protectionCents?: number; guestProcessingCents?: number; commissionCents?: number; hostNetCents?: number; riskReserveCents?: number } } | undefined;
         const a = terms?.amounts;
+        // Only the current owner of this vehicle's tenant sees host financial terms.
+        // Being a customer, employee, or operator does not confer ownership.
+        const owner = r.vehicleId && actor.role === "HOST" ? await tx.vehicle.findFirst({ where: { id: r.vehicleId, host: { userId: actor.userId, onboardingStatus: { not: "SUSPENDED" } } }, select: { id: true } }) : null;
         return { subtotalCents: r.subtotalCents, extrasCents: r.extrasCents, discountCents: r.discountCents, taxCents: r.taxCents, totalCents: r.totalCents, depositCents: r.depositCents,
-          platformFeeCents: a?.guestServiceCents ?? null, protectionCents: a?.protectionCents ?? null, processingCents: a?.guestProcessingCents ?? null, hostCommissionCents: a?.commissionCents ?? null, hostEarningsCents: a?.hostNetCents ?? null, reserveCents: a?.riskReserveCents ?? null, approval: "SAMPLE_UNAPPROVED" };
+          platformFeeCents: a?.guestServiceCents ?? null, protectionCents: a?.protectionCents ?? null, processingCents: a?.guestProcessingCents ?? null,
+          ...(owner ? { hostCommissionCents: a?.commissionCents ?? null, hostEarningsCents: a?.hostNetCents ?? null, reserveCents: a?.riskReserveCents ?? null } : {}), approval: "SAMPLE_UNAPPROVED" };
       }
       if (action === "payment-status") {
         await mobileReservationAccess(tx, actor.userId, id, true);
