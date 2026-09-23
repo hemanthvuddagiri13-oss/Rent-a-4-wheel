@@ -181,9 +181,9 @@ export async function verifyDocumentOwnership(params: {
   documentIds: string[];
   userId: string;
   reservationId: string;
-}): Promise<boolean> {
+}, db: Prisma.TransactionClient = prisma): Promise<boolean> {
   if (params.documentIds.length === 0) return false;
-  const owned = await prisma.driverDocument.findMany({
+  const owned = await db.driverDocument.findMany({
     where: {
       id: { in: params.documentIds },
       userId: params.userId,

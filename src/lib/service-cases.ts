@@ -1,9 +1,10 @@
+import { domainTransaction, type DomainDatabase } from "@/lib/domain-transaction";
 import { requireReleaseFeature } from "@/lib/release-control";
 import { independentCaseActor } from "@/lib/case-decision-authority";
 import { verifyAuthCode } from "@/lib/auth-code";
 import { enqueueNoticeEmail } from "@/lib/notice-center";
 import { createHash } from "node:crypto";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { lockReservation } from "@/lib/financial-locks";
@@ -26,10 +27,10 @@ export async function caseAccess(tx: Prisma.TransactionClient, userId: string, i
   const c = await tx.serviceCase.findUnique({ where: { id } });
   if (!c) throw new MarketplaceError("Not found.", 404);
   const r = c.reservationId ? await reservationScope(tx, c.reservationId) : null;
-  const access = await participant(tx, userId, { customerId: r?.customerId ?? c.openedById, vehicleId: c.vehicleId }, c.kind as ServiceKind);
+  const access = await participant(tx, userId, { customerId: r?.customerId ?? c.openedById, vehicleId: r ? r.vehicleId : c.vehicleId }, c.kind as ServiceKind);
   return { c, ...access };
 }
-export async function createServiceCase(userId: string, input: unknown, db: PrismaClient = prisma) {
+export async function createServiceCase(userId: string, input: unknown, db: DomainDatabase = prisma) {
   const data = createCaseSchema.parse(input);
   if(data.kind==="CLAIM")await requireReleaseFeature("claims",db);
   const categories = {
@@ -39,7 +40,7 @@ export async function createServiceCase(userId: string, input: unknown, db: Pris
     TICKET: ["GENERAL", "DAMAGE", "MILEAGE", "FUEL", "LATE_RETURN", "CLEANING", "CANCELLATION", "REFUND", "UNAUTHORIZED_USE", "OTHER_CHARGES"],
   };
   if (!categories[data.kind].includes(data.category)) throw new MarketplaceError("Choose a category that matches the request type.");
-  return db.$transaction(async tx => {
+  return domainTransaction(db, async tx => {
     if (data.reservationId) await lockReservation(tx, data.reservationId);
     const r = data.reservationId ? await reservationScope(tx, data.reservationId) : null;
     if (data.kind !== "TICKET" && !r) throw new MarketplaceError("Select a reservation.");
@@ -85,9 +86,9 @@ async function notifyCase(tx: Prisma.TransactionClient, id: string, actorId: str
   for (const userId of recipients) { await enqueueNoticeEmail(tx, userId, c.kind, `case:${id}:${c.version}`, true); await tx.inboxNotice.upsert({ where: { eventKey_userId: { eventKey: `case:${id}:${c.version}`, userId } }, update: {}, create: { eventKey: `case:${id}:${c.version}`, userId, category: c.kind, resourceType: "CASE", resourceId: id, title: `${c.kind.toLowerCase()} update`, required: true } }); }
 }
 export const caseCommandSchema = z.object({ action: z.enum(["reply", "internal", "transition", "assign", "escalate", "appeal", "satisfaction", "override", "takeover", "safetyClear", "reference"]), version: z.coerce.number().int().min(0), body: z.string().min(1).max(5000), state: z.string().optional(), assigneeId: z.string().optional(), rating: z.coerce.number().int().min(1).max(5).optional(), photoId: z.string().optional(), stepUpCode: z.string().regex(/^\d{6}$/).optional(), confirm: z.enum(["yes", "no"]).optional() });
-export async function caseCommand(userId: string, id: string, input: unknown, db: PrismaClient = prisma) {
+export async function caseCommand(userId: string, id: string, input: unknown, db: DomainDatabase = prisma) {
   const data = caseCommandSchema.parse(input);
-  return db.$transaction(async tx => {
+  return domainTransaction(db, async tx => {
     const prior = await tx.serviceCase.findUnique({ where: { id } });
     if (!prior) throw new MarketplaceError("Not found.", 404);
     if (prior.reservationId) await lockReservation(tx, prior.reservationId);

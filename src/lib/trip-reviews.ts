@@ -1,3 +1,4 @@
+import type { DomainDatabase } from "@/lib/domain-transaction";
 import { requireReleaseFeature } from "@/lib/release-control";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -6,8 +7,8 @@ import { MarketplaceError, marketplaceActor, marketplaceHost } from "@/lib/marke
 import { participant, policy, afterDays, safeText, isOperator, audit } from "@/lib/collaboration-access";
 
 const schema = z.object({ reservationId: z.string(), subject: z.enum(["VEHICLE", "HOST", "CUSTOMER"]), rating: z.coerce.number().int().min(1).max(5), body: z.string().min(3).max(5000), cleanliness: z.coerce.number().int().min(1).max(5), communication: z.coerce.number().int().min(1).max(5), accuracy: z.coerce.number().int().min(1).max(5), version: z.coerce.number().int().optional() });
-export async function saveTripReview(userId: string, input: unknown) {
-  await requireReleaseFeature("reviews");
+export async function saveTripReview(userId: string, input: unknown, db: DomainDatabase = prisma) {
+  await requireReleaseFeature("reviews", db);
   const data = schema.parse(input);
   return withReservationLock(data.reservationId, async tx => {
     const r = await tx.reservation.findUniqueOrThrow({ where: { id: data.reservationId }, include: { trip: true, vehicle: true } });
@@ -29,7 +30,7 @@ export async function saveTripReview(userId: string, input: unknown) {
     // Keep the full blind period even when the other party posts: neither party
     // gains an edit advantage by watching publication timing.
     return { id: review.id };
-  });
+  }, db);
 }
 export async function moderateTripReview(userId: string, id: string, action: "hide" | "restore" | "report", reason: string) {
   return prisma.$transaction(async tx => {

@@ -51,8 +51,15 @@ export async function collaborationScopes(tx: Prisma.TransactionClient, userId: 
   if (["HOST", "HOST_EMPLOYEE"].includes(actor.role)) {
     try { const { host } = await marketplaceHost(tx, userId); vehicleIds = (await tx.vehicle.findMany({ where: { hostId: host.id }, select: { id: true } })).map(v => v.id); } catch { /* Revoked memberships have no host scope. */ }
   }
-  const reservationIds = (await tx.reservation.findMany({ where: { customerId: userId }, select: { id: true } })).map(r => r.id);
+  const reservationIds = (await tx.reservation.findMany({ where: { OR: [{ customerId: userId }, { vehicleId: { in: vehicleIds } }] }, select: { id: true } })).map(r => r.id);
   const conversationWhere: Prisma.ConversationWhereInput = isOperator(actor.role, "MESSAGE") ? {} : { OR: [{ customerId: userId }, { vehicleId: { in: vehicleIds } }] };
-  const caseWhere: Prisma.ServiceCaseWhereInput = { OR: [{ openedById: userId }, { reservationId: { in: reservationIds } }, { vehicleId: { in: vehicleIds } }, { kind: { in: (["CLAIM", "DISPUTE", "INCIDENT", "TICKET"] as const).filter(kind => isOperator(actor.role, kind)) } }] };
+  // Opening a reservation-linked case does not grant permanent access to its tenant.
+  // Resolve linked access from the current reservation, never the case's cached vehicle.
+  const caseWhere: Prisma.ServiceCaseWhereInput = { OR: [
+    { reservationId: null, openedById: userId },
+    { reservationId: { in: reservationIds } },
+    { reservationId: null, vehicleId: { in: vehicleIds } },
+    { kind: { in: (["CLAIM", "DISPUTE", "INCIDENT", "TICKET"] as const).filter(kind => isOperator(actor.role, kind)) } },
+  ] };
   return { conversationWhere, caseWhere };
 }

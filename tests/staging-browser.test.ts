@@ -5,7 +5,8 @@ import {randomBytes} from "node:crypto";
 import {chromium,type Browser} from "playwright";
 import {encode} from "next-auth/jwt";
 import {createDeviceSession} from "@/lib/device-sessions";
-import {createTestCustomer,prisma} from "./helpers/factories";
+import {createTestCustomer,createTestHost,createTestVehicle,createTestReservation,prisma} from "./helpers/factories";
+import bcrypt from "bcryptjs";
 
 // This suite runs against the production build only after CI provisions disposable TLS.
 // Deliberately unavailable external providers prove fail-closed readiness, not provider health.
@@ -21,10 +22,37 @@ beforeAll(async()=>{
  let ready=false;for(let i=0;i<120;i++){if(child.exitCode!==null)throw new Error("Staging server exited");try{if((await probe.request.get(base+"/api/health/live")).ok()){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,500));}await probe.close();if(!ready)throw new Error("Staging production build unavailable");await mkdir("test-artifacts/staging",{recursive:true});
 },90000);
 afterAll(async()=>{if(!enabled)return;await browser?.close();if(child&&child.exitCode===null){const stopped=new Promise(resolve=>child.once("exit",resolve));child.kill();await Promise.race([stopped,new Promise(resolve=>setTimeout(resolve,3000))]);}await prisma.auditLog.deleteMany({where:{actorId:{in:users}}});await prisma.user.deleteMany({where:{id:{in:users}}});await prisma.$disconnect();});
-async function login(role:"CUSTOMER"|"SUPER_ADMIN"="CUSTOMER"){
+async function login(role:"CUSTOMER"|"SUPER_ADMIN"|"HOST_EMPLOYEE"="CUSTOMER"){
  const user=await createTestCustomer({role});users.push(user.id);const session=await createDeviceSession(user.id),context=await browser.newContext({ignoreHTTPSErrors:true});
  const token=await encode({token:{...session,id:user.id,sub:user.id,email:user.email,role},secret,salt:"__Secure-authjs.session-token"});await context.addCookies([{name:"__Secure-authjs.session-token",value:token,url:base,secure:true,httpOnly:true,sameSite:"Lax"}]);return {context,user,session};
 }
+it.skipIf(!enabled)("web case queue removes revoked employees' linked cases while retaining standalone requests with the same cookie",async()=>{
+ const {user:owner,hostProfile}=await createTestHost();users.push(owner.id);
+ const customer=await createTestCustomer();users.push(customer.id);
+ const vehicle=await createTestVehicle({hostId:hostProfile.id});
+ const reservation=await createTestReservation({vehicleId:vehicle.id,customerId:customer.id,pickupAt:new Date("2057-01-01"),returnAt:new Date("2057-01-02"),status:"CONFIRMED"});
+ const caseIds:string[]=[];
+ try {
+  for(const change of ["removed","inactive","expired"]){
+   const {context,user}=await login("HOST_EMPLOYEE");
+   try {
+    const membership=await prisma.hostEmployee.create({data:{userId:user.id,hostId:hostProfile.id}});
+    const data={kind:"TICKET",category:"OTHER",openedById:user.id,details:{},dueAt:new Date("2058-01-01"),retainUntil:new Date("2059-01-01")};
+    const linked=await prisma.serviceCase.create({data:{...data,title:"Linked synthetic "+crypto.randomUUID(),reservationId:reservation.id,vehicleId:vehicle.id}});
+    const standalone=await prisma.serviceCase.create({data:{...data,title:"Standalone synthetic "+crypto.randomUUID()}});caseIds.push(linked.id,standalone.id);
+    const queue=async()=>{const response=await context.request.get(base+"/connect?view=cases");expect(response.status()).toBe(200);return response.text();};
+    const before=await queue();expect(before).toContain(linked.title);expect(before).toContain(standalone.title);
+    if(change==="removed")await prisma.hostEmployee.delete({where:{id:membership.id}});
+    else await prisma.hostEmployee.update({where:{id:membership.id},data:change==="inactive"?{isActive:false}:{expiresAt:new Date(Date.now()-1000)}});
+    const after=await queue();expect(after).not.toContain(linked.title);expect(after).toContain(standalone.title);
+   }finally{await context.close();}
+  }
+ }finally{
+  await prisma.serviceCase.deleteMany({where:{id:{in:caseIds}}});
+  await prisma.reservation.delete({where:{id:reservation.id}});await prisma.vehicle.delete({where:{id:vehicle.id}});
+  await prisma.hostEmployee.deleteMany({where:{hostId:hostProfile.id}});await prisma.hostProfile.delete({where:{id:hostProfile.id}});
+ }
+},90000);
 it.skipIf(!enabled)("enforces staging configuration, real database sessions, secure responses and protected cron routes in the production build",async()=>{
  const {context,user,session}=await login(),page=await context.newPage();const response=await page.goto(base+"/account/security");
  expect(response?.status()).toBe(200);expect(response?.headers()["strict-transport-security"]).toContain("max-age=31536000");expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");expect(response?.headers()["content-security-policy"]).not.toContain("unsafe-eval");expect(response?.headers()["cache-control"]).toContain("no-store");
@@ -66,3 +94,27 @@ it.skipIf(!enabled)("public production pages hydrate under fresh per-request CSP
   expect(errors).toEqual([]);
  }finally{await context.close();}
 },90000);
+
+it.skipIf(!enabled)("native bearer auth crosses the real production proxy without weakening web cookie CSRF",async()=>{
+ const user=await createTestCustomer();users.push(user.id);
+ await prisma.authCode.create({data:{email:user.email,purpose:"MOBILE_SIGN_IN",codeHash:await bcrypt.hash("123456",4),expiresAt:new Date(Date.now()+60000)}});
+ const context=await browser.newContext({ignoreHTTPSErrors:true});
+ try {
+  const suppliedRequestId="00000000-0000-4000-8000-000000000000";
+  const signed=await context.request.post(base+"/api/v1/mobile/auth/sign-in",{headers:{"x-request-id":suppliedRequestId},data:{email:user.email,code:"123456",deviceId:crypto.randomUUID(),platform:"ANDROID",appVersion:"1.0.0"}});
+  expect(signed.status()).toBe(200);expect(signed.headers()["x-api-version"]).toBe("1");expect(signed.headers()["cache-control"]).toContain("no-store");
+  const signedBody=await signed.json();expect(signed.headers()["x-request-id"]).toBe(signedBody.requestId);
+  expect(signedBody.requestId).not.toBe(suppliedRequestId);expect(signed.headers()["content-security-policy"]).toContain("default-src 'none'");
+  const credentials=signedBody.data;
+  expect((await context.request.get(base+"/api/v1/mobile/me")).status()).toBe(401);
+  const headers={authorization:"Bearer "+credentials.accessToken};
+  expect((await context.request.get(base+"/api/v1/mobile/me",{headers})).status()).toBe(200);
+  // Native credentials do not authenticate a cookie-protected web mutation.
+  expect((await context.request.post(base+"/api/account/security",{headers,data:{action:"revokeAll"}})).status()).toBe(403);
+  const oversized=await context.request.post(base+"/api/v1/mobile/auth/refresh",{data:{refreshToken:"x".repeat(25000)}});
+  expect(oversized.status()).toBe(413);expect((await oversized.json()).error.code).toBe("INVALID_REQUEST");expect(oversized.headers()["x-api-version"]).toBe("1");
+  expect(oversized.headers()["x-request-id"]).toBe((await oversized.json()).requestId);
+  expect((await context.request.post(base+"/api/v1/mobile/auth/logout",{headers,data:{}})).status()).toBe(200);
+  expect((await context.request.get(base+"/api/v1/mobile/me",{headers})).status()).toBe(401);
+ }finally{await context.close();await prisma.authCode.deleteMany({where:{email:user.email}});}
+},60000);

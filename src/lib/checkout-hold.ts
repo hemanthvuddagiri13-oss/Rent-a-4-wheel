@@ -1,3 +1,4 @@
+import { domainTransaction, type DomainDatabase } from "@/lib/domain-transaction";
 import { requireReleaseFeature } from "@/lib/release-control";
 import { releaseAuthorityFence } from "@/lib/admission-authority";
 import {requireVehicleJurisdiction} from "@/lib/jurisdiction";
@@ -5,7 +6,7 @@ import { financeQuote } from "@/lib/finance-rules";
 import { bookingDays } from "@/lib/booking-time";
 import { upgradeBookingFingerprint } from "@/lib/booking-fingerprint";
 import { fingerprint, json } from "@/lib/financial-operations";
-import { Prisma, type PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import type { Reservation } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { isVehicleAvailable } from "@/lib/availability";
@@ -35,7 +36,7 @@ export async function createOrRefreshHold(params: {
   couponCode?: string;
   draftId?: string;
   revision?: number;
-}, db: PrismaClient = prisma): Promise<Reservation> {
+}, db: DomainDatabase = prisma): Promise<Reservation> {
   const { customerId, vehicleId, pickupAt, returnAt, extraIds, couponCode } = params;
   if (returnAt <= pickupAt) {
     throw new HoldError("Return date must be after pickup date.", 400);
@@ -45,7 +46,7 @@ export async function createOrRefreshHold(params: {
   const bookingTimezone = params.bookingTimezone ?? settings.bookingTimezone;
   const bookingFingerprint = fingerprint({ customerId, vehicleId, bookingTimezone, pickupAt, returnAt, extraIds: [...new Set(extraIds)].sort(), couponCode: couponCode?.trim().toUpperCase() ?? "" });
   try {
-    const result = await db.$transaction(
+    const result = await domainTransaction(db,
       async (tx) => {
         await releaseAuthorityFence(tx);
         await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + vehicleId})`;

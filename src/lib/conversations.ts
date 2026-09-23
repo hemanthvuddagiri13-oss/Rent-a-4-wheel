@@ -1,5 +1,6 @@
+import { domainTransaction, type DomainDatabase } from "@/lib/domain-transaction";
 import { enqueueNoticeEmail } from "@/lib/notice-center";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { MarketplaceError } from "@/lib/marketplace";
 import { participant, reservationScope, safeText, policy, afterDays, audit } from "@/lib/collaboration-access";
@@ -12,8 +13,8 @@ export async function conversationAccess(tx: Prisma.TransactionClient, userId: s
   const access = await participant(tx, userId, conversation, "MESSAGE");
   return { conversation, ...access };
 }
-export async function openConversation(userId: string, input: { reservationId?: string; vehicleId?: string }, db: PrismaClient = prisma) {
-  return db.$transaction(async tx => {
+export async function openConversation(userId: string, input: { reservationId?: string; vehicleId?: string }, db: DomainDatabase = prisma) {
+  return domainTransaction(db, async tx => {
     const r = input.reservationId ? await reservationScope(tx, input.reservationId) : null;
     if(!r){
       await releaseAuthorityFence(tx);
@@ -31,8 +32,8 @@ export async function openConversation(userId: string, input: { reservationId?: 
     return { id: conversation.id };
   });
 }
-export async function messageCommand(userId: string, id: string, input: { action: "send" | "edit" | "delete" | "read" | "report"; body?: string; messageId?: string; version?: number }, db: PrismaClient = prisma) {
-  return db.$transaction(async tx => {
+export async function messageCommand(userId: string, id: string, input: { action: "send" | "edit" | "delete" | "read" | "report"; body?: string; messageId?: string; version?: number }, db: DomainDatabase = prisma) {
+  return domainTransaction(db, async tx => {
     await tx.$queryRaw`SELECT "id" FROM "Conversation" WHERE "id"=${id} FOR UPDATE`;
     const { conversation } = await conversationAccess(tx, userId, id);
     const p = await policy(tx);
