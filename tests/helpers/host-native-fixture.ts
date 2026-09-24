@@ -28,6 +28,7 @@ async function main() {
     await assertIncident();
     const reply = await db.serviceCaseEvent.count({ where: { body: 'Synthetic interrupted reply.' } });
     if (reply !== 1) throw new Error('Interrupted reply must commit exactly once');
+    if (await db.conversationMessage.count({ where: { body: 'Synthetic host pickup instructions.' } }) !== 1) throw new Error('Restarted message must commit exactly once');
     const handoffs = await db.identityHandoffVerification.count({ where: { reservation: { confirmationNumber: 'HOST-PICKUP' }, verifiedAt: { not: null } } });
     if (handoffs !== 1) throw new Error('Host handoff missing');
     const r = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-PICKUP' } });

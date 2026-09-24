@@ -4,6 +4,14 @@ import { fixtureJurisdiction } from './jurisdiction-fixture';
 const db = new PrismaClient();
 if (process.env.CI !== 'true' || !new URL(process.env.DATABASE_URL!).pathname.endsWith('_test')) throw new Error('Disposable CI database only');
 async function main() {
+if (process.argv.includes('--assert')) {
+  const customer = await db.user.findUniqueOrThrow({ where: { email: 'native-customer@example.test' } });
+  const messages = await db.conversationMessage.findMany({ where: { body: 'Synthetic native acceptance message' } });
+  if (messages.length !== 1 || messages[0].senderId !== customer.id) throw new Error('Restart recovery must commit one correctly authored message');
+  if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native recovery must not enable provider work');
+  console.log('Customer restart recovery: one message, zero provider operations and payouts.');
+  await db.$disconnect(); return;
+}
 await fixtureJurisdiction(db);
 const user = await db.user.create({ data: { email: 'native-customer@example.test', emailVerified: new Date(), name: 'Synthetic customer', role: 'CUSTOMER' } });
 await db.mobilePhoneIdentity.create({ data: { userId: user.id, phone: '+12025550101' } });

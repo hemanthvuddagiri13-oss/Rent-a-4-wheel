@@ -4,6 +4,8 @@ import Constants from 'expo-constants';
 import { createMobileClient, MobileApiError, type MobileOperations } from '../../../packages/mobile-client/src';
 import { Session, SignInRequired } from './session';
 import { boundedFetch } from './transport';
+import { RecoveryJournal, RecoveryConflict, type RecoveryRecord } from '../../../packages/mobile-client/src/recovery';
+import { recoveryStore } from './recovery-store';
 export type Output<K extends keyof MobileOperations> = MobileOperations[K]['output'];
 export const origin: string = Constants.expoConfig?.extra?.apiOrigin;
 export const hostApp = Constants.expoConfig?.extra?.appMode === 'host';
@@ -16,6 +18,27 @@ async function secureStorage<T>(work: () => Promise<T>): Promise<T> {
 export const vault = { get: () => secureStorage(() => SecureStore.getItemAsync('ra4w.session', options)), set: (v: string) => secureStorage(() => SecureStore.setItemAsync('ra4w.session', v, options)), clear: () => secureStorage(() => SecureStore.deleteItemAsync('ra4w.session', options)) };
 const localAcceptance = Constants.expoConfig?.extra?.localAcceptance === true && origin === 'http://localhost:3000';
 export const session = new Session(vault, origin, boundedFetch, localAcceptance);
+const recovery = new RecoveryJournal(recoveryStore);
+const recoverable = new Set<keyof MobileOperations>(['sendMessage', 'replyCase', 'openCase', 'submitReport', 'acceptReport', 'hostHandoff', 'tripStart', 'tripReturn', 'tripCancel', 'tripKeys', 'tripComplete']);
+export async function pendingRequests() { const me = await session.call('me', {}); return recovery.list(me.id); }
+export async function recoverRequest(record: RecoveryRecord) {
+  const assertIdentity = session.captureIdentity(), me = await session.call('me', {});
+  if (!recoverable.has(record.operation as keyof MobileOperations)) throw new Error('This request requires its original screen.');
+  const persisted = (await recovery.list(me.id)).find(r => r.key === record.key);
+  if (!persisted) throw new Error('This request is no longer pending. Refresh recovery.');
+  return recovery.execute(me.id, persisted, async frozen => { assertIdentity(); return session.call(frozen.operation as keyof MobileOperations, { ...(frozen.input as object), idempotencyKey: frozen.key } as MobileOperations[keyof MobileOperations]['input']); });
+}
+export async function uploadWithRecovery(descriptor: MobileOperations['initializeUpload']['input']['body'], label: string, bytes: Uint8Array) {
+  const assertIdentity = session.captureIdentity(), me = await session.call('me', {});
+  const input = { params: { id: descriptor.reservationId, type: descriptor.type, label }, body: descriptor };
+  const key = await intentKey(me.id + ':privateUpload', input);
+  return recovery.execute(me.id, { key, operation: 'privateUpload', input, createdAt: new Date().toISOString() }, async () => {
+    assertIdentity();
+    const initialized = await mutate('initializeUpload', { body: descriptor });
+    const result = await mutate('finalizeUpload', { params: { id: initialized.id }, body: bytes, contentType: descriptor.mimeType });
+    return { documentId: result.id, uploadId: initialized.id };
+  });
+}
 export const publicApi = createMobileClient({ baseUrl: origin, accessToken: async () => null, fetch: boundedFetch, allowLocalHttp: localAcceptance });
 export async function deviceId() {
   const saved = await secureStorage(() => SecureStore.getItemAsync('ra4w.device', options)); if (saved) return saved;
@@ -40,7 +63,10 @@ export async function mutate<K extends keyof MobileOperations>(op: K, input: Omi
   const scope = me.id + ':' + op;
   const idempotencyKey = await intentKey(scope, fingerprint);
   assertIdentity();
-  const result = await session.call(op, { ...input, idempotencyKey } as MobileOperations[K]['input']);
+  const dispatch = () => { assertIdentity(); return session.call(op, { ...input, idempotencyKey } as MobileOperations[K]['input']); };
+  const result = recoverable.has(op)
+    ? await recovery.execute(me.id, { key: idempotencyKey, operation: op, input, createdAt: new Date().toISOString() }, dispatch)
+    : await dispatch();
   // Preserve initialization identity across a later failed finalize. Other completed
   // intentions can be submitted anew; uncertain attempts keep their original key.
   if (op !== 'initializeUpload') {
@@ -50,6 +76,7 @@ export async function mutate<K extends keyof MobileOperations>(op: K, input: Omi
   return result;
 }
 export function friendly(error: unknown) {
+  if (error instanceof RecoveryConflict) return 'An earlier request is awaiting confirmation. Open Account → Interrupted requests and recover it before changing this action.';
   if (error instanceof SecureStorageUnavailable) return error.message;
   if (error instanceof SignInRequired) return error.message;
   if (error instanceof MobileApiError) {

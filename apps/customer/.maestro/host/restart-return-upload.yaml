@@ -1,0 +1,26 @@
+appId: com.renta4wheel.host.acceptance
+---
+- stopApp
+- launchApp
+- assertVisible: Host dashboard
+- tapOn: Reservations & handoffs
+- tapOn: Open HOST-RETURN
+- scrollUntilVisible:
+    element: Host photos & condition reports
+    direction: DOWN
+- tapOn: Host photos & condition reports
+- tapOn: Pre-trip selected.*
+- tapOn:
+    id: input-Odometer mileage
+- inputText: '120'
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: input-Fuel level .*
+- inputText: '50'
+- runFlow: dismiss-keyboard.yaml
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: exterior
+      INDEX: '0'
+      INTERRUPTED: 'false'

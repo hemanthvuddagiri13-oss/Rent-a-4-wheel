@@ -14,7 +14,16 @@ env:
 - takeScreenshot: native-launch
 - assertVisible: "Your next drive starts here."
 - takeScreenshot: native-home
-- tapOn: "Sign in"
+- runFlow: email-navigation.yaml
+- scrollUntilVisible:
+    element:
+      id: home-sign-in
+    direction: UP
+    centerElement: true
+- tapOn:
+    id: home-sign-in
+- assertVisible:
+    id: phone-sign-in-screen
 - scrollUntilVisible:
     element: "Use verified email instead"
     direction: DOWN
@@ -66,7 +75,15 @@ env:
     centerElement: true
 - tapOn: "Log out this device"
 - assertVisible: "Your next drive starts here."
-- tapOn: "Sign in"
+- scrollUntilVisible:
+    element:
+      id: home-sign-in
+    direction: UP
+    centerElement: true
+- tapOn:
+    id: home-sign-in
+- assertVisible:
+    id: phone-sign-in-screen
 - scrollUntilVisible:
     element:
       id: "input-Mobile phone number"
@@ -206,6 +223,7 @@ env:
     commands:
       - tapOn: "Done editing"
 - tapOn: "Send message"
+- runFlow: restart-message.yaml
 - assertVisible: "Synthetic native acceptance message"
 - takeScreenshot: native-message
 - runFlow:

@@ -1,0 +1,35 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- extendedWaitUntil:
+    visible: Connection interrupted.*
+    timeout: 25000
+- stopApp
+- launchApp
+- assertVisible: Your next drive starts here.
+- scrollUntilVisible:
+    element: Account & devices
+    direction: DOWN
+    centerElement: true
+- tapOn: Account & devices
+- tapOn: Interrupted requests
+- extendedWaitUntil:
+    visible: Recover sendMessage
+    timeout: 20000
+- tapOn: Recover sendMessage
+- extendedWaitUntil:
+    visible: No interrupted requests for this account.
+    timeout: 60000
+- runFlow: back.yaml
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: Your trips
+    direction: UP
+- tapOn: Your trips
+- tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- scrollUntilVisible:
+    element: Message your host
+    direction: DOWN
+- tapOn: Message your host
+- extendedWaitUntil:
+    notVisible: No messages yet.
+    timeout: 20000

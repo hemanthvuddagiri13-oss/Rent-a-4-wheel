@@ -41,6 +41,15 @@ appId: com.renta4wheel.host.acceptance
 - inputText: "Synthetic host pickup instructions."
 - runFlow: dismiss-keyboard.yaml
 - tapOn: "Send message"
+- extendedWaitUntil:
+    visible: "Connection interrupted.*"
+    timeout: 25000
+- runFlow:
+    file: restart-recovery.yaml
+    env:
+      OPERATION: sendMessage
+- tapOn: "Open HOST-PICKUP"
+- tapOn: "Message customer"
 # Composer text is not proof of delivery. Await the initially empty conversation.
 - extendedWaitUntil:
     notVisible: "No messages yet."
@@ -113,14 +122,16 @@ appId: com.renta4wheel.host.acceptance
     visible: "Connection interrupted.*"
     timeout: 25000
 - takeScreenshot: host-reply-interrupted
+- runFlow:
+    file: restart-recovery.yaml
+    env:
+      OPERATION: replyCase
+- tapOn: "Open HOST-PICKUP"
 - scrollUntilVisible:
-    element: "Refresh case"
+    element: "Reservation support"
     direction: DOWN
-- tapOn: "Refresh case"
-- scrollUntilVisible:
-    element: "Send case reply"
-    direction: DOWN
-- tapOn: "Send case reply"
+- tapOn: "Reservation support"
+- tapOn: "View case"
 - scrollUntilVisible:
     element: "HOST_REPLY.*"
     direction: UP
@@ -140,6 +151,14 @@ appId: com.renta4wheel.host.acceptance
     element: "Begin return inspection"
     direction: DOWN
 - tapOn: "Begin return inspection"
+- extendedWaitUntil:
+    visible: "Connection interrupted.*"
+    timeout: 25000
+- runFlow:
+    file: restart-recovery.yaml
+    env:
+      OPERATION: tripReturn
+- tapOn: "Open HOST-RETURN"
 - scrollUntilVisible:
     element: "Host photos & condition reports"
     direction: UP

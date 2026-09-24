@@ -15,7 +15,7 @@ export function Home({ navigation }: NativeStackScreenProps<Routes, 'Home'>) {
   const query = useQuery({ queryKey: ['vehicles', cursor], queryFn: ({ signal }) => publicApi.call('vehicles', { query: { limit: 12, cursor } }, signal) });
   return <Page title="Your next drive starts here."><Hint>Independent hosts. Clear pricing. More room to explore.</Hint>
     <Card><Copy>Staging preview · Live payments unavailable</Copy><Hint>Availability and eligibility are always checked by the server. No booking is confirmed by this app alone.</Hint></Card>
-    <View style={{ gap: 10 }}>{(['SignIn', 'Reservations', 'Inbox', 'Notices', 'Cases', 'Account'] as const).map((screen, i) => <Button key={screen} title={['Sign in', 'Your trips', 'Messages', 'Notices', 'Support & cases', 'Account & devices'][i]} onPress={() => navigation.navigate(screen)} />)}</View>
+    <View style={{ gap: 10 }}>{(['SignIn', 'Reservations', 'Inbox', 'Notices', 'Cases', 'Account'] as const).map((screen, i) => <Button key={screen} testID={screen === 'SignIn' ? 'home-sign-in' : undefined} title={['Sign in', 'Your trips', 'Messages', 'Notices', 'Support & cases', 'Account & devices'][i]} onPress={() => navigation.navigate(screen)} />)}</View>
     {query.isPending ? <Busy /> : query.isError ? <><ErrorText message={friendly(query.error)} /><Button title="Retry discovery" onPress={() => { void query.refetch(); }} /></> : <>
       {!query.data.items.length && <Card><Copy>No vehicles are available in the current launch markets.</Copy><Hint>Check back when your region opens. Demo inventory is not bookable.</Hint></Card>}
       {query.data.items.map(v => <VehicleCard key={v.id} vehicle={v} open={() => navigation.navigate('Vehicle', { id: v.id })} />)}

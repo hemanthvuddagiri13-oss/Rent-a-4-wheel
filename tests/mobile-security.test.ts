@@ -1036,6 +1036,28 @@ it('interrupted support reply freezes its version across refreshed case state an
   expect(await prisma.mobileMutation.count({ where: { operation: 'case.reply' } })).toBe(1);
 });
 
+it('a replacement app process recovers a committed reply through real HTTP without duplicating its PostgreSQL event', async () => {
+  const { RecoveryJournal } = await import('../packages/mobile-client/src/recovery');
+  const f = await tenantFixture(), values = new Map<string, string>();
+  const store = { read: async (scope: string) => values.get(scope) ?? null, write: async (scope: string, value: string) => { values.set(scope, value); } };
+  const opened = await post('cases', { kind: 'TICKET', reservationId: f.reservation.id, category: 'GENERAL', title: 'Restart recovery', body: 'Synthetic process restart recovery.' }, f.owner.accessToken, crypto.randomUUID());
+  expect(opened.status).toBe(200); const { id } = (await opened.json()).data;
+  const initial = (await (await get('cases/' + id, f.owner.accessToken)).json()).data;
+  const record = { key: crypto.randomUUID(), operation: 'replyCase', input: { params: { id }, body: { body: 'One restart reply', version: initial.version } }, createdAt: new Date().toISOString() };
+  const first = new RecoveryJournal(store);
+  await expect(first.execute('owner', record, async frozen => {
+    const response = await post('cases/' + id + '/reply', (frozen.input as typeof record.input).body, f.owner.accessToken, frozen.key);
+    expect(response.status).toBe(200); await response.arrayBuffer(); throw new Error('Lost committed reply');
+  })).rejects.toThrow('Lost committed reply');
+  const restarted = new RecoveryJournal(store), [pending] = await restarted.list('owner');
+  expect(pending).toEqual(record);
+  const response = await restarted.execute('owner', pending, frozen => post('cases/' + id + '/reply', (frozen.input as typeof record.input).body, f.owner.accessToken, frozen.key));
+  expect(response.status).toBe(200); expect(await restarted.list('owner')).toEqual([]);
+  expect(await prisma.serviceCaseEvent.count({ where: { caseId: id, body: 'One restart reply' } })).toBe(1);
+  expect(await prisma.mobileMutation.count({ where: { operation: 'case.reply' } })).toBe(1);
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
+
 function deferred<T>() { let resolve!: (value: T | PromiseLike<T>) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 it('host interrupted inspection upload resumes one durable intent, and another author cannot accept the report', async () => {
   const f = await tenantFixture(), photos: Array<{ uploadId: string; category: 'EXTERIOR' | 'INTERIOR' }> = [];

@@ -34,7 +34,7 @@ appId: com.renta4wheel.host.acceptance
       - extendedWaitUntil:
           visible: "${LABEL} condition photo: Upload not confirmed.*"
           timeout: 180000
-      - tapOn: "Upload ${LABEL} condition photo"
+      - runFlow: restart-return-upload.yaml
 # Each send runs me -> initializeUpload -> me -> finalizeUpload. The existing
 # transport bounds are 3 * 20s JSON + 120s binary/scanner. Await the terminal UI
 # state within that pipeline bound; do not rely on the default 20s assertion.

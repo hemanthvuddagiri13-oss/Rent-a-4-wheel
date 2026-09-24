@@ -60,7 +60,8 @@ jobs:
       - name: Prepare synthetic API backend
         run: |
           npx tsx tests/helpers/customer-native-fixture.ts
-          npm run dev -- --hostname 0.0.0.0 > /tmp/native-api.log 2>&1 &
+          npm run dev -- --hostname 127.0.0.1 --port 3001 > /tmp/native-api.log 2>&1 &
+          CUSTOMER_RECOVERY=true node scripts/host-native-proxy.mjs > /tmp/native-proxy.log 2>&1 &
           curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3000/api/health/live
           curl --fail --max-time 180 http://localhost:3000/api/v1/mobile/vehicles > /dev/null
           curl --fail --max-time 180 -H 'Content-Type: application/json' --data '{"email":"compile-only@example.test"}' http://localhost:3000/api/v1/mobile/auth/request-code > /dev/null
@@ -159,7 +160,8 @@ jobs:
           strings build/Build/Products/Release-iphonesimulator/RentA4Wheel.app/RentA4Wheel | grep -F 'FAKETEAMID.com.renta4wheel.customer.acceptance'
       - name: Actual iOS application journeys
         run: |
-          npm run dev -- --hostname 0.0.0.0 > /tmp/native-api.log 2>&1 &
+          npm run dev -- --hostname 127.0.0.1 --port 3001 > /tmp/native-api.log 2>&1 &
+          CUSTOMER_RECOVERY=true node scripts/host-native-proxy.mjs > /tmp/native-proxy.log 2>&1 &
           curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3000/api/health/live
           curl --fail --max-time 180 http://localhost:3000/api/v1/mobile/vehicles > /dev/null
           curl --fail --max-time 180 -H 'Content-Type: application/json' --data '{"email":"compile-only@example.test"}' http://localhost:3000/api/v1/mobile/auth/request-code > /dev/null
@@ -168,6 +170,7 @@ jobs:
           mkdir -p artifacts
           trap 'xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4Wheel"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
           python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:], check=True, timeout=1200)' "$MAESTRO_BIN" --device "$DEVICE" test apps/customer/.maestro/customer.yaml --test-output-dir "$PWD/artifacts/maestro" --format junit --output artifacts/ios-results.xml
+          npx tsx tests/helpers/customer-native-fixture.ts --assert
       - name: Sanitized API timing evidence
         if: always()
         run: node scripts/native-safe-telemetry.mjs
