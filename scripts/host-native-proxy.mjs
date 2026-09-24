@@ -2,9 +2,16 @@
 // support reply and upload response bodies are truncated to exercise app recovery.
 import { createServer as httpServer, request } from 'node:http';
 import { createServer as tcpServer } from 'node:net';
+import { existsSync, readFileSync } from 'node:fs';
 if (process.env.CI !== 'true' || process.env.APP_ENV !== 'test' || !new URL(process.env.DATABASE_URL).pathname.endsWith('_test')) throw new Error('Disposable CI only');
 const dropped = new Set();
 httpServer((req, res) => {
+  const fault = existsSync('/tmp/host-incident-fault') ? readFileSync('/tmp/host-incident-fault', 'utf8').trim() : '';
+  if (fault === 'submission' && req.method === 'POST' && req.url === '/api/v1/mobile/cases' || fault === 'readback' && req.method === 'GET' && /^\/api\/v1\/mobile\/cases\/[^/]+(?:\/events)?$/.test(req.url.split('?')[0])) {
+    req.resume(); console.log(JSON.stringify({ event: 'synthetic.incident_rejected', kind: fault }));
+    res.writeHead(503, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify({ error: { code: 'UNAVAILABLE', message: 'Synthetic incident acceptance failure.' } })); return;
+  }
   const upstream = request({ hostname: '127.0.0.1', port: 3001, path: req.url, method: req.method, headers: { ...req.headers, host: 'localhost:3001' } }, response => {
     const kind = req.method === 'POST' && /\/cases\/[^/]+\/reply$/.test(req.url) ? 'reply' : req.method === 'POST' && /\/uploads\/[^/]+\/finalize$/.test(req.url) ? 'upload' : null;
     if (kind && response.statusCode === 200 && !dropped.has(kind)) {

@@ -271,26 +271,3 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Submit incident for review"
     direction: DOWN
-- tapOn: "Submit incident for review"
-- assertVisible: "Synthetic lost spare key"
-- takeScreenshot: host-incident
-- runFlow: back.yaml
-- runFlow: back.yaml
-- runFlow: back.yaml
-- runFlow: back.yaml
-- scrollUntilVisible:
-    element: "Owner earnings"
-    direction: DOWN
-- tapOn: "Owner earnings"
-- assertVisible: "No accounted earnings yet."
-- takeScreenshot: host-owner-earnings
-- runFlow: back.yaml
-- scrollUntilVisible:
-    element: "Account & devices"
-    direction: DOWN
-- tapOn: "Account & devices"
-- scrollUntilVisible:
-    element: "Log out this device"
-    direction: DOWN
-- tapOn: "Log out this device"
-- assertVisible: "Your hosting day, in hand."

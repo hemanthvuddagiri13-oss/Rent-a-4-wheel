@@ -43,11 +43,12 @@ export async function readMobileDocument(req: Request, id: string) {
   if (claim.id !== id || claim.user !== actor.userId || claim.session !== actor.sessionId || claim.expires <= Date.now() || claim.expires > Date.now() + 60000) throw new MobileError("FORBIDDEN", 403);
   const doc = await authorizedDocument(actor.userId, id);
   await logDocumentAccess({ documentId: id, accessedById: actor.userId, purpose: "mobile_identity_preview", ipAddress: mobileIp(req.headers) });
-  const { buffer } = await readPrivateDocument(doc.storageKey);
+  const { buffer, revalidate } = await readPrivateDocument(doc.storageKey);
   // Storage IO may outlive membership/session revocation or quarantine. Recheck
   // before returning bytes, including the exact object originally authorized.
   await authenticateMobile(req.headers);
   const current = await authorizedDocument(actor.userId, id);
   if (current.storageKey !== doc.storageKey || current.mimeType !== doc.mimeType) throw new MobileError("NOT_FOUND", 404);
+  await revalidate();
   return new Response(new Uint8Array(buffer), { headers: { "Content-Type": doc.mimeType, "Content-Disposition": 'inline; filename="private-document"', "Cache-Control": "private, no-store" } });
 }

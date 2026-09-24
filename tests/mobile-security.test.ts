@@ -8,7 +8,7 @@ import { createHash, createHmac } from "node:crypto";
 import sharp from "sharp";
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { createMobileClient } from "../packages/mobile-client/src";
-const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
+const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), providerRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
 vi.mock("@/lib/prisma", async () => {
   const { PrismaClient } = await import("@prisma/client");
   const url = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!); url.pathname = "/" + fixture.name;
@@ -17,7 +17,8 @@ vi.mock("@/lib/prisma", async () => {
 // Only the external email delivery boundary is replaced; codes, auth, HTTP,
 // sessions, domain transactions and locks all execute against real PostgreSQL.
 vi.mock("@/lib/email", () => ({ sendEmail: async ({ html }: { html: string }) => { fixture.emails.push(html); return { sent: true }; } }));
-vi.mock("@/lib/storage", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/storage")>(), readPrivateDocument: fixture.storageRead, storePrivateDocument: fixture.storageWrite }));
+vi.mock("@/lib/storage", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/storage")>(), readPrivateDocument: async (key: string) => ({ revalidate: async () => {}, ...await fixture.storageRead(key) }), storePrivateDocument: fixture.storageWrite }));
+vi.mock("@/lib/s3-private", async original => ({ ...await original<typeof import("@/lib/s3-private")>(), readS3Private: fixture.providerRead }));
 vi.mock("@/lib/clamav", () => ({ scanWithClamAv: fixture.scan }));
 vi.mock("@/lib/mobile/sms-provider", () => ({ smsProvider: () => ({ start: fixture.smsStart, check: fixture.smsCheck }) }));
 import { prisma } from "@/lib/prisma";
@@ -55,6 +56,7 @@ beforeEach(async () => {
   fixture.emails.length = 0;
   fixture.smsStart.mockReset().mockImplementation(async () => "fixture:" + crypto.randomUUID());
   fixture.smsCheck.mockReset().mockImplementation(async (_sid: string, code: string) => code === "123456");
+  fixture.providerRead.mockReset();
   fixture.storageRead.mockReset().mockResolvedValue({ buffer: Buffer.from("synthetic private bytes") });
   fixture.scan.mockReset().mockResolvedValue({ status: "CLEAN" });
   fixture.storageWrite.mockReset().mockImplementation(async (bytes: Buffer, mimeType: string, stableId: string) => {
@@ -939,6 +941,42 @@ it.each(['identity', 'condition'])('host private %s read fails closed when membe
   try { await prisma.hostEmployee.delete({ where: { id: f.membership.id } }); } finally { release.resolve(); }
   const result = await pending; expect(result.status).toBe(403); expect(await result.text()).not.toContain('PRIVATE_SENTINEL');
   expect(fixture.storageRead).toHaveBeenCalledTimes(1);
+});
+it.each([
+  ['direct', 'quarantine'], ['legacy', 'quarantine'], ['direct', 'deleted'],
+  ['direct', 'write-state'], ['direct', 'identity'], ['legacy', 'mapping'],
+] as const)('identity HTTP read revalidates effective %s object after provider IO: %s', async (mode, mutation) => {
+  const f = await tenantFixture(), bytes = Buffer.from('PRIVATE_IO_BARRIER_SENTINEL'), sha256 = createHash('sha256').update(bytes).digest('hex');
+  const effectiveKey = 's3:effective.png', sourceKey = mode === 'legacy' ? 's3:legacy-source.png' : effectiveKey;
+  await prisma.privateObject.create({ data: { key: effectiveKey, sha256, size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+  const doc = await prisma.driverDocument.create({ data: { userId: f.user.id, reservationId: f.reservation.id, type: 'LICENSE_FRONT', storageKey: sourceKey, mimeType: 'image/png', fileSizeBytes: bytes.length, contentSha256: sha256, malwareScanStatus: 'CLEAN', retentionExpiresAt: new Date('2058-01-01') } });
+  if (mode === 'legacy') {
+    await prisma.privateObject.create({ data: { key: sourceKey, sha256: 'a'.repeat(64), size: 3, mimeType: 'image/png', state: 'QUARANTINED', writeState: 'STORED' } });
+    await prisma.operationsJob.create({ data: { key: 'legacy:barrier', kind: 'LEGACY_IMPORT', resourceId: sourceKey, state: 'DONE' } });
+    await prisma.privateValidation.create({ data: { sourceKey, targetKey: effectiveKey, resourceType: 'IDENTITY', resourceId: doc.id, sourceSha256: 'a'.repeat(64), targetSha256: sha256, mimeType: 'image/png', bytes, evidence: {} } });
+  }
+  const real = await vi.importActual<typeof import('@/lib/storage')>('@/lib/storage');
+  fixture.storageRead.mockImplementation(real.readPrivateDocument);
+  fixture.providerRead.mockResolvedValue(bytes);
+  const capability = (await (await post('files/access', { documentId: doc.id }, f.employee.accessToken)).json()).data.capability;
+  const read = () => fetch(base + '/api/v1/mobile/files/' + doc.id, { headers: { authorization: 'Bearer ' + f.employee.accessToken, 'x-file-access': capability } });
+  const control = await read(); expect(control.status).toBe(200); expect(Buffer.from(await control.arrayBuffer())).toEqual(bytes);
+  const [a, b] = await independentClients(), entered = deferred<void>(), release = deferred<void>();
+  fixture.providerRead.mockReset().mockImplementation(async () => { entered.resolve(); await release.promise; return bytes; });
+  const pending = read();
+  try {
+    await entered.promise;
+    if (mutation === 'mapping') {
+      await b.privateObject.create({ data: { key: 's3:replacement.png', sha256, size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+      await b.privateValidation.update({ where: { sourceKey }, data: { targetKey: 's3:replacement.png' } });
+    } else await b.privateObject.update({ where: { key: effectiveKey }, data: mutation === 'quarantine' ? { state: 'QUARANTINED' } : mutation === 'deleted' ? { deletedAt: new Date() } : mutation === 'write-state' ? { writeState: 'UNCERTAIN' } : { sha256: 'b'.repeat(64) } });
+    expect(await a.driverDocument.findUnique({ where: { id: doc.id } })).toEqual(doc);
+    release.resolve();
+    const result = await pending; expect(result.status).toBe(500); expect(await result.text()).not.toContain(bytes.toString());
+    expect(fixture.providerRead).toHaveBeenCalledExactlyOnceWith(effectiveKey);
+    expect(await a.hostEmployee.findUnique({ where: { id: f.membership.id } })).not.toBeNull();
+    expect(await a.financialOperation.count()).toBe(0);
+  } finally { release.resolve(); await pending; await Promise.all([a.$disconnect(), b.$disconnect()]); }
 });
 it('host concurrent return uses independent connections and a reservation-lock barrier, committing the transition once', async () => {
   const { tripCommand } = await import('@/lib/trip-experience');

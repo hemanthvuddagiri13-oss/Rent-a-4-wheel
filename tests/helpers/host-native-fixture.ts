@@ -5,13 +5,27 @@ import sharp from 'sharp';
 import { fixtureJurisdiction } from './jurisdiction-fixture';
 const db = new PrismaClient();
 if (process.env.CI !== 'true' || !new URL(process.env.DATABASE_URL!).pathname.endsWith('_test')) throw new Error('Disposable CI database only');
+async function assertIncident(expected = 1) {
+  const owner = await db.user.findUniqueOrThrow({ where: { email: 'host-owner@example.test' } });
+  const reservation = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-READY' } });
+  const cases = await db.serviceCase.findMany({ where: { title: 'Synthetic lost spare key' }, include: { events: true } });
+  if (cases.length !== expected) throw new Error('Incident count: expected ' + expected + ', got ' + cases.length);
+  for (const c of cases) {
+    if (c.kind !== 'INCIDENT' || c.category !== 'LOST_KEY' || c.reservationId !== reservation.id || c.vehicleId !== reservation.vehicleId || c.openedById !== owner.id || c.state !== 'REPORTED') throw new Error('Incident scope or authoritative state mismatch');
+    if (c.events.length !== 1 || c.events[0].actorId !== owner.id || c.events[0].body !== 'Synthetic incident for host acceptance only.') throw new Error('Incident must have exactly one correctly authored opening event');
+  }
+  console.log('Incident database assertion: ' + expected + ' correctly scoped incident(s), no duplicate opening events.');
+}
 async function main() {
+  if (process.argv.includes('--assert-incident')) { await assertIncident(); return; }
+  if (process.argv.includes('--assert-no-incident')) { await assertIncident(0); return; }
   if (process.argv.includes('--revoke')) {
     const user = await db.user.findUniqueOrThrow({ where: { email: 'host-employee@example.test' } });
     await db.$transaction(async tx => { await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${user.id} FOR UPDATE`; await tx.hostEmployee.deleteMany({ where: { userId: user.id } }); });
     return;
   }
   if (process.argv.includes('--assert')) {
+    await assertIncident();
     const reply = await db.serviceCaseEvent.count({ where: { body: 'Synthetic interrupted reply.' } });
     if (reply !== 1) throw new Error('Interrupted reply must commit exactly once');
     const handoffs = await db.identityHandoffVerification.count({ where: { reservation: { confirmationNumber: 'HOST-PICKUP' }, verifiedAt: { not: null } } });

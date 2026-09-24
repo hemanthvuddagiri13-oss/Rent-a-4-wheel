@@ -13,9 +13,4 @@ adb push /tmp/host-native-fixtures/condition.png /sdcard/Download/condition.png
 adb push /tmp/host-native-fixtures/interior.png /sdcard/Download/interior.png
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/interior.png
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/condition.png
-for journey in owner employee; do
-  "$HOME/.maestro/bin/maestro" test "apps/customer/.maestro/host/$journey.yaml" --test-output-dir "$PWD/artifacts/$journey" --format junit --output "artifacts/android-$journey.xml"
-done
-npx tsx tests/helpers/host-native-fixture.ts --revoke
-"$HOME/.maestro/bin/maestro" test apps/customer/.maestro/host/revoked.yaml --test-output-dir "$PWD/artifacts/revoked" --format junit --output artifacts/android-revoked.xml
-npx tsx tests/helpers/host-native-fixture.ts --assert
+python3 scripts/host-native-journeys.py android "$HOME/.maestro/bin/maestro"

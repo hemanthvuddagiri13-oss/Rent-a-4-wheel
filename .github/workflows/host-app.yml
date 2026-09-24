@@ -173,12 +173,8 @@ jobs:
           mkdir -p artifacts
           xcrun simctl addmedia "$DEVICE" /tmp/host-native-fixtures/condition.png /tmp/host-native-fixtures/interior.png
           trap 'node scripts/native-safe-telemetry.mjs; xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4WheelHost"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
-          for journey in owner employee; do
-            python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:], check=True, timeout=1200)' "$MAESTRO_BIN" --device "$DEVICE" test "apps/customer/.maestro/host/$journey.yaml" --test-output-dir "$PWD/artifacts/$journey" --format junit --output "artifacts/ios-$journey.xml"
-          done
-          npx tsx tests/helpers/host-native-fixture.ts --revoke
-          python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:], check=True, timeout=1200)' "$MAESTRO_BIN" --device "$DEVICE" test apps/customer/.maestro/host/revoked.yaml --test-output-dir "$PWD/artifacts/revoked" --format junit --output artifacts/ios-revoked.xml
-          npx tsx tests/helpers/host-native-fixture.ts --assert
+          python3 scripts/host-native-journeys.py ios "$MAESTRO_BIN" "$DEVICE"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
