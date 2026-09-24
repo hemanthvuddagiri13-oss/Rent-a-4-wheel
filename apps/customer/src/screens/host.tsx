@@ -15,6 +15,9 @@ export function HostWelcome({ navigation }: NativeStackScreenProps<Routes, 'Home
 }
 export function HostDashboard({ navigation }: NativeStackScreenProps<Routes, 'Home'>) {
   const q = useQuery({ queryKey: ['hostContext'], queryFn: contextQuery });
+  // Account controls must not move from the top to below the dashboard while
+  // a restored session is still loading its current host membership.
+  if (q.isPending) return <Page title="Loading host access"><Busy /></Page>;
   return <Page title="Host dashboard">{q.isPending ? <Busy /> : q.isError ? <><ErrorText message={friendly(q.error)} /><Hint>Hosting requires a current owner or employee membership. Contact your business owner if access was removed.</Hint></> : <><Copy>{q.data.name} · {q.data.role}</Copy><Card><Copy>{q.data.fleetCount} vehicles · {q.data.upcomingCount} upcoming · {q.data.activeCount} active or returning</Copy><Hint>You store, maintain and hand over your vehicles. Rent A 4Wheel supplies marketplace, verification and support workflows.</Hint></Card><Button title="Fleet & calendar" onPress={() => navigation.navigate('HostFleet')} /><Button title="Reservations & handoffs" onPress={() => navigation.navigate('HostReservations')} /><Button title="Customer messages" onPress={() => navigation.navigate('Inbox')} /><Button title="Notices" onPress={() => navigation.navigate('Notices')} /><Button title="Support & cases" onPress={() => navigation.navigate('Cases')} />{q.data.canViewEarnings && <Button title="Owner earnings" onPress={() => navigation.navigate('HostEarnings')} />}{!q.data.canViewEarnings && <Hint>Owner financial statements are not available to employees.</Hint>}</>}<Button title="Refresh host access" onPress={() => void q.refetch()} /><Button title="Account & devices" onPress={() => navigation.navigate('Account')} /><Hint>Staging · Live payments and payouts are disabled.</Hint></Page>;
 }
 export function HostFleet({ navigation }: NativeStackScreenProps<Routes, 'HostFleet'>) {

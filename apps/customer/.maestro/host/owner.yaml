@@ -18,6 +18,8 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: "Fleet & calendar"
 - tapOn: "Manage Synthetic Host Car"
 - assertVisible: "Synthetic/demo inventory"
+- waitForAnimationToEnd
+- assertVisible: "Synthetic Host Car"
 - takeScreenshot: host-listing
 - scrollUntilVisible:
     element: "Save calendar block"
@@ -31,6 +33,8 @@ appId: com.renta4wheel.host.acceptance
 - runFlow: back.yaml
 - runFlow: back.yaml
 - tapOn: "Reservations & handoffs"
+- waitForAnimationToEnd
+- assertVisible: "Reservations & handoffs"
 - takeScreenshot: host-reservations
 - tapOn: "Open HOST-PICKUP"
 - assertVisible: "Synthetic pickup bay A.*"
@@ -151,8 +155,12 @@ appId: com.renta4wheel.host.acceptance
     element: "Begin return inspection"
     direction: DOWN
 - tapOn: "Begin return inspection"
-- extendedWaitUntil:
-    visible: "Connection interrupted.*"
+# The shared action error is below the incident/support controls. A visible
+# return button does not imply the error is inside the viewport after a tap.
+- scrollUntilVisible:
+    element: "Connection interrupted.*"
+    direction: DOWN
+    centerElement: true
     timeout: 40000
 - runFlow:
     file: restart-recovery.yaml

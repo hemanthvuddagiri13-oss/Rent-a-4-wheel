@@ -3,11 +3,13 @@ appId: com.renta4wheel.host.acceptance
 - stopApp
 - launchApp
 - assertVisible: Host dashboard
+- assertVisible: Synthetic host business.*OWNER
 - scrollUntilVisible:
     element: Account & devices
     direction: DOWN
     centerElement: true
 - tapOn: Account & devices
+- assertVisible: Login & recovery
 - tapOn: Interrupted requests
 # This screen is capture protected; no screenshots or credentials are exported.
 - extendedWaitUntil:
