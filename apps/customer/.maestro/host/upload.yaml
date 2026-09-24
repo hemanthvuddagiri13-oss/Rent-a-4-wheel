@@ -33,6 +33,13 @@ appId: com.renta4wheel.host.acceptance
       # Await the interrupted-body error; never silently skip the retry assertion.
       - extendedWaitUntil:
           visible: "${LABEL} condition photo: Upload not confirmed.*"
-          timeout: 25000
+          timeout: 180000
       - tapOn: "Upload ${LABEL} condition photo"
+# Each send runs me -> initializeUpload -> me -> finalizeUpload. The existing
+# transport bounds are 3 * 20s JSON + 120s binary/scanner. Await the terminal UI
+# state within that pipeline bound; do not rely on the default 20s assertion.
+# The same bound applies above to the deliberate interrupted-response error.
+- extendedWaitUntil:
+    visible: "${LABEL} condition photo: Upload completed and scanned. Eligibility review may still be pending."
+    timeout: 180000
 - assertVisible: "${LABEL} condition photo: Upload completed and scanned. Eligibility review may still be pending."
