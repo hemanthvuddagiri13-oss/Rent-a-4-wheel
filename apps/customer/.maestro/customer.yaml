@@ -55,9 +55,15 @@ env:
     centerElement: true
 - tapOn: "Account & devices"
 - assertVisible: "Login & recovery"
+# Device rows change layout after the Account query resolves. Await its real
+# result before locating logout so a stale pre-load coordinate cannot hit a card.
+- extendedWaitUntil:
+    visible: "Revoke .* device"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
+    centerElement: true
 - tapOn: "Log out this device"
 - assertVisible: "Your next drive starts here."
 - tapOn: "Sign in"
@@ -262,9 +268,15 @@ env:
     element: "Account & devices"
     direction: DOWN
 - tapOn: "Account & devices"
+# Device rows change layout after the Account query resolves. Await its real
+# result before locating logout so a stale pre-load coordinate cannot hit a card.
+- extendedWaitUntil:
+    visible: "Revoke .* device"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
+    centerElement: true
 - assertVisible:
     text: "Log out this device"
     enabled: true
