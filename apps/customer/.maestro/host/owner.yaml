@@ -1,0 +1,273 @@
+appId: com.renta4wheel.host.acceptance
+---
+- launchApp:
+    clearState: true
+- runFlow:
+    when:
+      visible: "Quickstep isn't responding"
+    commands:
+      - tapOn: "Close app"
+- assertVisible: "Your hosting day, in hand."
+- takeScreenshot: host-welcome
+- runFlow:
+    file: login.yaml
+    env:
+      PHONE: "+12025550102"
+- assertVisible: "Synthetic host business.*OWNER"
+- takeScreenshot: host-dashboard
+- tapOn: "Fleet & calendar"
+- tapOn: "Manage Synthetic Host Car"
+- assertVisible: "Synthetic/demo inventory"
+- takeScreenshot: host-listing
+- scrollUntilVisible:
+    element: "Save calendar block"
+    direction: DOWN
+- tapOn: "Save calendar block"
+- scrollUntilVisible:
+    element: "Remove calendar block"
+    direction: UP
+- takeScreenshot: host-calendar
+- tapOn: "Remove calendar block"
+- runFlow: back.yaml
+- runFlow: back.yaml
+- tapOn: "Reservations & handoffs"
+- takeScreenshot: host-reservations
+- tapOn: "Open HOST-PICKUP"
+- assertVisible: "Synthetic pickup bay A.*"
+- takeScreenshot: host-pickup
+- tapOn: "Message customer"
+- tapOn:
+    id: "input-Message"
+- inputText: "Synthetic host pickup instructions."
+- runFlow: dismiss-keyboard.yaml
+- tapOn: "Send message"
+# Composer text is not proof of delivery. Await the initially empty conversation.
+- extendedWaitUntil:
+    notVisible: "No messages yet."
+    timeout: 60000
+- assertVisible: "Synthetic host pickup instructions."
+- takeScreenshot: host-message
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Compare identity in person"
+    direction: DOWN
+- tapOn: "Compare identity in person"
+# Private screens intentionally have no screenshot command.
+- scrollUntilVisible:
+    element: "View private license front"
+    direction: DOWN
+- tapOn: "View private license front"
+- assertVisible: "Close private preview"
+- tapOn: "Close private preview"
+- scrollUntilVisible:
+    element: "Unchecked: physical license matches upload"
+    direction: DOWN
+- tapOn: "Unchecked: physical license matches upload"
+- tapOn: "Unchecked: physical license is unexpired"
+- scrollUntilVisible:
+    element: "Unchecked: guest matches selfie"
+    direction: DOWN
+- tapOn: "Unchecked: guest matches selfie"
+- scrollUntilVisible:
+    element: "Record identity comparison"
+    direction: DOWN
+- tapOn: "Record identity comparison"
+- assertVisible: "Comparison recorded. Other trip gates still apply."
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Refresh handoff & trip gates"
+    direction: DOWN
+- tapOn: "Refresh handoff & trip gates"
+- scrollUntilVisible:
+    element: "Record keys handed to customer"
+    direction: UP
+- assertVisible:
+    text: "Record keys handed to customer"
+    enabled: false
+- takeScreenshot: host-blocked-keys
+- scrollUntilVisible:
+    element: "Reservation support"
+    direction: DOWN
+- tapOn: "Reservation support"
+- tapOn:
+    id: "input-Request title"
+- inputText: "Synthetic host recovery"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Describe what happened"
+- inputText: "Synthetic native support recovery request."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Open support request"
+    direction: DOWN
+- tapOn: "Open support request"
+- tapOn:
+    id: "input-Reply to case"
+- inputText: "Synthetic interrupted reply."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Send case reply"
+    direction: DOWN
+- tapOn: "Send case reply"
+- extendedWaitUntil:
+    visible: "Connection interrupted.*"
+    timeout: 25000
+- takeScreenshot: host-reply-interrupted
+- scrollUntilVisible:
+    element: "Refresh case"
+    direction: DOWN
+- tapOn: "Refresh case"
+- scrollUntilVisible:
+    element: "Send case reply"
+    direction: DOWN
+- tapOn: "Send case reply"
+- scrollUntilVisible:
+    element: "HOST_REPLY.*"
+    direction: UP
+- assertVisible: "Synthetic interrupted reply."
+# Refresh alone can expose the committed event while the retry is still pending.
+# Require the original intent to finish before calling this recovered.
+- extendedWaitUntil:
+    visible: "Write a reply, then send it once."
+    timeout: 60000
+- assertNotVisible: "This reply is awaiting confirmation.*"
+- takeScreenshot: host-reply-recovered
+- runFlow: back.yaml
+- runFlow: back.yaml
+- runFlow: back.yaml
+- tapOn: "Open HOST-RETURN"
+- scrollUntilVisible:
+    element: "Begin return inspection"
+    direction: DOWN
+- tapOn: "Begin return inspection"
+- scrollUntilVisible:
+    element: "Host photos & condition reports"
+    direction: UP
+- tapOn: "Host photos & condition reports"
+- tapOn: "Pre-trip selected.*"
+- tapOn:
+    id: "input-Odometer mileage"
+- inputText: "120"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Fuel level .*"
+- inputText: "50"
+- runFlow: dismiss-keyboard.yaml
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: "exterior"
+      INDEX: "0"
+      INTERRUPTED: "true"
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: "interior"
+      INDEX: "1"
+      INTERRUPTED: "false"
+- scrollUntilVisible:
+    element: "Submit condition report"
+    direction: DOWN
+- tapOn: "Submit condition report"
+- scrollUntilVisible:
+    element: "Accept my report as accurate"
+    direction: DOWN
+- tapOn: "Accept my report as accurate"
+- assertNotVisible: "Accept my report as accurate"
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Complete return after both reports"
+    direction: DOWN
+- tapOn:
+    text: "Complete return after both reports"
+    repeat: 2
+- scrollUntilVisible:
+    element: "COMPLETED.*"
+    direction: UP
+- takeScreenshot: host-return-complete
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Open HOST-READY"
+    direction: DOWN
+- tapOn: "Open HOST-READY"
+- scrollUntilVisible:
+    element: "Host photos & condition reports"
+    direction: DOWN
+- tapOn: "Host photos & condition reports"
+- tapOn:
+    id: "input-Odometer mileage"
+- inputText: "100"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Fuel level .*"
+- inputText: "50"
+- runFlow: dismiss-keyboard.yaml
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: "exterior"
+      INDEX: "0"
+      INTERRUPTED: "false"
+- runFlow:
+    file: upload.yaml
+    env:
+      LABEL: "interior"
+      INDEX: "1"
+      INTERRUPTED: "false"
+- scrollUntilVisible:
+    element: "Submit condition report"
+    direction: DOWN
+- tapOn: "Submit condition report"
+- scrollUntilVisible:
+    element: "Accept my report as accurate"
+    direction: DOWN
+- tapOn: "Accept my report as accurate"
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Refresh handoff & trip gates"
+    direction: DOWN
+- tapOn: "Refresh handoff & trip gates"
+- scrollUntilVisible:
+    element: "Record keys handed to customer"
+    direction: UP
+# Gate refresh must finish before attempting the enabled host action.
+- extendedWaitUntil:
+    visible:
+      text: "Record keys handed to customer"
+      enabled: true
+    timeout: 20000
+- tapOn:
+    text: "Record keys handed to customer"
+    repeat: 2
+# mutate performs me -> tripKeys -> parallel authoritative readback, each with
+# the existing 20s HTTP bound. Await that state, not Maestro's shorter default.
+- extendedWaitUntil:
+    visible: "Keys handoff recorded"
+    timeout: 60000
+- assertVisible: "Keys handoff recorded"
+- assertNotVisible: "Start trip"
+- takeScreenshot: host-keys
+- scrollUntilVisible:
+    element: "Report damage or incident"
+    direction: DOWN
+- tapOn: "Report damage or incident"
+- tapOn: "Damage claim selected.*"
+- scrollUntilVisible:
+    element: "LOST_KEY"
+    direction: DOWN
+- tapOn: "LOST_KEY"
+- scrollUntilVisible:
+    element:
+      id: "input-Incident title"
+    direction: DOWN
+- tapOn:
+    id: "input-Incident title"
+- inputText: "Synthetic lost spare key"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    id: "input-Incident description"
+- inputText: "Synthetic incident for host acceptance only."
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Submit incident for review"
+    direction: DOWN

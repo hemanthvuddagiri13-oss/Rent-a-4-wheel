@@ -1,0 +1,24 @@
+appId: com.renta4wheel.host.acceptance
+---
+- runFlow:
+    file: login.yaml
+    env:
+      PHONE: "+12025550103"
+- assertVisible: "Synthetic host business.*STAFF"
+- scrollUntilVisible:
+    element: "Owner financial statements are not available to employees."
+    direction: DOWN
+- assertNotVisible: "Owner earnings"
+- takeScreenshot: host-employee-dashboard
+- scrollUntilVisible:
+    element: "Fleet & calendar"
+    direction: UP
+- tapOn: "Fleet & calendar"
+- tapOn: "Manage Synthetic Host Car"
+- scrollUntilVisible:
+    element: "Calendar changes require owner or manager access."
+    direction: DOWN
+- assertNotVisible: "Save calendar block"
+- takeScreenshot: host-employee-calendar
+- runFlow: back.yaml
+- runFlow: back.yaml

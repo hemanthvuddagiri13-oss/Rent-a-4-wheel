@@ -50,7 +50,7 @@ export function Vehicle({ navigation, route }: NativeStackScreenProps<Routes, 'V
       const result = await mutate('hold', { body: { vehicleId: id, ...dates, draftId, revision: 1, extraIds: [] } }); navigation.navigate('Reservation', { id: result.id });
     })} /><Hint>Sign in before placing a hold. Availability can change until the hold succeeds.</Hint></Page>;
 }
-function DateField({ title, value, onChange }: { title: string; value: Date; onChange: (d: Date) => void }) {
+export function DateField({ title, value, onChange }: { title: string; value: Date; onChange: (d: Date) => void }) {
   const [mode, setMode] = useState<'date' | 'time' | null>(null);
   return <Card><Copy>{title}: {value.toLocaleString()}</Copy><Button title={`Choose ${title.toLowerCase()} date`} onPress={() => setMode('date')} /><Button title={`Choose ${title.toLowerCase()} time`} onPress={() => setMode('time')} />{mode && <><DateTimePicker accessibilityLabel={title + ' ' + mode} value={value} mode={mode} minimumDate={mode === 'date' ? new Date() : undefined} themeVariant="dark" onChange={(_, d) => { if (Platform.OS === 'android') setMode(null); if (d) onChange(d); }} />{Platform.OS === 'ios' && <Button title="Done choosing date" onPress={() => setMode(null)} />}</>}</Card>;
 }

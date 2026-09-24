@@ -1,7 +1,7 @@
 name: Mobile API verification
 on:
   push:
-    branches: [codex/phase-7a-mobile-api-auth, codex/phase-7b-customer-app]
+    branches: [codex/phase-7a-mobile-api-auth, codex/phase-7b-customer-app, codex/phase-7c-host-app]
   pull_request:
   workflow_dispatch:
 permissions:

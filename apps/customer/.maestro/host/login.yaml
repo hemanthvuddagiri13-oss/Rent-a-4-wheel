@@ -1,0 +1,63 @@
+appId: com.renta4wheel.host.acceptance
+---
+- tapOn: "Sign in to hosting"
+- tapOn:
+    id: "input-Mobile phone number"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - inputText: "${PHONE}"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Synchronize every character with the native field. Maestro's burst
+      # injection can drop everything after its first character on iOS.
+      - evalScript: ${output.phoneIndex = 0}
+      - repeat:
+          times: ${PHONE.length}
+          commands:
+            - inputText: ${PHONE.charAt(output.phoneIndex)}
+            - evalScript: ${output.phoneIndex = output.phoneIndex + 1}
+            - assertVisible:
+                id: "input-Mobile phone number"
+                text: "[+]${PHONE.slice(1, output.phoneIndex)}"
+- assertVisible:
+    id: "input-Mobile phone number"
+    text: "[+]${PHONE.slice(1)}"
+- runFlow: dismiss-keyboard.yaml
+- tapOn:
+    text: "Send text code"
+    enabled: true
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Measured CI cold Keychain write: 49s, before the HTTP request.
+      # Await actual completion; retain the assertion and the app's HTTP bound.
+      - extendedWaitUntil:
+          visible: "Resend available in.*"
+          timeout: 75000
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit text code"
+    direction: DOWN
+- tapOn:
+    id: "input-Six-digit text code"
+- inputText: "123456"
+- runFlow: dismiss-keyboard.yaml
+- scrollUntilVisible:
+    element: "Verify phone & continue"
+    direction: DOWN
+- tapOn: "Verify phone & continue"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Measured CI cold Keychain write: 49s, before the HTTP request.
+      # Await actual completion; retain the assertion and the app's HTTP bound.
+      - extendedWaitUntil:
+          visible: "Host dashboard"
+          timeout: 75000
+- assertVisible: "Host dashboard"

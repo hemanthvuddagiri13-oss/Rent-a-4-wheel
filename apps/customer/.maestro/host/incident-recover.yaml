@@ -1,0 +1,4 @@
+appId: com.renta4wheel.host.acceptance
+---
+- tapOn: "Refresh case"
+- runFlow: incident-detail.yaml

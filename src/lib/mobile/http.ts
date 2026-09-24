@@ -52,6 +52,6 @@ export async function mobileHandler(req: Request, operation: string, run: (reque
     return Response.json({ data: null, error: { code }, requestId }, { status, headers: { ...mobileHeaders(requestId), ...(status === 429 ? { "Retry-After": "60" } : {}) } });
   } finally {
     // Callers supply a fixed operation label, never a URL, ID or request data.
-    console.info(JSON.stringify({ event: "mobile.request", operation: telemetryOperation, requestId, status, durationMs: Math.round(performance.now() - start) }));
+    console.info(JSON.stringify({ event: "mobile.request", timestamp: new Date().toISOString(), operation: telemetryOperation, requestId, status, durationMs: Math.round(performance.now() - start) }));
   }
 }

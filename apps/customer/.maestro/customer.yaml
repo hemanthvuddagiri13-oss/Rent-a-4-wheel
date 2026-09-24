@@ -1,4 +1,6 @@
 appId: com.renta4wheel.customer.acceptance
+env:
+  PHONE: "+12025550101"
 ---
 - launchApp:
     clearState: true
@@ -37,14 +39,31 @@ appId: com.renta4wheel.customer.acceptance
     element: "Verify & sign in"
     direction: DOWN
 - tapOn: "Verify & sign in"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Measured CI cold Keychain write: 49s, before the HTTP request.
+      # Await actual completion; retain the assertion and the app's HTTP bound.
+      - extendedWaitUntil:
+          visible: "Your next drive starts here."
+          timeout: 75000
 - assertVisible: "Your next drive starts here."
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN
+    centerElement: true
 - tapOn: "Account & devices"
+- assertVisible: "Login & recovery"
+# Device rows change layout after the Account query resolves. Await its real
+# result before locating logout so a stale pre-load coordinate cannot hit a card.
+- extendedWaitUntil:
+    visible: "Revoke .* device"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
+    centerElement: true
 - tapOn: "Log out this device"
 - assertVisible: "Your next drive starts here."
 - tapOn: "Sign in"
@@ -54,7 +73,29 @@ appId: com.renta4wheel.customer.acceptance
     direction: UP
 - tapOn:
     id: "input-Mobile phone number"
-- inputText: "+12025550101"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - inputText: "${PHONE}"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Synchronize every character with the native field. Maestro's burst
+      # injection can drop everything after its first character on iOS.
+      - evalScript: ${output.phoneIndex = 0}
+      - repeat:
+          times: ${PHONE.length}
+          commands:
+            - inputText: ${PHONE.charAt(output.phoneIndex)}
+            - evalScript: ${output.phoneIndex = output.phoneIndex + 1}
+            - assertVisible:
+                id: "input-Mobile phone number"
+                text: "[+]${PHONE.slice(1, output.phoneIndex)}"
+- assertVisible:
+    id: "input-Mobile phone number"
+    text: "[+]${PHONE.slice(1)}"
 - runFlow:
     when:
       platform: Android
@@ -87,6 +128,15 @@ appId: com.renta4wheel.customer.acceptance
     element: "Verify phone & continue"
     direction: DOWN
 - tapOn: "Verify phone & continue"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Measured CI cold Keychain write: 49s, before the HTTP request.
+      # Await actual completion; retain the assertion and the app's HTTP bound.
+      - extendedWaitUntil:
+          visible: "Your next drive starts here."
+          timeout: 75000
 - assertVisible: "Your next drive starts here."
 - scrollUntilVisible:
     element: "View Synthetic Acceptance Car"
@@ -107,6 +157,7 @@ appId: com.renta4wheel.customer.acceptance
 - scrollUntilVisible:
     element: "Documents & checkout preparation"
     direction: DOWN
+    centerElement: true
 - tapOn: "Documents & checkout preparation"
 - assertVisible: "Prepare your reservation"
 # Identity entry blocks screenshots intentionally. Do not capture this screen.
@@ -217,7 +268,18 @@ appId: com.renta4wheel.customer.acceptance
     element: "Account & devices"
     direction: DOWN
 - tapOn: "Account & devices"
-- assertVisible: "Log out this device"
+# Device rows change layout after the Account query resolves. Await its real
+# result before locating logout so a stale pre-load coordinate cannot hit a card.
+- extendedWaitUntil:
+    visible: "Revoke .* device"
+    timeout: 20000
+- scrollUntilVisible:
+    element: "Log out this device"
+    direction: DOWN
+    centerElement: true
+- assertVisible:
+    text: "Log out this device"
+    enabled: true
 - tapOn: "Log out this device"
 - assertVisible: "Your next drive starts here."
 - tapOn: "Your trips"

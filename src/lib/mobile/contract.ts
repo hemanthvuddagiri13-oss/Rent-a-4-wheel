@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createHoldSchema, checkoutSchema } from "@/lib/validations/reservation";
+import { handoffSchema, calendarInput, hostAvailabilityInput } from "@/lib/validations/host-mobile";
 
 const id = z.string().min(1).max(128), date = z.iso.datetime(), cents = z.number().int(), empty = z.object({}).strict();
 const success = z.object({ success: z.boolean() }).strict(), identifier = z.object({ id }).strict();
@@ -51,7 +52,7 @@ export const mobileOperations: MobileOperation[] = [
   post("finalizeUpload", "/uploads/{id}/finalize", z.string(), identifier, { binary: "request" }),
   post("documentAccess", "/files/access", z.object({ documentId: id }).strict(), z.object({ capability: z.string(), expiresInSeconds: z.literal(60), documentId: id }).strict(), { idempotent: false }),
   get("privateDocument", "/files/{id}", z.string(), { binary: "response", capability: true, responseMediaTypes: ["image/jpeg", "image/png", "image/webp"] }),
-  get("reports", "/reservations/{id}/reports", items(z.object({ id, phase: z.string(), submittedByRole: z.string(), mileage: cents, fuelLevel: cents, damageNotes: z.string().nullable(), acceptedAt: date.nullable(), photos: z.array(z.object({ id, category: photoCategory }).strict()) }).strict())),
+  get("reports", "/reservations/{id}/reports", items(z.object({ id, phase: z.string(), submittedByRole: z.string(), own: z.boolean(), mileage: cents, fuelLevel: cents, damageNotes: z.string().nullable(), acceptedAt: date.nullable(), photos: z.array(z.object({ id, category: photoCategory }).strict()) }).strict())),
   get("reportPhoto", "/reservations/{id}/reports/{reportId}/photos/{photoId}", z.string(), { binary: "response", responseMediaTypes: ["image/jpeg", "image/png", "image/webp"] }),
   post("submitReport", "/reservations/{id}/reports", reportInput, identifier),
   post("acceptReport", "/reservations/{id}/reports/{reportId}/accept", empty, success),
@@ -67,6 +68,12 @@ export const mobileOperations: MobileOperation[] = [
   post("replyCase", "/cases/{id}/reply", z.object({ body: z.string().min(1).max(5000), version: z.number().int().min(0) }).strict(), identifier),
   post("saveReview", "/reviews", review, identifier),
   get("hostFleet", "/host/fleet", page(vehicle.extend({ status: z.string(), listingApproval: z.string() })), { paginated: true }),
+  get("hostContext", "/host/context", z.object({ role: z.enum(["OWNER", "MANAGER", "STAFF"]), name: z.string(), canManageFleet: z.boolean(), canViewEarnings: z.boolean(), fleetCount: cents, upcomingCount: cents, activeCount: cents, liveFinanceEnabled: z.literal(false) }).strict()),
+  get("hostVehicle", "/host/vehicles/{id}", z.object({ id, year: cents, make: z.string(), model: z.string(), description: z.string().nullable(), rules: z.string().nullable(), location: z.string(), mileage: cents, status: z.string(), listingApproval: z.string(), isDemo: z.boolean(), isBookable: z.boolean() }).strict()),
+  post("hostCalendar", "/host/vehicles/{id}/calendar", calendarInput, z.object({ blocks: z.array(z.object({ id, startAt: date, endAt: date, reason: z.string(), notes: z.string().nullable() }).strict()), reservations: z.array(z.object({ id, confirmationNumber: z.string(), status: z.string(), pickupAt: date, returnAt: date }).strict()), truncated: z.boolean() }).strict(), { idempotent: false }),
+  post("hostAvailability", "/host/vehicles/{id}/availability", hostAvailabilityInput, success),
+  get("hostTrip", "/host/trips/{id}", z.object({ id, customerName: z.string(), handoffVerified: z.boolean(), keysReleased: z.boolean(), keyReleaseGate: z.object({ canStart: z.boolean(), reasons: z.array(z.string()) }).strict() }).strict()),
+  post("hostHandoff", "/host/trips/{id}/handoff", handoffSchema, z.object({ id, verified: z.boolean() }).strict()),
   get("hostReservations", "/host/reservations", page(reservation), { paginated: true }),
   get("hostEarnings", "/host/earnings", page(z.object({ id, reservationId: id, currency: z.string(), grossCents: cents, commissionCents: cents, hostDiscountCents: cents, netCents: cents, refundedCents: cents, adjustmentCents: cents, held: z.boolean(), payoutEnabled: z.literal(false) }).strict()), { paginated: true }),
 ];

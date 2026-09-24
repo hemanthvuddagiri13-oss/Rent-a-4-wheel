@@ -1,5 +1,47 @@
 import { expect, it, vi } from 'vitest';
 import { Session, SignInRequired, type Credentials } from '../packages/mobile-client/src/session';
+import { CaptureLock } from '../packages/mobile-client/src/capture-lock';
+
+it('overlapping private views share one acknowledged native capture lock until the last release', async () => {
+  let acknowledge!: () => void;
+  const barrier = new Promise<void>(resolve => { acknowledge = resolve; });
+  const driver = { prevent: vi.fn(() => barrier), allow: vi.fn(async () => {}) };
+  const lock = new CaptureLock(driver), screen = lock.acquire(), preview = lock.acquire();
+  let ready = false; void preview.ready.then(() => { ready = true; });
+  await Promise.resolve(); expect(driver.prevent).toHaveBeenCalledTimes(1); expect(ready).toBe(false);
+  acknowledge(); await Promise.all([screen.ready, preview.ready]); expect(ready).toBe(true);
+  await preview.release(); await preview.release(); expect(driver.allow).not.toHaveBeenCalled();
+  await screen.release(); expect(driver.allow).toHaveBeenCalledTimes(1); expect(driver.prevent).toHaveBeenCalledTimes(1);
+});
+it('private view remount during native release waits for re-protection without overlapping native calls', async () => {
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const calls: string[] = [];
+  const lock = new CaptureLock({ prevent: async () => { calls.push('prevent'); }, allow: async () => { calls.push('allow:start'); await barrier; calls.push('allow:end'); } });
+  const first = lock.acquire(); await first.ready; const releasing = first.release(); await Promise.resolve();
+  const next = lock.acquire(); let ready = false; void next.ready.then(() => { ready = true; });
+  await Promise.resolve(); expect(ready).toBe(false); expect(calls).toEqual(['prevent', 'allow:start']);
+  release(); await releasing; await next.ready;
+  expect(calls).toEqual(['prevent', 'allow:start', 'allow:end', 'prevent']); expect(ready).toBe(true);
+  await next.release();
+});
+it('uncertain native capture protection fails closed for current and later private views', async () => {
+  const driver = { prevent: vi.fn(async () => { throw new Error('native protection failed'); }), allow: vi.fn(async () => {}) };
+  const lock = new CaptureLock(driver), first = lock.acquire();
+  await expect(first.ready).rejects.toThrow('native protection failed');
+  await expect(first.release()).rejects.toThrow('native protection failed');
+  const next = lock.acquire(); await expect(next.ready).rejects.toThrow('native protection failed');
+  expect(driver.prevent).toHaveBeenCalledTimes(1); expect(driver.allow).not.toHaveBeenCalled();
+  await expect(next.release()).rejects.toThrow('native protection failed');
+});
+it('uncertain native release cannot make a later private view assume protection is still active', async () => {
+  const driver = { prevent: vi.fn(async () => {}), allow: vi.fn(async () => { throw new Error('native release uncertain'); }) };
+  const lock = new CaptureLock(driver), first = lock.acquire(); await first.ready;
+  await expect(first.release()).rejects.toThrow('native release uncertain');
+  const next = lock.acquire(); await expect(next.ready).rejects.toThrow('native release uncertain');
+  expect(driver.prevent).toHaveBeenCalledTimes(1); expect(driver.allow).toHaveBeenCalledTimes(1);
+  await expect(next.release()).rejects.toThrow('native release uncertain');
+});
 const credentials = (accessToken = 'access-old', expired = false): Credentials => ({ tokenType: 'Bearer', accessToken, refreshToken: 'refresh-' + accessToken, sessionId: 'synthetic-session', accessExpiresAt: new Date(Date.now() + (expired ? -1000 : 300000)).toISOString(), refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() });
 const response = (data: unknown, status = 200) => new Response(JSON.stringify({ data, error: status >= 400 ? { code: 'UNAUTHORIZED' } : null, requestId: 'synthetic-request' }), { status, headers: { 'x-api-version': '1' } });
 function setup(c = credentials()) {
@@ -85,4 +127,16 @@ it.each([200, 401])('discards an old account response (%s) without retrying its 
   expect(f.transport).toHaveBeenCalledTimes(2);
   expect(await f.session.token()).toBe('new-account');
   expect(JSON.parse(f.stored()!).credentials.accessToken).toBe('new-account');
+});
+
+it('pending reply releases an authoritative conflict but retains uncertain service failures', async () => {
+  const { PendingReply } = await import('../packages/mobile-client/src/pending-reply');
+  const { MobileApiError } = await import('../packages/mobile-client/src');
+  const pending = new PendingReply(), first = { id: 'synthetic', body: 'One reply', version: 1 };
+  await expect(pending.send(first, async () => { throw new MobileApiError(503, 'UNAVAILABLE', 'synthetic'); })).rejects.toMatchObject({ status: 503 });
+  expect(pending.pending).toBe(true);
+  await expect(pending.send({ ...first, version: 2 }, async frozen => { expect(frozen.version).toBe(1); throw new MobileApiError(409, 'CONFLICT', 'synthetic'); })).rejects.toMatchObject({ status: 409 });
+  expect(pending.pending).toBe(false);
+  await pending.send({ ...first, version: 3 }, async frozen => { expect(frozen.version).toBe(3); });
+  expect(pending.pending).toBe(false);
 });

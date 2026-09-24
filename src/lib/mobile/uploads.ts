@@ -50,7 +50,7 @@ export async function finalizeMobileUpload(req: Request, id: string) {
     stored = { ...object, mimeType: clean.mimeType, sha256: clean.sha256, size: clean.buffer.length };
   }
   return mobileMutation(req, "document.finalize", { id, sha256: hash }, async (tx, userId) => {
-    if (upload.reservationId) { await lockReservation(tx, upload.reservationId); await mobileReservationAccess(tx, userId, upload.reservationId, upload.type !== "INSPECTION"); }
+    if (upload.reservationId) { await lockReservation(tx, upload.reservationId); await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`; await mobileReservationAccess(tx, userId, upload.reservationId, upload.type !== "INSPECTION"); }
   }, async (tx, userId) => {
     await tx.$queryRaw`SELECT "id" FROM "MobileUpload" WHERE "id"=${id} FOR UPDATE`;
     const current = await tx.mobileUpload.findUniqueOrThrow({ where: { id } });

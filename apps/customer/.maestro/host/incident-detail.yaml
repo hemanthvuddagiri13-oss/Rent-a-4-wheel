@@ -1,0 +1,10 @@
+appId: com.renta4wheel.host.acceptance
+---
+- extendedWaitUntil:
+    visible:
+      id: "case-detail-title"
+      text: "Synthetic lost spare key"
+    timeout: 60000
+- assertNotVisible:
+    id: "input-Incident title"
+- assertVisible: "Synthetic incident for host acceptance only."

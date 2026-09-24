@@ -1,0 +1,12 @@
+appId: com.renta4wheel.host.acceptance
+---
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Back"

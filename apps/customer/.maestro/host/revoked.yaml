@@ -1,0 +1,28 @@
+appId: com.renta4wheel.host.acceptance
+---
+# Same installed app and same bearer session, revoked externally in PostgreSQL.
+- scrollUntilVisible:
+    element: "Refresh host access"
+    direction: DOWN
+- tapOn: "Refresh host access"
+- scrollUntilVisible:
+    element: "Hosting requires a current owner or employee membership.*"
+    direction: UP
+- assertVisible: "This action is not available for your current access.*"
+- takeScreenshot: host-revoked
+- scrollUntilVisible:
+    element: "Account & devices"
+    direction: DOWN
+- tapOn: "Account & devices"
+- scrollUntilVisible:
+    element: "Log out this device"
+    direction: DOWN
+- tapOn: "Log out this device"
+- runFlow:
+    file: login.yaml
+    env:
+      PHONE: "+12025550104"
+- assertVisible: "Unrelated synthetic host.*OWNER"
+- tapOn: "Fleet & calendar"
+- assertVisible: "No vehicles are assigned to this business."
+- takeScreenshot: host-unrelated

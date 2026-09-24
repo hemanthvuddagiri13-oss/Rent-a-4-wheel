@@ -30,9 +30,9 @@ export function Upload({ label, kind, reservationId, done }: { label: string; ki
       const initialized = await mutate('initializeUpload', { body: { reservationId, type: kind, mimeType: mimeType as 'image/jpeg' | 'image/png' | 'image/webp', size: bytes.length, sha256 } });
       setProgress(`Uploading ${(bytes.length / 1024).toFixed(0)} KB and waiting for security scanning…`);
       const result = await mutate('finalizeUpload', { params: { id: initialized.id }, body: bytes, contentType: mimeType as 'image/jpeg' | 'image/png' | 'image/webp' });
-      done(result.id, initialized.id); setProgress('Upload completed and scanned. Eligibility review may still be pending.'); setAsset(null);
+      done(result.id, initialized.id); setProgress(`${label}: Upload completed and scanned. Eligibility review may still be pending.`); setAsset(null);
       if (asset.uri.startsWith(Paths.cache.uri)) new File(asset.uri).delete();
-    } catch (e) { setError(friendly(e)); setProgress('Upload not confirmed. Keep this screen open and retry the same photo after reconnecting.'); }
+    } catch (e) { setError(friendly(e)); setProgress(`${label}: Upload not confirmed. Keep this screen open and retry the same photo after reconnecting.`); }
     finally { setBusy(false); lock.current = false; }
   }
   return <Card><Hint>{label}. Camera access is only used when you choose to capture a photo. Evidence is stored privately and scanned before use.</Hint><Button title={`Take ${label}`} disabled={busy} onPress={() => void choose(true)} /><Button title={`Choose ${label}`} disabled={busy} onPress={() => void choose(false)} />{asset && <Button title={`Upload ${label}`} disabled={busy} onPress={() => void send()} />}<Hint>{progress}</Hint><ErrorText message={error} /></Card>;

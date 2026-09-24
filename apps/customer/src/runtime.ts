@@ -6,6 +6,7 @@ import { Session, SignInRequired } from './session';
 import { boundedFetch } from './transport';
 export type Output<K extends keyof MobileOperations> = MobileOperations[K]['output'];
 export const origin: string = Constants.expoConfig?.extra?.apiOrigin;
+export const hostApp = Constants.expoConfig?.extra?.appMode === 'host';
 const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
 class SecureStorageUnavailable extends Error {}
 async function secureStorage<T>(work: () => Promise<T>): Promise<T> {

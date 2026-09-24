@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { activeHostEmployeeWhere } from "@/lib/host-access";
+import { domainTransaction, type DomainDatabase } from "@/lib/domain-transaction";
 
 export class MarketplaceError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -32,6 +33,7 @@ export async function marketplaceVehicle(tx: Prisma.TransactionClient, userId: s
   // Same guard ordering as checkout; never acquire a vehicle row before its guard.
   await tx.$queryRaw`SELECT financial_guard_xact(${'vehicle:' + id})`;
   await tx.$queryRaw`SELECT "id" FROM "Vehicle" WHERE "id"=${id} FOR UPDATE`;
+  await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id"=${userId} FOR UPDATE`;
   const context = await marketplaceHost(tx, userId, manage);
   const vehicle = await tx.vehicle.findUnique({ where: { id } });
   if (!vehicle || vehicle.hostId !== context.host.id) throw new MarketplaceError("Vehicle unavailable.", 404);
@@ -105,7 +107,7 @@ export async function saveHostProfile(userId: string, input: unknown) {
   });
 }
 
-export async function hostCommand(userId: string, input: unknown) {
+export async function hostCommand(userId: string, input: unknown, db: DomainDatabase = prisma) {
   const data = z.discriminatedUnion("action", [
     z.object({ action: z.literal("owner"), name: text, email: z.string().email(), phone: text }),
     z.object({ action: z.literal("employee"), email: z.string().email(), role: z.enum(["MANAGER", "STAFF"]) }),
@@ -115,7 +117,7 @@ export async function hostCommand(userId: string, input: unknown) {
     z.object({ action: z.literal("availability"), vehicleId: text, isBookable: z.boolean() }),
     z.object({ action: z.literal("maintenance"), vehicleId: text, service: z.enum(["OIL_CHANGE", "TIRES", "BRAKES", "INSPECTION", "REGISTRATION", "INSURANCE", "REPAIR", "CLEANING", "OTHER"]), serviceDate: date, mileage: z.coerce.number().int().min(0), costCents: cents, nextServiceDate: date, notes: z.string().max(2000) }),
   ]).parse(input);
-  return prisma.$transaction(async tx => {
+  return domainTransaction(db, async tx => {
     const context = "vehicleId" in data ? await marketplaceVehicle(tx, userId, data.vehicleId, true) : await marketplaceHost(tx, userId, true);
     if (data.action === "owner") await tx.vehicleOwner.create({ data: { hostId: context.host.id, name: data.name, email: data.email, phone: data.phone } });
     if (data.action === "employee" || data.action === "removeEmployee") {

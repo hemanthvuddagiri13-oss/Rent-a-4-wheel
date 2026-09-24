@@ -6315,6 +6315,9 @@
                               "submittedByRole": {
                                 "type": "string"
                               },
+                              "own": {
+                                "type": "boolean"
+                              },
                               "mileage": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
@@ -6376,6 +6379,7 @@
                               "id",
                               "phase",
                               "submittedByRole",
+                              "own",
                               "mileage",
                               "fuelLevel",
                               "damageNotes",
@@ -9113,6 +9117,1111 @@
           },
           "503": {
             "$ref": "#/components/responses/TypedError"
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/host/context": {
+      "get": {
+        "operationId": "hostContext",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "OWNER",
+                            "MANAGER",
+                            "STAFF"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "canManageFleet": {
+                          "type": "boolean"
+                        },
+                        "canViewEarnings": {
+                          "type": "boolean"
+                        },
+                        "fleetCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "upcomingCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "activeCount": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "liveFinanceEnabled": {
+                          "type": "boolean",
+                          "const": false
+                        }
+                      },
+                      "required": [
+                        "role",
+                        "name",
+                        "canManageFleet",
+                        "canViewEarnings",
+                        "fleetCount",
+                        "upcomingCount",
+                        "activeCount",
+                        "liveFinanceEnabled"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/host/vehicles/{id}": {
+      "get": {
+        "operationId": "hostVehicle",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "year": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "make": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "rules": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "location": {
+                          "type": "string"
+                        },
+                        "mileage": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "listingApproval": {
+                          "type": "string"
+                        },
+                        "isDemo": {
+                          "type": "boolean"
+                        },
+                        "isBookable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "year",
+                        "make",
+                        "model",
+                        "description",
+                        "rules",
+                        "location",
+                        "mileage",
+                        "status",
+                        "listingApproval",
+                        "isDemo",
+                        "isBookable"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/host/vehicles/{id}/calendar": {
+      "post": {
+        "operationId": "hostCalendar",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "blocks": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "startAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              },
+                              "endAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              },
+                              "reason": {
+                                "type": "string"
+                              },
+                              "notes": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "startAt",
+                              "endAt",
+                              "reason",
+                              "notes"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "reservations": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128
+                              },
+                              "confirmationNumber": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "pickupAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              },
+                              "returnAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "confirmationNumber",
+                              "status",
+                              "pickupAt",
+                              "returnAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "blocks",
+                        "reservations",
+                        "truncated"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "startAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  "endAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "startAt",
+                  "endAt"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/host/vehicles/{id}/availability": {
+      "post": {
+        "operationId": "hostAvailability",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "success": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "success"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "const": "block"
+                      },
+                      "startAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "endAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "MAINTENANCE",
+                          "OWNER_REQUEST",
+                          "OTHER"
+                        ]
+                      },
+                      "notes": {
+                        "type": "string",
+                        "maxLength": 2000
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "startAt",
+                      "endAt",
+                      "reason",
+                      "notes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "const": "unblock"
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "const": "availability"
+                      },
+                      "isBookable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "isBookable"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/host/trips/{id}": {
+      "get": {
+        "operationId": "hostTrip",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "customerName": {
+                          "type": "string"
+                        },
+                        "handoffVerified": {
+                          "type": "boolean"
+                        },
+                        "keysReleased": {
+                          "type": "boolean"
+                        },
+                        "keyReleaseGate": {
+                          "type": "object",
+                          "properties": {
+                            "canStart": {
+                              "type": "boolean"
+                            },
+                            "reasons": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "canStart",
+                            "reasons"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "customerName",
+                        "handoffVerified",
+                        "keysReleased",
+                        "keyReleaseGate"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/host/trips/{id}/handoff": {
+      "post": {
+        "operationId": "hostHandoff",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{16,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "verified": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "verified"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "licenseMatchesUpload": {
+                    "type": "boolean"
+                  },
+                  "physicalLicenseUnexpired": {
+                    "type": "boolean"
+                  },
+                  "selfieMatchesCustomer": {
+                    "type": "boolean"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "licenseMatchesUpload",
+                  "physicalLicenseUnexpired",
+                  "selfieMatchesCustomer"
+                ],
+                "additionalProperties": false
+              }
+            }
           }
         }
       }

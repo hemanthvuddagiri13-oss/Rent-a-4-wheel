@@ -8,7 +8,7 @@ import { createHash, createHmac } from "node:crypto";
 import sharp from "sharp";
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { createMobileClient } from "../packages/mobile-client/src";
-const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
+const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), providerRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
 vi.mock("@/lib/prisma", async () => {
   const { PrismaClient } = await import("@prisma/client");
   const url = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!); url.pathname = "/" + fixture.name;
@@ -17,7 +17,8 @@ vi.mock("@/lib/prisma", async () => {
 // Only the external email delivery boundary is replaced; codes, auth, HTTP,
 // sessions, domain transactions and locks all execute against real PostgreSQL.
 vi.mock("@/lib/email", () => ({ sendEmail: async ({ html }: { html: string }) => { fixture.emails.push(html); return { sent: true }; } }));
-vi.mock("@/lib/storage", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/storage")>(), readPrivateDocument: fixture.storageRead, storePrivateDocument: fixture.storageWrite }));
+vi.mock("@/lib/storage", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/storage")>(), readPrivateDocument: async (key: string) => ({ revalidate: async () => {}, ...await fixture.storageRead(key) }), storePrivateDocument: fixture.storageWrite }));
+vi.mock("@/lib/s3-private", async original => ({ ...await original<typeof import("@/lib/s3-private")>(), readS3Private: fixture.providerRead }));
 vi.mock("@/lib/clamav", () => ({ scanWithClamAv: fixture.scan }));
 vi.mock("@/lib/mobile/sms-provider", () => ({ smsProvider: () => ({ start: fixture.smsStart, check: fixture.smsCheck }) }));
 import { prisma } from "@/lib/prisma";
@@ -55,6 +56,7 @@ beforeEach(async () => {
   fixture.emails.length = 0;
   fixture.smsStart.mockReset().mockImplementation(async () => "fixture:" + crypto.randomUUID());
   fixture.smsCheck.mockReset().mockImplementation(async (_sid: string, code: string) => code === "123456");
+  fixture.providerRead.mockReset();
   fixture.storageRead.mockReset().mockResolvedValue({ buffer: Buffer.from("synthetic private bytes") });
   fixture.scan.mockReset().mockResolvedValue({ status: "CLEAN" });
   fixture.storageWrite.mockReset().mockImplementation(async (bytes: Buffer, mimeType: string, stableId: string) => {
@@ -864,4 +866,246 @@ it("phone-only accounts cannot acquire a hold before linking a verified email", 
   await prisma.user.update({ where: { id: identity.userId }, data: { emailVerified: null } });
   expect((await post("reservations/hold", input, c.accessToken, key)).status).toBe(409);
   expect(await prisma.reservation.count()).toBe(2);
+});
+
+// Phase 7C: real HTTP handlers and disposable PostgreSQL; only external delivery,
+// malware and storage boundaries above are fixtures.
+it.each(['removed', 'inactive', 'expired'])('host mobile %s membership blocks every new tenant operation with the same token', async change => {
+  const f = await tenantFixture(), id = f.reservation.id;
+  for (const c of [f.owner, f.employee]) {
+    expect((await get('host/context', c.accessToken)).status).toBe(200);
+    expect((await get(`host/vehicles/${f.vehicle.id}`, c.accessToken)).status).toBe(200);
+    expect((await get(`host/trips/${id}`, c.accessToken)).status).toBe(200);
+  }
+  expect((await (await get('host/context', f.employee.accessToken)).json()).data).toMatchObject({ role: 'STAFF', canViewEarnings: false, canManageFleet: false, liveFinanceEnabled: false });
+  const window = { startAt: '2055-04-01T00:00:00Z', endAt: '2055-05-01T00:00:00Z' };
+  expect((await post(`host/vehicles/${f.vehicle.id}/calendar`, window, f.employee.accessToken)).status).toBe(200);
+  expect((await post(`host/vehicles/${f.vehicle.id}/availability`, { action: 'availability', isBookable: false }, f.employee.accessToken, crypto.randomUUID())).status).toBe(403);
+  if (change === 'removed') await prisma.hostEmployee.delete({ where: { id: f.membership.id } });
+  else await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: change === 'inactive' ? { isActive: false } : { expiresAt: new Date(0) } });
+  for (const path of ['host/context', `host/vehicles/${f.vehicle.id}`, `host/trips/${id}`]) expect((await get(path, f.employee.accessToken)).status).toBe(403);
+  expect((await post(`host/vehicles/${f.vehicle.id}/calendar`, window, f.employee.accessToken)).status).toBe(403);
+  expect((await post(`host/trips/${id}/handoff`, { licenseMatchesUpload: false, physicalLicenseUnexpired: false, selfieMatchesCustomer: false }, f.employee.accessToken, crypto.randomUUID())).status).toBe(403);
+  expect(await prisma.identityHandoffVerification.count()).toBe(0);
+  expect((await get('host/context', f.owner.accessToken)).status).toBe(200);
+  expect((await get('host/context', f.customer.accessToken)).status).toBe(403);
+  const unrelated = await prisma.user.update({ where: { email: f.other.email }, data: { role: 'HOST' } });
+  await prisma.hostProfile.create({ data: { userId: unrelated.id, legalName: 'Other host', onboardingStatus: 'APPROVED' } });
+  expect((await get(`host/vehicles/${f.vehicle.id}`, f.other.accessToken)).status).toBe(404);
+  expect((await get(`host/trips/${id}`, f.other.accessToken)).status).toBe(404);
+});
+async function cleanHandoffEvidence(f: Awaited<ReturnType<typeof tenantFixture>>) {
+  for (const type of ['LICENSE_FRONT', 'LICENSE_BACK', 'SELFIE_WITH_LICENSE'] as const) await prisma.driverDocument.create({ data: { userId: f.user.id, reservationId: f.reservation.id, type, storageKey: `local:synthetic-${type}.png`, mimeType: 'image/png', fileSizeBytes: 4, contentSha256: 'a'.repeat(64), malwareScanStatus: 'CLEAN', retentionExpiresAt: new Date('2058-01-01') } });
+}
+const positiveHandoff = { licenseMatchesUpload: true, physicalLicenseUnexpired: true, selfieMatchesCustomer: true };
+it('host HTTP handoff requires clean evidence, replays once, and cannot start or unlock a financially blocked trip', async () => {
+  const f = await tenantFixture(), path = `host/trips/${f.reservation.id}/handoff`, key = crypto.randomUUID();
+  expect((await post(path, positiveHandoff, f.owner.accessToken, key)).status).toBe(409);
+  await cleanHandoffEvidence(f);
+  for (let i = 0; i < 2; i++) expect((await post(path, positiveHandoff, f.owner.accessToken, key)).status).toBe(200);
+  expect(await prisma.identityHandoffVerification.count()).toBe(1);
+  expect(await prisma.tripEvent.count({ where: { type: 'IDENTITY_HANDOFF_RECORDED' } })).toBe(1);
+  expect((await post(`reservations/${f.reservation.id}/start`, {}, f.owner.accessToken, crypto.randomUUID())).status).toBe(404);
+  expect((await post(`reservations/${f.reservation.id}/keys`, {}, f.owner.accessToken, crypto.randomUUID())).status).toBe(409);
+  expect(await prisma.tripChecklist.count()).toBe(0); expect(await prisma.trip.count()).toBe(0);
+  expect(await prisma.reservation.findUnique({ where: { id: f.reservation.id } })).toMatchObject({ status: 'CONFIRMED', financialDisposition: 'OPEN' });
+  expect(await prisma.financialOperation.count()).toBe(0);
+  await prisma.driverDocument.updateMany({ data: { malwareScanStatus: 'QUARANTINED' } });
+  expect((await post(path, positiveHandoff, f.employee.accessToken, crypto.randomUUID())).status).toBe(409);
+});
+it('host calendar blocks preserve overlap guards and receipt idempotency', async () => {
+  const f = await tenantFixture(), path = `host/vehicles/${f.vehicle.id}/availability`;
+  const body = { action: 'block', startAt: '2055-04-01T12:00:00Z', endAt: '2055-04-02T12:00:00Z', reason: 'MAINTENANCE', notes: '' };
+  expect((await post(path, body, f.owner.accessToken, crypto.randomUUID())).status).toBe(409);
+  const safe = { ...body, startAt: '2055-04-03T12:00:00Z', endAt: '2055-04-04T12:00:00Z' }, key = crypto.randomUUID();
+  for (let i = 0; i < 2; i++) expect((await post(path, safe, f.owner.accessToken, key)).status).toBe(200);
+  expect(await prisma.vehicleBlock.count()).toBe(1);
+  const window = { startAt: '2055-04-01T00:00:00Z', endAt: '2055-05-01T00:00:00Z' };
+  const response = await post(`host/vehicles/${f.vehicle.id}/calendar`, window, f.employee.accessToken); expect(response.status).toBe(200);
+  expect((await response.json()).data).toMatchObject({ blocks: [{ reason: 'MAINTENANCE' }], reservations: [{ id: f.reservation.id }], truncated: false });
+});
+it.each(['identity', 'condition'])('host private %s read fails closed when membership is revoked during storage IO', async kind => {
+  const f = await tenantFixture(); let path: string, capability: string | undefined;
+  if (kind === 'identity') {
+    await cleanHandoffEvidence(f); const doc = await prisma.driverDocument.findFirstOrThrow(); path = 'files/' + doc.id;
+    capability = (await (await post('files/access', { documentId: doc.id }, f.employee.accessToken)).json()).data.capability;
+  } else {
+    const key = 'local:barrier.png'; await prisma.privateObject.create({ data: { key, sha256: 'a'.repeat(64), size: 4, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+    const report = await prisma.conditionReport.create({ data: { reservationId: f.reservation.id, phase: 'PRE_TRIP', submittedByRole: 'HOST', submittedById: f.membership.userId, mileage: 100, fuelLevel: 50, photos: { create: { category: 'EXTERIOR', storageKey: key } } }, include: { photos: true } });
+    path = `reservations/${f.reservation.id}/reports/${report.id}/photos/${report.photos[0].id}`;
+  }
+  const entered = deferred<void>(), release = deferred<void>();
+  fixture.storageRead.mockImplementation(async () => { entered.resolve(); await release.promise; return { buffer: Buffer.from('PRIVATE_SENTINEL') }; });
+  const pending = fetch(base + '/api/v1/mobile/' + path, { headers: { authorization: 'Bearer ' + f.employee.accessToken, ...(capability ? { 'x-file-access': capability } : {}) } });
+  await entered.promise;
+  try { await prisma.hostEmployee.delete({ where: { id: f.membership.id } }); } finally { release.resolve(); }
+  const result = await pending; expect(result.status).toBe(403); expect(await result.text()).not.toContain('PRIVATE_SENTINEL');
+  expect(fixture.storageRead).toHaveBeenCalledTimes(1);
+});
+it.each([
+  ['direct', 'quarantine'], ['legacy', 'quarantine'], ['direct', 'deleted'],
+  ['direct', 'write-state'], ['direct', 'identity'], ['legacy', 'mapping'],
+] as const)('identity HTTP read revalidates effective %s object after provider IO: %s', async (mode, mutation) => {
+  const f = await tenantFixture(), bytes = Buffer.from('PRIVATE_IO_BARRIER_SENTINEL'), sha256 = createHash('sha256').update(bytes).digest('hex');
+  const effectiveKey = 's3:effective.png', sourceKey = mode === 'legacy' ? 's3:legacy-source.png' : effectiveKey;
+  await prisma.privateObject.create({ data: { key: effectiveKey, sha256, size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+  const doc = await prisma.driverDocument.create({ data: { userId: f.user.id, reservationId: f.reservation.id, type: 'LICENSE_FRONT', storageKey: sourceKey, mimeType: 'image/png', fileSizeBytes: bytes.length, contentSha256: sha256, malwareScanStatus: 'CLEAN', retentionExpiresAt: new Date('2058-01-01') } });
+  if (mode === 'legacy') {
+    await prisma.privateObject.create({ data: { key: sourceKey, sha256: 'a'.repeat(64), size: 3, mimeType: 'image/png', state: 'QUARANTINED', writeState: 'STORED' } });
+    await prisma.operationsJob.create({ data: { key: 'legacy:barrier', kind: 'LEGACY_IMPORT', resourceId: sourceKey, state: 'DONE' } });
+    await prisma.privateValidation.create({ data: { sourceKey, targetKey: effectiveKey, resourceType: 'IDENTITY', resourceId: doc.id, sourceSha256: 'a'.repeat(64), targetSha256: sha256, mimeType: 'image/png', bytes, evidence: {} } });
+  }
+  const real = await vi.importActual<typeof import('@/lib/storage')>('@/lib/storage');
+  fixture.storageRead.mockImplementation(real.readPrivateDocument);
+  fixture.providerRead.mockResolvedValue(bytes);
+  const capability = (await (await post('files/access', { documentId: doc.id }, f.employee.accessToken)).json()).data.capability;
+  const read = () => fetch(base + '/api/v1/mobile/files/' + doc.id, { headers: { authorization: 'Bearer ' + f.employee.accessToken, 'x-file-access': capability } });
+  const control = await read(); expect(control.status).toBe(200); expect(Buffer.from(await control.arrayBuffer())).toEqual(bytes);
+  const [a, b] = await independentClients(), entered = deferred<void>(), release = deferred<void>();
+  fixture.providerRead.mockReset().mockImplementation(async () => { entered.resolve(); await release.promise; return bytes; });
+  const pending = read();
+  try {
+    await entered.promise;
+    if (mutation === 'mapping') {
+      await b.privateObject.create({ data: { key: 's3:replacement.png', sha256, size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+      await expect(b.privateValidation.update({ where: { sourceKey }, data: { targetKey: 's3:replacement.png' } })).rejects.toThrow('Private validation evidence is immutable');
+      expect(await a.privateValidation.findUnique({ where: { sourceKey } })).toMatchObject({ targetKey: effectiveKey, targetSha256: sha256 });
+      await b.privateObject.update({ where: { key: effectiveKey }, data: { state: 'QUARANTINED' } });
+    } else if (mutation === 'identity') {
+      await expect(b.privateObject.update({ where: { key: effectiveKey }, data: { sha256: 'b'.repeat(64) } })).rejects.toThrow('Immutable private object evidence');
+      expect(await a.privateObject.findUnique({ where: { key: effectiveKey } })).toMatchObject({ sha256 });
+      await b.privateObject.update({ where: { key: effectiveKey }, data: { state: 'QUARANTINED' } });
+    } else await b.privateObject.update({ where: { key: effectiveKey }, data: mutation === 'quarantine' ? { state: 'QUARANTINED' } : mutation === 'deleted' ? { deletedAt: new Date() } : { writeState: 'UNCERTAIN' } });
+    expect(await a.driverDocument.findUnique({ where: { id: doc.id } })).toEqual(doc);
+    release.resolve();
+    const result = await pending; expect(result.status).toBe(500); expect(await result.text()).not.toContain(bytes.toString());
+    expect(fixture.providerRead).toHaveBeenCalledExactlyOnceWith(effectiveKey);
+    expect(await a.hostEmployee.findUnique({ where: { id: f.membership.id } })).not.toBeNull();
+    expect(await a.financialOperation.count()).toBe(0);
+  } finally { release.resolve(); await pending; await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it('host concurrent return uses independent connections and a reservation-lock barrier, committing the transition once', async () => {
+  const { tripCommand } = await import('@/lib/trip-experience');
+  const f = await tenantFixture(); await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: 'ACTIVE' } });
+  const [a, b] = await independentClients(), barrier = deferred<void>(); let arrivals = 0;
+  const wrap = (db: PrismaClient) => { let arrived = false; return db.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    if (!arrived && operation === '$queryRaw' && JSON.stringify(args).includes('release-control')) { arrived = true; if (++arrivals === 2) barrier.resolve(); await barrier.promise; } return query(args);
+  } } }) as unknown as PrismaClient; };
+  try {
+    await Promise.all([tripCommand(f.host.userId, f.reservation.id, 'return', wrap(a)), tripCommand(f.membership.userId, f.reservation.id, 'return', wrap(b))]);
+    expect(arrivals).toBe(2); expect(await prisma.tripEvent.count({ where: { type: 'TRIP_RETURN' } })).toBe(1);
+    expect(await prisma.reservation.findUnique({ where: { id: f.reservation.id } })).toMatchObject({ status: 'RETURN_IN_PROGRESS' });
+    expect(await prisma.financialOperation.count()).toBe(0);
+  } finally { await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it('host handoff waiting behind return sees the committed phase and cannot attest after pickup closed', async () => {
+  const { tripCommand } = await import('@/lib/trip-experience'), { recordIdentityHandoff } = await import('@/lib/identity-handoff');
+  const f = await tenantFixture(); await cleanHandoffEvidence(f); await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status: 'ACTIVE' } });
+  const [a, b] = await independentClients(), held = deferred<void>(), release = deferred<void>(), waiting = deferred<void>();
+  const first = a.$extends({ query: { reservation: { async updateMany({ args, query }) { const value = await query(args); held.resolve(); await release.promise; return value; } } } }) as unknown as PrismaClient;
+  const observedStatuses: string[] = [];
+  const second = b.$extends({ query: { reservation: { async findUnique({ args, query }) { const row = await query(args); if (args.include?.vehicle && row) observedStatuses.push(row.status ?? 'MISSING_STATUS'); return row; } }, $allOperations: async ({ operation, args, query }) => { if (operation === '$queryRaw' && JSON.stringify(args).includes('vehicle:')) waiting.resolve(); return query(args); } } }) as unknown as PrismaClient;
+  try {
+    const returning = tripCommand(f.host.userId, f.reservation.id, 'return', first); await held.promise;
+    const handoff = recordIdentityHandoff(f.membership.userId, f.reservation.id, positiveHandoff, second); const rejected = expect(handoff).rejects.toThrow('Pickup phase is closed');
+    await waiting.promise; release.resolve(); await returning; await rejected;
+    expect(observedStatuses).toEqual(['RETURN_IN_PROGRESS']);
+    expect(await prisma.identityHandoffVerification.count()).toBe(0); expect(await prisma.tripEvent.count({ where: { type: 'TRIP_RETURN' } })).toBe(1);
+  } finally { release.resolve(); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+it('interrupted support reply freezes its version across refreshed case state and HTTP replay commits exactly one reply', async () => {
+  const { PendingReply } = await import('../packages/mobile-client/src/pending-reply');
+  const f = await tenantFixture();
+  const opened = await post('cases', { kind: 'TICKET', reservationId: f.reservation.id, category: 'GENERAL', title: 'Synthetic recovery', body: 'Synthetic interrupted support reply.' }, f.owner.accessToken, crypto.randomUUID()); expect(opened.status).toBe(200);
+  const { id } = (await opened.json()).data;
+  const initial = (await (await get('cases/' + id, f.owner.accessToken)).json()).data;
+  let drop = true; const requests: string[] = [];
+  const client = createMobileClient({ baseUrl: base, allowLocalHttp: true, accessToken: async () => f.owner.accessToken, fetch: async (url, init) => {
+    requests.push(String(init?.body)); const response = await fetch(url, init);
+    if (drop) { drop = false; expect(response.status).toBe(200); await response.arrayBuffer(); throw new TypeError('Synthetic response lost after database commit'); }
+    return response;
+  } });
+  const pending = new PendingReply(), key = crypto.randomUUID();
+  const send = (input: { id: string; body: string; version: number }) => client.call('replyCase', { params: { id: input.id }, body: { body: input.body, version: input.version }, idempotencyKey: key });
+  await expect(pending.send({ id, body: 'One synthetic reply', version: initial.version }, send)).rejects.toThrow('Synthetic response lost');
+  expect(pending.pending).toBe(true);
+  const current = (await (await get('cases/' + id, f.owner.accessToken)).json()).data; expect(current.version).toBe(initial.version + 1);
+  await pending.send({ id, body: 'One synthetic reply', version: current.version }, send);
+  expect(pending.pending).toBe(false); expect(requests).toHaveLength(2); expect(requests[0]).toBe(requests[1]);
+  expect(await prisma.serviceCaseEvent.count({ where: { caseId: id, body: 'One synthetic reply' } })).toBe(1);
+  expect(await prisma.mobileMutation.count({ where: { operation: 'case.reply' } })).toBe(1);
+});
+
+function deferred<T>() { let resolve!: (value: T | PromiseLike<T>) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+it('host interrupted inspection upload resumes one durable intent, and another author cannot accept the report', async () => {
+  const f = await tenantFixture(), photos: Array<{ uploadId: string; category: 'EXTERIOR' | 'INTERIOR' }> = [];
+  for (const [index, category] of (['EXTERIOR', 'INTERIOR'] as const).entries()) {
+    const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: index ? 'blue' : 'red' } }).png().toBuffer();
+    const input = { reservationId: f.reservation.id, type: 'INSPECTION', mimeType: 'image/png', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length }, initKey = crypto.randomUUID();
+    const initialized = await post('uploads', input, f.employee.accessToken, initKey); expect(initialized.status).toBe(200); const id = (await initialized.json()).data.id;
+    const key = crypto.randomUUID(), send = () => fetch(base + `/api/v1/mobile/uploads/${id}/finalize`, { method: 'POST', headers: { authorization: 'Bearer ' + f.employee.accessToken, 'content-type': 'image/png', 'idempotency-key': key }, body: new Uint8Array(bytes) });
+    if (!index) { fixture.storageWrite.mockRejectedValueOnce(new Error('Synthetic interrupted storage write')); expect((await send()).status).toBe(500); }
+    expect((await send()).status).toBe(200); expect((await send()).status).toBe(200);
+    expect((await (await post('uploads', input, f.employee.accessToken, initKey)).json()).data.id).toBe(id);
+    photos.push({ uploadId: id, category });
+  }
+  expect(await prisma.mobileUpload.count()).toBe(2); expect(await prisma.privateObject.count()).toBe(2); expect(await prisma.driverDocument.count()).toBe(0);
+  expect(fixture.storageWrite).toHaveBeenCalledTimes(3); expect(fixture.scan).toHaveBeenCalledTimes(3);
+  const key = crypto.randomUUID(), path = `reservations/${f.reservation.id}/reports`, body = { phase: 'PRE_TRIP', mileage: 100, fuelLevel: 50, photos };
+  const response = await post(path, body, f.employee.accessToken, key); expect(response.status).toBe(200); const { id } = (await response.json()).data;
+  expect((await post(path, body, f.employee.accessToken, key)).status).toBe(200);
+  expect((await post(path + '/' + id + '/accept', {}, f.owner.accessToken, crypto.randomUUID())).status).toBe(403);
+  expect((await post(path + '/' + id + '/accept', {}, f.employee.accessToken, crypto.randomUUID())).status).toBe(200);
+  expect(await prisma.conditionReport.count()).toBe(1); expect(await prisma.conditionPhoto.count()).toBe(2);
+  const own = (await (await get(path, f.employee.accessToken)).json()).data.items[0]; expect(own.own).toBe(true);
+  const owner = (await (await get(path, f.owner.accessToken)).json()).data.items[0]; expect(owner.own).toBe(false);
+});
+it.each(['revoke', 'handoff'] as const)('host membership race: %s commits first at the shared User lock', async first => {
+  const { hostCommand } = await import('@/lib/marketplace'), { recordIdentityHandoff } = await import('@/lib/identity-handoff');
+  const f = await tenantFixture(); await cleanHandoffEvidence(f);
+  const [a, b] = await independentClients(), locked = signal(), release = signal(); let stopped = false;
+  const [winnerPid] = await a.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const [waiterPid] = await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const fenced = a.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    const result = await query(args);
+    if (!stopped && operation === '$queryRaw' && JSON.stringify(args).includes('User') && JSON.stringify(args).includes('FOR UPDATE')) { stopped = true; locked.resolve(); await release.promise; }
+    return result;
+  } } }) as unknown as PrismaClient;
+  const revoke = (db: PrismaClient) => hostCommand(f.host.userId, { action: 'removeEmployee', id: f.membership.id }, db);
+  const handoff = (db: PrismaClient) => recordIdentityHandoff(f.membership.userId, f.reservation.id, positiveHandoff, db);
+  const winner = (first === 'revoke' ? revoke : handoff)(fenced);
+  let results: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  try {
+    await locked.promise;
+    results = Promise.allSettled([winner, (first === 'revoke' ? handoff : revoke)(b)]);
+    let blocked = false; const deadline = Date.now() + 4000;
+    while (!blocked && Date.now() < deadline) {
+      const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`SELECT ${winnerPid.pid}::int = ANY(pg_blocking_pids(${waiterPid.pid}::int)) AS blocked`;
+      blocked = row.blocked;
+    }
+    expect(blocked).toBe(true); release.resolve(); const outcomes = await results;
+    expect(outcomes[0].status).toBe('fulfilled');
+    expect(outcomes[1].status).toBe(first === 'revoke' ? 'rejected' : 'fulfilled');
+    expect(await prisma.hostEmployee.count()).toBe(0);
+    expect(await prisma.identityHandoffVerification.count()).toBe(first === 'handoff' ? 1 : 0);
+    expect(await prisma.tripEvent.count({ where: { type: 'IDENTITY_HANDOFF_RECORDED' } })).toBe(first === 'handoff' ? 1 : 0);
+    expect((await get(`host/trips/${f.reservation.id}`, f.employee.accessToken)).status).toBe(403);
+    expect((await post(`host/trips/${f.reservation.id}/handoff`, positiveHandoff, f.employee.accessToken, crypto.randomUUID())).status).toBe(403);
+    expect(await prisma.financialOperation.count()).toBe(0); expect(await prisma.mobileSession.count()).toBe(4);
+  } finally { release.resolve(); await Promise.allSettled([winner, ...(results ? [results] : [])]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+
+it.each([
+  ['DRAFT', new Date('2058-01-01'), false], ['CHECKOUT_HOLD', new Date('2058-01-01'), true], ['CHECKOUT_HOLD', new Date(0), false],
+  ['AWAITING_PAYMENT', new Date('2058-01-01'), true], ['AWAITING_PAYMENT', new Date(0), false],
+  ['PAYMENT_FAILED', new Date(0), true], ['CONFIRMED', null, true],
+  ['COMPLETED', null, false], ['CANCELLED_BY_CUSTOMER', null, false], ['EXPIRED', null, false],
+] as const)('host calendar reflects booking availability for %s with expiration %s', async (status, expiresAt, blocks) => {
+  // Each case has independent persisted state; cancelled reservations must never be reopened by a fixture.
+  const f = await tenantFixture(), path = `host/vehicles/${f.vehicle.id}/calendar`;
+  const window = { startAt: '2055-04-01T00:00:00Z', endAt: '2055-05-01T00:00:00Z' };
+  await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status, expiresAt } });
+  const response = await post(path, window, f.employee.accessToken); expect(response.status).toBe(200);
+  expect((await response.json()).data.reservations.map((r: { id: string }) => r.id), status).toEqual(blocks ? [f.reservation.id] : []);
+  expect(await prisma.financialOperation.count()).toBe(0);
 });

@@ -54,18 +54,39 @@ export async function readPrivateBytes(key:string){
  const response=await fetch(url,{signal:AbortSignal.timeout(10000),cache:"no-store"});if(!response.ok)throw new Error("PRIVATE_READ_FAILED");
  const chunks:Uint8Array[]=[];let size=0;const reader=response.body?.getReader();if(!reader)throw new Error("PRIVATE_READ_FAILED");try{while(true){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>16*1024*1024){void reader.cancel();throw new Error("PRIVATE_OBJECT_SIZE");}chunks.push(part.value);}}finally{reader.releaseLock();}return Buffer.concat(chunks);
 }
-export async function readPrivateDocument(key:string):Promise<{buffer:Buffer}>{
- const row=await prisma.privateObject.findUnique({where:{key}});
- const legacy=await prisma.operationsJob.findFirst({where:{kind:"LEGACY_IMPORT",resourceId:key}});
- if(legacy){
-  const validation=await prisma.privateValidation.findUnique({where:{sourceKey:key}});
-  if(!validation||!row||row.writeState!=="STORED"||row.deletedAt||["INFECTED","DELETING","DELETED"].includes(row.state)||validation.sourceSha256!==row.sha256)throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
-  if(validation.targetKey!==key)return readPrivateDocument(validation.targetKey);
- }
- if((!row&&!localDevelopment())||row&&(row.writeState!=="STORED"||row.state!=="CLEAN"||row.deletedAt||!localDevelopment()&&row.scanEngine==="DEVELOPMENT_FIXTURE"))throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
- const buffer=await readPrivateBytes(key);if(row&&(buffer.length!==row.size||hash(buffer)!==row.sha256))throw new Error("PRIVATE_OBJECT_INTEGRITY");
- await prisma.auditLog.create({data:{action:"storage.read",entityType:"PrivateObject",entityId:hash(key)}});
- return {buffer};
+/** Resolve and freeze every legacy mapping and immutable object identity together. */
+async function privateReadSnapshot(sourceKey:string){
+ return prisma.$transaction(async tx=>{
+  const chain:unknown[]=[];const seen=new Set<string>();let key=sourceKey;
+  for(let depth=0;depth<16;depth++){
+   if(seen.has(key))throw new Error("PRIVATE_OBJECT_NOT_CLEAN");seen.add(key);
+   const row=await tx.privateObject.findUnique({where:{key}});
+   const legacy=await tx.operationsJob.findFirst({where:{kind:"LEGACY_IMPORT",resourceId:key},select:{key:true}});
+   const validation=legacy?await tx.privateValidation.findUnique({where:{sourceKey:key},select:{sourceKey:true,targetKey:true,resourceType:true,resourceId:true,sourceSha256:true,targetSha256:true,mimeType:true,createdAt:true}}):null;
+   if(legacy&&(!validation||!row||row.writeState!=="STORED"||row.deletedAt||["INFECTED","DELETING","DELETED"].includes(row.state)||validation.sourceSha256!==row.sha256))throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
+   chain.push({key,identity:row?{sha256:row.sha256,size:row.size,mimeType:row.mimeType,createdAt:row.createdAt}:null,legacy,validation});
+   if(validation){
+    const target=await tx.privateObject.findUnique({where:{key:validation.targetKey}});
+    if(!target||target.sha256!==validation.targetSha256||target.mimeType!==validation.mimeType)throw new Error("PRIVATE_OBJECT_INTEGRITY");
+    if(validation.targetKey!==key){key=validation.targetKey;continue;}
+   }
+   if((!row&&!localDevelopment())||row&&(row.writeState!=="STORED"||row.state!=="CLEAN"||row.deletedAt||!localDevelopment()&&row.scanEngine==="DEVELOPMENT_FIXTURE"))throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
+   return {key,row,identity:JSON.stringify(chain)};
+  }
+  throw new Error("PRIVATE_OBJECT_NOT_CLEAN");
+ },{isolationLevel:"RepeatableRead"});
+}
+export async function readPrivateDocument(key:string):Promise<{buffer:Buffer;revalidate:()=>Promise<void>}>{
+ const snapshot=await privateReadSnapshot(key);
+ const buffer=await readPrivateBytes(snapshot.key);
+ if(snapshot.row&&(buffer.length!==snapshot.row.size||hash(buffer)!==snapshot.row.sha256))throw new Error("PRIVATE_OBJECT_INTEGRITY");
+ const revalidate=async()=>{
+  const current=await privateReadSnapshot(key);
+  if(current.identity!==snapshot.identity||current.key!==snapshot.key)throw new Error("PRIVATE_OBJECT_INTEGRITY");
+ };
+ await prisma.auditLog.create({data:{action:"storage.read",entityType:"PrivateObject",entityId:hash(snapshot.key)}});
+ await revalidate();
+ return {buffer,revalidate};
 }
 export async function deletePrivateDocument(key:string){
  const shouldDelete=await prisma.$transaction(async tx=>{
