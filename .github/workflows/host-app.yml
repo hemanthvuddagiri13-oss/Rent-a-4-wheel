@@ -49,6 +49,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Validate native flow references
+        run: python3 scripts/check-native-flows.py
       - run: npm ci && npm --prefix apps/customer ci
       - run: npm --prefix apps/customer run typecheck && npm run lint && npm --prefix apps/customer audit --audit-level=low
       - run: npm run db:deploy && npm run db:seed
@@ -121,6 +123,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Validate native flow references
+        run: python3 scripts/check-native-flows.py
       - run: npm ci && npm --prefix apps/customer ci
       - name: Pin iOS tools and fresh simulator
         run: |

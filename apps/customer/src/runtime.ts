@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import { createMobileClient, MobileApiError, type MobileOperations } from '../../../packages/mobile-client/src';
 import { Session, SignInRequired } from './session';
 import { boundedFetch } from './transport';
-import { RecoveryJournal, RecoveryConflict, type RecoveryRecord } from '../../../packages/mobile-client/src/recovery';
+import { RecoveryJournal, RecoveryConflict, IntentKeys, type RecoveryRecord } from '../../../packages/mobile-client/src/recovery';
 import { recoveryStore } from './recovery-store';
 export type Output<K extends keyof MobileOperations> = MobileOperations[K]['output'];
 export const origin: string = Constants.expoConfig?.extra?.apiOrigin;
@@ -19,14 +19,18 @@ export const vault = { get: () => secureStorage(() => SecureStore.getItemAsync('
 const localAcceptance = Constants.expoConfig?.extra?.localAcceptance === true && origin === 'http://localhost:3000';
 export const session = new Session(vault, origin, boundedFetch, localAcceptance);
 const recovery = new RecoveryJournal(recoveryStore);
-const recoverable = new Set<keyof MobileOperations>(['sendMessage', 'replyCase', 'openCase', 'submitReport', 'acceptReport', 'hostHandoff', 'tripStart', 'tripReturn', 'tripCancel', 'tripKeys', 'tripComplete']);
-export async function pendingRequests() { const me = await session.call('me', {}); return recovery.list(me.id); }
+// Auth challenges/ownership changes are deliberately not a replayable outbox.
+// Upload bytes use their descriptor-only coordinator below.
+const recoverable = new Set<keyof MobileOperations>(['hold', 'checkout', 'hostAvailability', 'openConversation', 'saveReview', 'sendMessage', 'replyCase', 'openCase', 'submitReport', 'acceptReport', 'hostHandoff', 'tripStart', 'tripReturn', 'tripCancel', 'tripKeys', 'tripComplete']);
+export async function pendingRequests() { const assertIdentity = session.captureIdentity(), me = await session.call('me', {}); const records = await recovery.list(me.id); assertIdentity(); return records; }
 export async function recoverRequest(record: RecoveryRecord) {
   const assertIdentity = session.captureIdentity(), me = await session.call('me', {});
   if (!recoverable.has(record.operation as keyof MobileOperations)) throw new Error('This request requires its original screen.');
   const persisted = (await recovery.list(me.id)).find(r => r.key === record.key);
   if (!persisted) throw new Error('This request is no longer pending. Refresh recovery.');
-  return recovery.execute(me.id, persisted, async frozen => { assertIdentity(); return session.call(frozen.operation as keyof MobileOperations, { ...(frozen.input as object), idempotencyKey: frozen.key } as MobileOperations[keyof MobileOperations]['input']); });
+  const result = await recovery.execute(me.id, persisted, async frozen => { assertIdentity(); return session.call(frozen.operation as keyof MobileOperations, { ...(frozen.input as object), idempotencyKey: frozen.key } as MobileOperations[keyof MobileOperations]['input']); });
+  await acknowledgeIntent(me.id + ':' + persisted.operation, persisted.input, persisted.key).catch(() => {});
+  assertIdentity(); return result;
 }
 export async function uploadWithRecovery(descriptor: MobileOperations['initializeUpload']['input']['body'], label: string, bytes: Uint8Array) {
   const assertIdentity = session.captureIdentity(), me = await session.call('me', {});
@@ -44,16 +48,11 @@ export async function deviceId() {
   const saved = await secureStorage(() => SecureStore.getItemAsync('ra4w.device', options)); if (saved) return saved;
   const id = Crypto.randomUUID(); await secureStorage(() => SecureStore.setItemAsync('ra4w.device', id, options)); return id;
 }
-let intentTail: Promise<unknown> = Promise.resolve();
+const intentKeys = new IntentKeys({ get: key => SecureStore.getItemAsync(key, options), set: (key, value) => SecureStore.setItemAsync(key, value, options), remove: key => SecureStore.deleteItemAsync(key, options) }, () => Crypto.randomUUID());
+async function intentStorageKey(operation: string, input: unknown) { return 'ra4w.intent.' + await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, operation + ':' + JSON.stringify(input)); }
+async function acknowledgeIntent(operation: string, input: unknown, value: string) { await intentKeys.acknowledge(await intentStorageKey(operation, input), value); }
 /** Persist only hashes and random keys, never driver details, photos or message text. */
-export function intentKey(operation: string, input: unknown): Promise<string> {
-  const work = intentTail.then(async () => {
-    const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, operation + ':' + JSON.stringify(input));
-    const key = 'ra4w.intent.' + hash;
-    const existing = await SecureStore.getItemAsync(key, options); if (existing) return existing;
-    const value = Crypto.randomUUID(); await SecureStore.setItemAsync(key, value, options); return value;
-  }); intentTail = work.catch(() => {}); return work;
-}
+export async function intentKey(operation: string, input: unknown): Promise<string> { return intentKeys.get(await intentStorageKey(operation, input)); }
 export async function mutate<K extends keyof MobileOperations>(op: K, input: Omit<MobileOperations[K]['input'], 'idempotencyKey'>): Promise<Output<K>> {
   // Freeze before the first await: screen edits cannot change the dispatched
   // body after its fingerprint or durable record has been written.
@@ -74,8 +73,8 @@ export async function mutate<K extends keyof MobileOperations>(op: K, input: Omi
   // Preserve initialization identity across a later failed finalize. Other completed
   // intentions can be submitted anew; uncertain attempts keep their original key.
   if (op !== 'initializeUpload') {
-    const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, scope + ':' + JSON.stringify(fingerprint));
-    await SecureStore.deleteItemAsync('ra4w.intent.' + hash, options).catch(() => {});
+    // A delayed acknowledgement must not erase a newer attempt's key.
+    await acknowledgeIntent(scope, fingerprint, idempotencyKey).catch(() => {});
   }
   return result;
 }

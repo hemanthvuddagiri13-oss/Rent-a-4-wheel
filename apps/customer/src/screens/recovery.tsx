@@ -4,7 +4,7 @@ import { pendingRequests, recoverRequest, friendly } from '../runtime';
 import { Page, Card, Copy, Hint, Button, Busy, ErrorText } from '../ui';
 import { useAction } from '../hooks';
 import { useCaptureProtection } from '../screen-privacy';
-const labels: Record<string, string> = { sendMessage: 'Message', replyCase: 'Support reply', openCase: 'Support request', submitReport: 'Condition report', acceptReport: 'Report acceptance', hostHandoff: 'Identity comparison', tripStart: 'Trip start', tripReturn: 'Begin return', tripCancel: 'Cancellation', tripKeys: 'Keys handoff', tripComplete: 'Complete return', privateUpload: 'Private photo upload' };
+const labels: Record<string, string> = { hold: 'Date hold', checkout: 'Checkout preparation', hostAvailability: 'Calendar update', openConversation: 'Open conversation', saveReview: 'Review', sendMessage: 'Message', replyCase: 'Support reply', openCase: 'Support request', submitReport: 'Condition report', acceptReport: 'Report acceptance', hostHandoff: 'Identity comparison', tripStart: 'Trip start', tripReturn: 'Begin return', tripCancel: 'Cancellation', tripKeys: 'Keys handoff', tripComplete: 'Complete return', privateUpload: 'Private photo upload' };
 export function Recovery() {
   const protectedScreen = useCaptureProtection(), action = useAction(), queries = useQueryClient();
   const [confirmed, setConfirmed] = useState('');

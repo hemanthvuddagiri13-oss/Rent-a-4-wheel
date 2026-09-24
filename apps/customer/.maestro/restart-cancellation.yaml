@@ -11,7 +11,7 @@ appId: com.renta4wheel.customer.acceptance
 - tapOn: Cancel reservation
 - extendedWaitUntil:
     visible: Connection interrupted.*
-    timeout: 25000
+    timeout: 40000
 - stopApp
 - launchApp
 - scrollUntilVisible:

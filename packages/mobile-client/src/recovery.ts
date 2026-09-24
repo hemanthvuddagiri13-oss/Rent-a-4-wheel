@@ -2,6 +2,13 @@
 export interface RecoveryStore { read(scope: string): Promise<string | null>; write(scope: string, value: string): Promise<void> }
 export type RecoveryRecord = { key: string; operation: string; input: unknown; createdAt: string };
 export class RecoveryConflict extends Error { constructor() { super('An earlier request needs recovery before changing this action.'); } }
+export class IntentKeys {
+  private tail: Promise<unknown> = Promise.resolve();
+  constructor(private storage: { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; remove(key: string): Promise<void> }, private random: () => string) {}
+  private serial<T>(work: () => Promise<T>) { const next = this.tail.then(work, work); this.tail = next.catch(() => {}); return next; }
+  get(key: string) { return this.serial(async () => { const prior = await this.storage.get(key); if (prior) return prior; const value = this.random(); await this.storage.set(key, value); return value; }); }
+  acknowledge(key: string, value: string) { return this.serial(async () => { if (await this.storage.get(key) === value) await this.storage.remove(key); }); }
+}
 
 /** Persist before dispatch. A failed/uncertain response never removes intent.
  * Each process owns one coordinator; process death discards locks, not records.

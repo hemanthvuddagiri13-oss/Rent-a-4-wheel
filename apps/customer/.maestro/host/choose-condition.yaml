@@ -1,0 +1,28 @@
+appId: com.renta4wheel.host.acceptance
+---
+- scrollUntilVisible:
+    element: "Choose ${LABEL} condition photo"
+    direction: DOWN
+- tapOn: "Choose ${LABEL} condition photo"
+- runFlow:
+    when:
+      visible: "Allow Full Access"
+    commands:
+      - tapOn: "Allow Full Access"
+- runFlow:
+    when:
+      visible: "Allow all"
+    commands:
+      - tapOn: "Allow all"
+- tapOn:
+    text: "Photo[ ,].*"
+    index: ${INDEX}
+- runFlow:
+    when:
+      visible: "Add"
+    commands:
+      - tapOn: "Add"
+- scrollUntilVisible:
+    element: "Upload ${LABEL} condition photo"
+    direction: DOWN
+- tapOn: "Upload ${LABEL} condition photo"

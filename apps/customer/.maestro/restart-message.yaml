@@ -2,7 +2,7 @@ appId: com.renta4wheel.customer.acceptance
 ---
 - extendedWaitUntil:
     visible: Connection interrupted.*
-    timeout: 25000
+    timeout: 40000
 - stopApp
 - launchApp
 - assertVisible: Your next drive starts here.

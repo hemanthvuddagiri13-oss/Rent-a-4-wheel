@@ -43,7 +43,7 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: "Send message"
 - extendedWaitUntil:
     visible: "Connection interrupted.*"
-    timeout: 25000
+    timeout: 40000
 - runFlow:
     file: restart-recovery.yaml
     env:
@@ -120,7 +120,7 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: "Send case reply"
 - extendedWaitUntil:
     visible: "Connection interrupted.*"
-    timeout: 25000
+    timeout: 40000
 - takeScreenshot: host-reply-interrupted
 - runFlow:
     file: restart-recovery.yaml
@@ -153,7 +153,7 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: "Begin return inspection"
 - extendedWaitUntil:
     visible: "Connection interrupted.*"
-    timeout: 25000
+    timeout: 40000
 - runFlow:
     file: restart-recovery.yaml
     env:

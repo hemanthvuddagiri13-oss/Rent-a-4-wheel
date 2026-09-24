@@ -1,7 +1,16 @@
 import { expect, it, vi } from 'vitest';
-import { RecoveryJournal, type RecoveryRecord, type RecoveryStore } from '../packages/mobile-client/src/recovery';
+import { IntentKeys, RecoveryJournal, type RecoveryRecord, type RecoveryStore } from '../packages/mobile-client/src/recovery';
 const request = (): RecoveryRecord => ({ key: 'original-request-key', operation: 'replyCase', input: { params: { id: 'case-one' }, body: { body: 'Synthetic reply', version: 3 } }, createdAt: '2026-09-24T00:00:00Z' });
 function fixture() { const values = new Map<string, string>(); const store: RecoveryStore = { read: async key => values.get(key) ?? null, write: async (key, value) => { values.set(key, value); } }; return { values, store, journal: new RecoveryJournal(store) }; }
+it('concurrent key requests share one identity and a stale acknowledgement cannot erase its successor', async () => {
+  const values = new Map<string, string>(); let index = 0, release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const keys = new IntentKeys({ get: async key => { await barrier; return values.get(key) ?? null; }, set: async (key, value) => { values.set(key, value); }, remove: async key => { values.delete(key); } }, () => 'key-' + ++index);
+  const first = keys.get('hash'), concurrent = keys.get('hash'); release();
+  expect(await Promise.all([first, concurrent])).toEqual(['key-1', 'key-1']);
+  await keys.acknowledge('hash', 'key-1'); expect(await keys.get('hash')).toBe('key-2');
+  await keys.acknowledge('hash', 'key-1'); expect(await keys.get('hash')).toBe('key-2');
+});
 it('persists intent before dispatch and replays exact version/key after process replacement', async () => {
   const { store, journal } = fixture(), receipts = new Set<string>(); let mutations = 0;
   await expect(journal.execute('owner', request(), async r => { expect(await store.read('owner')).toContain(r.key); receipts.add(r.key); mutations++; throw new Error('response lost after commit'); })).rejects.toThrow('response lost');

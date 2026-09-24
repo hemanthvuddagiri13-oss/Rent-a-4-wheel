@@ -19,7 +19,7 @@ appId: com.renta4wheel.host.acceptance
 - inputText: '50'
 - runFlow: dismiss-keyboard.yaml
 - runFlow:
-    file: upload.yaml
+    file: choose-condition.yaml
     env:
       LABEL: exterior
       INDEX: '0'
