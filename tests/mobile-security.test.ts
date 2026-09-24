@@ -968,8 +968,14 @@ it.each([
     await entered.promise;
     if (mutation === 'mapping') {
       await b.privateObject.create({ data: { key: 's3:replacement.png', sha256, size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
-      await b.privateValidation.update({ where: { sourceKey }, data: { targetKey: 's3:replacement.png' } });
-    } else await b.privateObject.update({ where: { key: effectiveKey }, data: mutation === 'quarantine' ? { state: 'QUARANTINED' } : mutation === 'deleted' ? { deletedAt: new Date() } : mutation === 'write-state' ? { writeState: 'UNCERTAIN' } : { sha256: 'b'.repeat(64) } });
+      await expect(b.privateValidation.update({ where: { sourceKey }, data: { targetKey: 's3:replacement.png' } })).rejects.toThrow('Private validation evidence is immutable');
+      expect(await a.privateValidation.findUnique({ where: { sourceKey } })).toMatchObject({ targetKey: effectiveKey, targetSha256: sha256 });
+      await b.privateObject.update({ where: { key: effectiveKey }, data: { state: 'QUARANTINED' } });
+    } else if (mutation === 'identity') {
+      await expect(b.privateObject.update({ where: { key: effectiveKey }, data: { sha256: 'b'.repeat(64) } })).rejects.toThrow('Immutable private object evidence');
+      expect(await a.privateObject.findUnique({ where: { key: effectiveKey } })).toMatchObject({ sha256 });
+      await b.privateObject.update({ where: { key: effectiveKey }, data: { state: 'QUARANTINED' } });
+    } else await b.privateObject.update({ where: { key: effectiveKey }, data: mutation === 'quarantine' ? { state: 'QUARANTINED' } : mutation === 'deleted' ? { deletedAt: new Date() } : { writeState: 'UNCERTAIN' } });
     expect(await a.driverDocument.findUnique({ where: { id: doc.id } })).toEqual(doc);
     release.resolve();
     const result = await pending; expect(result.status).toBe(500); expect(await result.text()).not.toContain(bytes.toString());
