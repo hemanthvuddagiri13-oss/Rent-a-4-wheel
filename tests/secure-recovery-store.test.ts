@@ -34,3 +34,12 @@ it('recovers initial creation failures without exposing a partial first intent',
     await f.make().write('new-account', '[]'); expect(f.values.size).toBe(2);
   }
 });
+it('retains cleanup evidence if the native delete resolves without deleting', async () => {
+  const values = new Map<string, string>(); let sequence = 0, dropDelete = false;
+  const items: SecureItems = { get: async key => values.get(key) ?? null, set: async (key, value) => { values.set(key, value); }, remove: async key => { if (!dropDelete) values.delete(key); } };
+  const make = () => new SecureRecoveryStore(items, async key => key, () => 'g-' + ++sequence);
+  await make().write('owner', '[1]'); dropDelete = true;
+  await expect(make().write('owner', '[2]')).rejects.toThrow('cleanup remains pending');
+  expect(JSON.parse(values.get('ra4w.recovery.owner')!).garbage).toBeDefined();
+  dropDelete = false; expect(await make().read('owner')).toBe('[2]'); expect(values.size).toBe(2);
+});

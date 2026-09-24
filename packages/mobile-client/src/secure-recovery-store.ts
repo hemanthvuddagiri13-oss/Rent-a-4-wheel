@@ -12,7 +12,15 @@ export class SecureRecoveryStore implements RecoveryStore {
   private tail: Promise<unknown> = Promise.resolve();
   constructor(private items: SecureItems, private hash: (scope: string) => Promise<string>, private random: () => string) {}
   private serial<T>(work: () => Promise<T>) { const next = this.tail.then(work, work); this.tail = next.catch(() => {}); return next; }
-  private async remove(key: string, value: Generation) { for (let i = 0; i < value.count; i++) await this.items.remove(key + '.' + value.id + '.' + i); }
+  private async remove(key: string, value: Generation) {
+    for (let i = 0; i < value.count; i++) {
+      const chunk = key + '.' + value.id + '.' + i;
+      await this.items.remove(chunk);
+      // Expo's iOS delete wrapper discards SecItemDelete status. Do not forget
+      // the cleanup registry merely because that wrapper resolved.
+      if (await this.items.get(chunk) !== null) throw new Error('Secure recovery cleanup remains pending');
+    }
+  }
   private async pointer(key: string): Promise<Pointer> {
     const raw = await this.items.get(key); if (raw === null) return { active: null };
     const p = JSON.parse(raw) as Pointer;
