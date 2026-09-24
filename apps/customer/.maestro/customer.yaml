@@ -169,7 +169,10 @@ env:
 - scrollUntilVisible:
     element: "Server price breakdown"
     direction: DOWN
+    centerElement: true
+- waitForAnimationToEnd
 - assertVisible: "Server price breakdown"
+- assertVisible: "Vehicle:.*"
 - takeScreenshot: native-price
 - scrollUntilVisible:
     element: "Documents & checkout preparation"
