@@ -35,6 +35,10 @@ async function main() {
     if (r.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: r.id } })) throw new Error('Blocked gates were bypassed');
     const completed = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-RETURN' } });
     if (completed.status !== 'COMPLETED') throw new Error('Return journey did not complete');
+    if (await db.mobileMutation.count({ where: { operation: 'reservation.return' } }) !== 1) throw new Error('Interrupted return must use one durable receipt');
+    const owner = await db.user.findUniqueOrThrow({ where: { email: 'host-owner@example.test' } });
+    const uploads = await db.mobileUpload.findMany({ where: { userId: owner.id } });
+    if (uploads.length !== 4 || uploads.some(upload => !upload.finalizedAt) || uploads.filter(upload => upload.reservationId === completed.id).length !== 2) throw new Error('Restarted uploads must finalize exactly four original host intents, two per report');
     const ready = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-READY' } });
     if (ready.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: ready.id, step: 'KEYS_RELEASED' } }) !== 1 || await db.trip.count({ where: { reservationId: ready.id } })) throw new Error('Keys must not start the guest trip');
     if (await db.tripEvent.count({ where: { reservationId: ready.id, type: 'TRIP_KEYS' } }) !== 1) throw new Error('Repeated keys taps must commit once');

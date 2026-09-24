@@ -14,7 +14,7 @@ httpServer((req, res) => {
   }
   const upstream = request({ hostname: '127.0.0.1', port: 3001, path: req.url, method: req.method, headers: { ...req.headers, host: 'localhost:3001' } }, response => {
     const kind = req.method === 'POST' && /\/cases\/[^/]+\/reply$/.test(req.url) ? 'reply' : req.method === 'POST' && /\/uploads\/[^/]+\/finalize$/.test(req.url) ? 'upload' : req.method === 'POST' && /\/conversations\/[^/]+\/messages$/.test(req.url) ? 'message' : req.method === 'POST' && /\/reservations\/[^/]+\/return$/.test(req.url) ? 'return' : req.method === 'POST' && /\/reservations\/[^/]+\/cancel$/.test(req.url) ? 'cancel' : null;
-    if (kind && (process.env.CUSTOMER_RECOVERY !== 'true' || kind === 'message' || kind === 'cancel') && response.statusCode === 200 && !dropped.has(kind)) {
+    if (kind && (process.env.CUSTOMER_RECOVERY !== 'true' || kind === 'message' || kind === 'cancel' || kind === 'upload') && response.statusCode === 200 && !dropped.has(kind)) {
       dropped.add(kind); response.resume(); response.on('end', () => {
         // Closing before headers lets native networking transparently resend the
         // request. Deliver an incomplete JSON envelope after consuming the real
