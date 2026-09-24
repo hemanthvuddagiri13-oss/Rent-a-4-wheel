@@ -43,6 +43,12 @@ it('uncertain native release cannot make a later private view assume protection 
   await expect(next.release()).rejects.toThrow('native release uncertain');
 });
 const credentials = (accessToken = 'access-old', expired = false): Credentials => ({ tokenType: 'Bearer', accessToken, refreshToken: 'refresh-' + accessToken, sessionId: 'synthetic-session', accessExpiresAt: new Date(Date.now() + (expired ? -1000 : 300000)).toISOString(), refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() });
+it('locked credential storage fails closed without deleting credentials and can restore after unlock', async () => {
+  const f = setup(); f.vault.get.mockRejectedValueOnce(new Error('device locked'));
+  await expect(f.session.restore()).rejects.toThrow('device locked');
+  expect(f.vault.clear).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
+  expect(await f.session.restore()).toBe(true); expect(f.stored()).not.toBeNull();
+});
 const response = (data: unknown, status = 200) => new Response(JSON.stringify({ data, error: status >= 400 ? { code: 'UNAUTHORIZED' } : null, requestId: 'synthetic-request' }), { status, headers: { 'x-api-version': '1' } });
 function setup(c = credentials()) {
   let stored: string | null = JSON.stringify({ credentials: c });

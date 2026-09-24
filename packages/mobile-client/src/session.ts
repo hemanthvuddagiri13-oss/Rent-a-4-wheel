@@ -2,7 +2,7 @@ import { createMobileClient, MobileApiError, type MobileOperations } from './ind
 export type Credentials = MobileOperations['signIn']['output'];
 export interface Vault { get(): Promise<string | null>; set(value: string): Promise<void>; clear(): Promise<void> }
 type Stored = { credentials: Credentials; refreshing?: boolean };
-export class SignInRequired extends Error { constructor() { super('Your secure session needs a new email code.'); } }
+export class SignInRequired extends Error { constructor() { super('Your secure session needs a new sign-in. Use your phone or linked email.'); } }
 
 /** One coordinator per app process. Persist uncertainty BEFORE rotating a one-use token. */
 export class Session {
@@ -23,9 +23,12 @@ export class Session {
   async restore() {
     return this.serial(async () => {
       if (this.loaded) return Boolean(this.credentials);
+      // A locked/unavailable Keychain is not evidence of invalid credentials.
+      // Fail closed without deleting them; reopening after unlock may restore.
+      const raw = await this.vault.get();
       this.loaded = true;
       try {
-        const raw = await this.vault.get(); if (!raw) return false;
+        if (!raw) return false;
         const saved = JSON.parse(raw) as Stored;
         if (saved.refreshing || !saved.credentials?.refreshToken || !saved.credentials.accessToken || !Number.isFinite(Date.parse(saved.credentials.refreshExpiresAt)) || Date.parse(saved.credentials.refreshExpiresAt) <= Date.now()) { await this.clear(); return false; }
         this.credentials = saved.credentials; this.onChange(true); return true;

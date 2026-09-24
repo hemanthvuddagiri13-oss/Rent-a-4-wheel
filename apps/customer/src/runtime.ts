@@ -55,6 +55,10 @@ export function intentKey(operation: string, input: unknown): Promise<string> {
   }); intentTail = work.catch(() => {}); return work;
 }
 export async function mutate<K extends keyof MobileOperations>(op: K, input: Omit<MobileOperations[K]['input'], 'idempotencyKey'>): Promise<Output<K>> {
+  // Freeze before the first await: screen edits cannot change the dispatched
+  // body after its fingerprint or durable record has been written.
+  const originalBody = (input as { body?: unknown }).body;
+  input = originalBody instanceof Uint8Array ? { ...input, body: new Uint8Array(originalBody) } : JSON.parse(JSON.stringify(input));
   // Include account/session identity so an interrupted request cannot cross accounts.
   const assertIdentity = session.captureIdentity();
   const me = await session.call('me', {});
@@ -65,7 +69,7 @@ export async function mutate<K extends keyof MobileOperations>(op: K, input: Omi
   assertIdentity();
   const dispatch = () => { assertIdentity(); return session.call(op, { ...input, idempotencyKey } as MobileOperations[K]['input']); };
   const result = recoverable.has(op)
-    ? await recovery.execute(me.id, { key: idempotencyKey, operation: op, input, createdAt: new Date().toISOString() }, dispatch)
+    ? await recovery.execute(me.id, { key: idempotencyKey, operation: op, input, createdAt: new Date().toISOString() }, frozen => { assertIdentity(); return session.call(op, { ...(frozen.input as object), idempotencyKey: frozen.key } as MobileOperations[K]['input']); })
     : await dispatch();
   // Preserve initialization identity across a later failed finalize. Other completed
   // intentions can be submitted anew; uncertain attempts keep their original key.

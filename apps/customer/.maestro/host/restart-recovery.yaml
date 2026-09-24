@@ -11,9 +11,11 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: Interrupted requests
 # This screen is capture protected; no screenshots or credentials are exported.
 - extendedWaitUntil:
-    visible: Recover ${OPERATION}
+    visible:
+      id: recover-${OPERATION}
     timeout: 20000
-- tapOn: Recover ${OPERATION}
+- tapOn:
+    id: recover-${OPERATION}
 - extendedWaitUntil:
     visible: No interrupted requests for this account.
     timeout: 60000

@@ -13,6 +13,12 @@ it('does not dispatch if secure persistence fails', async () => {
   const dispatch = vi.fn(), journal = new RecoveryJournal({ read: async () => null, write: async () => { throw new Error('locked'); } });
   await expect(journal.execute('owner', request(), dispatch)).rejects.toThrow('locked'); expect(dispatch).not.toHaveBeenCalled();
 });
+it('freezes the submitted input before any asynchronous storage work', async () => {
+  const { journal } = fixture(), input = request();
+  const submitted = journal.execute('owner', input, async frozen => { expect(frozen).toEqual(request()); });
+  (input.input as { body: { body: string } }).body.body = 'Edited while waiting';
+  await submitted;
+});
 it('acknowledgement storage loss preserves the original request for replay', async () => {
   const { store, values } = fixture(); let writes = 0;
   const journal = new RecoveryJournal({ ...store, write: async (key, value) => { if (++writes === 2) throw new Error('process terminated'); values.set(key, value); } });

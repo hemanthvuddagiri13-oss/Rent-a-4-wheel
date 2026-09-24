@@ -282,6 +282,7 @@ env:
 - takeScreenshot: native-case
 - runFlow: back.yaml
 - runFlow: back.yaml
+- runFlow: restart-cancellation.yaml
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN

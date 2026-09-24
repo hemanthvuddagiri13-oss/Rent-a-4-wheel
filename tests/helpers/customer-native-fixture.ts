@@ -8,6 +8,8 @@ if (process.argv.includes('--assert')) {
   const customer = await db.user.findUniqueOrThrow({ where: { email: 'native-customer@example.test' } });
   const messages = await db.conversationMessage.findMany({ where: { body: 'Synthetic native acceptance message' } });
   if (messages.length !== 1 || messages[0].senderId !== customer.id) throw new Error('Restart recovery must commit one correctly authored message');
+  const reservation = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'NATIVE-SYNTHETIC-TRIP' } });
+  if (reservation.status !== 'CANCELLED_BY_CUSTOMER') throw new Error('Restarted cancellation must remain terminal');
   if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native recovery must not enable provider work');
   console.log('Customer restart recovery: one message, zero provider operations and payouts.');
   await db.$disconnect(); return;

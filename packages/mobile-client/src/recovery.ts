@@ -18,6 +18,7 @@ export class RecoveryJournal {
   }
   list(scope: string) { return this.serial(() => this.load(scope)); }
   execute<T>(scope: string, record: RecoveryRecord, dispatch: (frozen: RecoveryRecord) => Promise<T>): Promise<T> {
+    record = JSON.parse(JSON.stringify(record)) as RecoveryRecord;
     return this.serial(async () => {
       const records = await this.load(scope);
       const existing = records.find(r => r.key === record.key);
