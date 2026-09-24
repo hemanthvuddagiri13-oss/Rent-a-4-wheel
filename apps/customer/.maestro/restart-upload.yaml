@@ -1,9 +1,13 @@
 appId: com.renta4wheel.customer.acceptance
 ---
+- assertVisible:
+    id: reservation-loaded
 - scrollUntilVisible:
     element: Condition photos & reports
     direction: DOWN
+    centerElement: true
 - tapOn: Condition photos & reports
+- assertVisible: Vehicle condition
 - runFlow: choose-condition.yaml
 - extendedWaitUntil:
     visible: 'exterior condition photo: Upload not confirmed.*'
@@ -12,10 +16,14 @@ appId: com.renta4wheel.customer.acceptance
 - launchApp
 - tapOn: Your trips
 - tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- assertVisible:
+    id: reservation-loaded
 - scrollUntilVisible:
     element: Condition photos & reports
     direction: DOWN
+    centerElement: true
 - tapOn: Condition photos & reports
+- assertVisible: Vehicle condition
 - runFlow: choose-condition.yaml
 - extendedWaitUntil:
     visible: 'exterior condition photo: Upload completed and scanned. Eligibility review may still be pending.'

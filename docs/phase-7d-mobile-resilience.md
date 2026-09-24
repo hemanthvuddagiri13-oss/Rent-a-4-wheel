@@ -11,6 +11,12 @@ Base: development main `ef01c17a6f771a08bad0075304c6c6a6288e5b1b`. Work in progr
 
 No physical Android/iOS tooling is available on the current Windows host. CI emulator/simulator evidence must be labeled separately; physical-device, assistive-technology, real-provider and distribution-build acceptance remain unverified until actually performed.
 
+### Native failures investigated during this phase
+
+At 518b6a7, customer iOS completed the five email-navigation cycles and the first upload. After restart, the driver selected the condition-report button at y=785 while independent reservation queries were still inserting sections. The destination never opened. The reservation now settles all initial queries before exposing its action layout; the restart journey requires the loaded reservation marker, centers the target, and asserts the actual Vehicle condition destination. This preserves every upload/replay assertion.
+
+The same candidate's host iOS failed during phone entry, before any auth request. At 08:25:49 the app's native log reports KeyboardArbiter XPC connection interrupted, failedConnection and resignFirstResponder. XCTest's next input returned normally but the field remained `+`. One unchanged job retry was requested for this simulator-service interruption; it is not evidence that a product defect was fixed. Customer and host Android installed journeys both passed on that candidate. Final acceptance must use the final commit's results.
+
 Live payments and payouts remain disabled. Lost-phone recovery remains review intake only. No approved migrations or financial authority may be changed by this phase.
 
 ## Implementation and evidence boundaries
