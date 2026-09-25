@@ -59,6 +59,20 @@
                     "code"
                   ],
                   "properties": {
+                    "nonCommit": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "idempotencyKey"
+                      ],
+                      "properties": {
+                        "idempotencyKey": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9_-]{16,128}$"
+                        }
+                      },
+                      "description": "Only message.send, case.reply and case.open: durable terminal rejection receipt after rollback, bound to the exact request key. Status alone never proves non-commit."
+                    },
                     "code": {
                       "type": "string",
                       "enum": [
@@ -2028,6 +2042,169 @@
           },
           "503": {
             "$ref": "#/components/responses/TypedError"
+          }
+        }
+      }
+    },
+    "/api/v1/mobile/recovery/resolve": {
+      "post": {
+        "operationId": "resolveMutation",
+        "security": [
+          {
+            "nativeBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed request; authority and availability remain subject to current state",
+            "headers": {
+              "X-API-Version": {
+                "schema": {
+                  "type": "string",
+                  "const": "1"
+                },
+                "description": "Contract version"
+              },
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Server-generated correlation ID"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                },
+                "description": "Private responses must not be cached"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "data",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "COMMITTED",
+                            "NOT_COMMITTED"
+                          ]
+                        },
+                        "idempotencyKey": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "idempotencyKey"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "error": {
+                      "type": "null"
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "401": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "403": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "404": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "409": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "413": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "415": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "429": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "500": {
+            "$ref": "#/components/responses/TypedError"
+          },
+          "503": {
+            "$ref": "#/components/responses/TypedError"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "hold",
+                      "checkout",
+                      "hostAvailability",
+                      "openConversation",
+                      "saveReview",
+                      "sendMessage",
+                      "replyCase",
+                      "openCase",
+                      "submitReport",
+                      "acceptReport",
+                      "hostHandoff",
+                      "tripStart",
+                      "tripReturn",
+                      "tripCancel",
+                      "tripKeys",
+                      "tripComplete"
+                    ]
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{16,128}$"
+                  }
+                },
+                "required": [
+                  "operation",
+                  "idempotencyKey"
+                ],
+                "additionalProperties": false
+              }
+            }
           }
         }
       }

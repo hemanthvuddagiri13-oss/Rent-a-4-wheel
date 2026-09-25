@@ -93,6 +93,7 @@ it('two late 401 responses use one rotation without replaying the old refresh to
 it('secure-store failure before rotation makes no refresh request', async () => {
   const f = setup(credentials('old', true)); await f.session.restore(); f.vault.set.mockRejectedValue(new Error('locked'));
   await expect(f.session.token()).rejects.toBeInstanceOf(SignInRequired); expect(f.transport).not.toHaveBeenCalled();
+  await expect(f.session.token()).rejects.toBeInstanceOf(SignInRequired); expect(f.transport).not.toHaveBeenCalled();
 });
 it('successful logout revokes on server before deleting the secure record', async () => {
   const f = setup(); await f.session.restore(); f.transport.mockImplementation(async () => { expect(f.stored()).not.toBeNull(); return response({ revoked: true }); });
@@ -142,6 +143,8 @@ it('pending reply releases an authoritative conflict but retains uncertain servi
   await expect(pending.send(first, async () => { throw new MobileApiError(503, 'UNAVAILABLE', 'synthetic'); })).rejects.toMatchObject({ status: 503 });
   expect(pending.pending).toBe(true);
   await expect(pending.send({ ...first, version: 2 }, async frozen => { expect(frozen.version).toBe(1); throw new MobileApiError(409, 'CONFLICT', 'synthetic'); })).rejects.toMatchObject({ status: 409 });
+  expect(pending.pending).toBe(true);
+  await expect(pending.send({ ...first, version: 2 }, async frozen => { expect(frozen.version).toBe(1); throw new MobileApiError(409, 'CONFLICT', 'synthetic', 'fenced-request-key'); })).rejects.toMatchObject({ status: 409 });
   expect(pending.pending).toBe(false);
   await pending.send({ ...first, version: 3 }, async frozen => { expect(frozen.version).toBe(3); });
   expect(pending.pending).toBe(false);

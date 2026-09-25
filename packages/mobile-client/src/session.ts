@@ -11,6 +11,8 @@ export class Session {
   private loaded = false;
   private identityEpoch = 0;
   onChange: (signedIn: boolean) => void = () => {};
+  beforeRestore: () => Promise<void> = async () => {};
+  onEnd: () => Promise<void> = async () => {};
   constructor(private vault: Vault, private origin: string, private transport?: typeof fetch, private localTest = false) {}
   captureIdentity() {
     const epoch = this.identityEpoch;
@@ -23,6 +25,7 @@ export class Session {
   async restore() {
     return this.serial(async () => {
       if (this.loaded) return Boolean(this.credentials);
+      await this.beforeRestore();
       // A locked/unavailable Keychain is not evidence of invalid credentials.
       // Fail closed without deleting them; reopening after unlock may restore.
       const raw = await this.vault.get();
@@ -35,9 +38,16 @@ export class Session {
       } catch { await this.clear(); return false; }
     });
   }
-  private async clear() { this.identityEpoch++; this.credentials = null; this.onChange(false); await this.vault.clear(); }
+  private async clear() {
+    this.identityEpoch++; this.credentials = null; this.onChange(false);
+    // A crash or failed native deletion must not restore credentials during
+    // pending cleanup. Retain this credential-free marker until cleanup succeeds.
+    await this.vault.set(JSON.stringify({ ending: true }));
+    await this.onEnd(); await this.vault.clear();
+  }
   async signIn(input: MobileOperations['signIn']['input']) {
     return this.serial(async () => {
+      await this.beforeRestore();
       const credentials = await this.client(null).call('signIn', input);
       await this.vault.set(JSON.stringify({ credentials }));
       this.identityEpoch++; this.loaded = true; this.credentials = credentials; this.onChange(true);
@@ -45,6 +55,7 @@ export class Session {
   }
   async signInPhone(input: MobileOperations['phoneSignIn']['input']) {
     return this.serial(async () => {
+      await this.beforeRestore();
       const credentials = await this.client(null).call('phoneSignIn', input);
       await this.vault.set(JSON.stringify({ credentials }));
       this.identityEpoch++; this.loaded = true; this.credentials = credentials; this.onChange(true);
@@ -61,17 +72,24 @@ export class Session {
         const credentials = await this.client(null).call('refresh', { body: { refreshToken: c.refreshToken } });
         await this.vault.set(JSON.stringify({ credentials })); this.credentials = credentials;
         return credentials.accessToken;
-      } catch { await this.clear(); throw new SignInRequired(); }
+      } catch {
+        // Preserve the public fail-closed auth result even when native cleanup
+        // itself is unavailable. clear() already invalidated the in-memory epoch;
+        // durable cleanup evidence is retried before the next restoration.
+        try { await this.clear(); } finally { throw new SignInRequired(); }
+      }
     });
   }
   async call<K extends keyof MobileOperations>(op: K, input: MobileOperations[K]['input'], signal?: AbortSignal): Promise<MobileOperations[K]['output']> {
     const epoch = this.identityEpoch;
+    const endingSelf = op === 'revokeDevice' && (input as MobileOperations['revokeDevice']['input']).body.sessionId === this.credentials?.sessionId;
+    const finish = async () => { if (endingSelf) await this.serial(async () => { if (epoch === this.identityEpoch) await this.clear(); }); };
     const token = await this.token();
     if (epoch !== this.identityEpoch) throw new SignInRequired();
     try {
       const result = await this.client(token).call(op, input, signal);
       if (epoch !== this.identityEpoch) throw new SignInRequired();
-      return result;
+      await finish(); return result;
     }
     catch (e) {
       if (!(e instanceof MobileApiError) || e.status !== 401) throw e;
@@ -82,7 +100,7 @@ export class Session {
       try {
         const result = await this.client(next).call(op, input, signal);
         if (epoch !== this.identityEpoch) throw new SignInRequired();
-        return result;
+        await finish(); return result;
       }
       catch (again) { if (again instanceof MobileApiError && again.status === 401) await this.serial(async () => { if (epoch === this.identityEpoch) await this.clear(); }); throw again; }
     }

@@ -9,7 +9,7 @@ import { HoldError } from "@/lib/checkout-hold";
 import { JurisdictionUnavailable } from "@/lib/jurisdiction";
 import { ReleaseGateError } from "@/lib/release-control";
 import { InvalidDocumentError } from "@/lib/documents";
-import { MobileError } from "./auth";
+import { MobileError, MobileNonCommit } from "./auth";
 import { mobileOperation } from "./contract";
 
 export const MOBILE_VERSION = "1";
@@ -18,9 +18,9 @@ export function mobileIp(headers: Headers) {
   const raw = headers.get("x-real-ip") ?? "";
   return createHmac("sha256", process.env.AUTH_SECRET ?? "local-only").update(isIP(raw) ? raw : "unknown").digest("hex");
 }
-export async function mobileBody(req: Request) {
+export async function mobileBody(req: Request, validate = true) {
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers.get("content-type") ?? "")) throw new MobileError("INVALID_REQUEST", 415);
-  try { const data: unknown = JSON.parse((await boundedBody(req, 24_000)).toString("utf8")); return mobileOperation(req)?.body?.parse(data) ?? data; }
+  try { const data: unknown = JSON.parse((await boundedBody(req, 24_000)).toString("utf8")); return validate ? mobileOperation(req)?.body?.parse(data) ?? data : data; }
   catch (error) { if (error instanceof MarketplaceError) throw error; throw new MobileError("INVALID_REQUEST", 400); }
 }
 export const pageSchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20), cursor: z.string().max(128).optional() });
@@ -55,7 +55,7 @@ export async function mobileHandler(req: Request, operation: string, run: (reque
       ? (({ P2028: "DATABASE_TRANSACTION", P2024: "DATABASE_POOL", P2034: "DATABASE_CONFLICT" } as Record<string, string>)[error.code] ?? "DATABASE_OPERATION")
       : error instanceof ReleaseGateError ? "RELEASE_GATE" : "INTERNAL";
     const code = error instanceof MobileError ? error.code : status === 400 || status === 413 ? "INVALID_REQUEST" : status === 403 ? "FORBIDDEN" : status === 404 ? "NOT_FOUND" : status === 409 ? "CONFLICT" : status === 429 ? "RATE_LIMITED" : "UNAVAILABLE";
-    return Response.json({ data: null, error: { code }, requestId }, { status, headers: { ...mobileHeaders(requestId), ...(status === 429 ? { "Retry-After": "60" } : {}) } });
+    return Response.json({ data: null, error: { code, ...(error instanceof MobileNonCommit ? { nonCommit: { idempotencyKey: error.idempotencyKey } } : {}) }, requestId }, { status, headers: { ...mobileHeaders(requestId), ...(status === 429 ? { "Retry-After": "60" } : {}) } });
   } finally {
     // Callers supply a fixed operation label, never a URL, ID or request data.
     console.info(JSON.stringify({ event: "mobile.request", timestamp: new Date().toISOString(), operation: telemetryOperation, requestId, status, durationMs: Math.round(performance.now() - start), ...(failureKind ? { failureKind } : {}) }));

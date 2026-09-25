@@ -61,5 +61,11 @@ export async function readCollaborationFile(userId: string, id: string) {
     return row;
   });
   const result = await readPrivateDocument(file.storageKey);
+  await prisma.$transaction(async tx => {
+    const current = await tx.collaborationFile.findUnique({ where: { id } });
+    if (!current || current.deletedAt || current.scanStatus !== "CLEAN" || current.storageKey !== file.storageKey || current.mimeType !== file.mimeType || current.sha256 !== file.sha256 || current.caseId !== file.caseId || current.conversationId !== file.conversationId || current.uploadedById !== file.uploadedById) throw new MarketplaceError("Not found.", 404);
+    await scopeAccess(tx, userId, current);
+  });
+  await result.revalidate();
   return { buffer: result.buffer, mimeType: file.mimeType };
 }

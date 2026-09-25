@@ -16,7 +16,9 @@ if (process.argv.includes('--assert')) {
   const uploads = await db.mobileUpload.findMany({ where: { userId: customer.id } });
   if (uploads.length !== 1 || !uploads[0].finalizedAt || uploads[0].reservationId !== reservation.id) throw new Error('Restarted customer photo must finalize one original upload');
   if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native recovery must not enable provider work');
-  console.log('Customer restart recovery: one message, zero provider operations and payouts.');
+  if (await db.conversationMessage.count({ where: { body: '<invalid>' } })) throw new Error('Rejected message must not create an effect');
+  if (await db.mobileMutation.count({ where: { operation: 'message.send', result: { path: ['mobileRejectedV1', 'status'], equals: 400 } } }) !== 1) throw new Error('Expected one durable rejected message receipt');
+  console.log('Customer restart recovery: one message, one rejection receipt, zero provider operations and payouts.');
   await db.$disconnect(); return;
 }
 await fixtureJurisdiction(db);

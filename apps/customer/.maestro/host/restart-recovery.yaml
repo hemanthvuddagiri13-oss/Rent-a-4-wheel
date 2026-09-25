@@ -2,6 +2,15 @@ appId: com.renta4wheel.host.acceptance
 ---
 - stopApp
 - launchApp
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Same measured cold-Keychain readiness budget as host/login.yaml.
+      # Wait for the loaded host context, never substitute a splash assertion.
+      - extendedWaitUntil:
+          visible: Host dashboard
+          timeout: 75000
 - assertVisible: Host dashboard
 - assertVisible: Synthetic host business.*OWNER
 - scrollUntilVisible:

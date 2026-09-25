@@ -18,6 +18,10 @@ appId: com.renta4wheel.host.acceptance
       - repeat:
           times: ${PHONE.length}
           commands:
+            # XCTest may lose first-responder focus between injections. Restore
+            # it explicitly; keep the exact prefix assertion after every digit.
+            - tapOn:
+                id: "input-Mobile phone number"
             - inputText: ${PHONE.charAt(output.phoneIndex)}
             - evalScript: ${output.phoneIndex = output.phoneIndex + 1}
             - assertVisible:

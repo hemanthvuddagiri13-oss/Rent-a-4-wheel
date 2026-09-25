@@ -69,6 +69,9 @@ jobs:
           curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3000/api/health/live
           curl --fail --max-time 180 http://localhost:3000/api/v1/mobile/vehicles > /dev/null
           curl --fail --max-time 180 -H 'Content-Type: application/json' --data '{"email":"compile-only@example.test"}' http://localhost:3000/api/v1/mobile/auth/request-code > /dev/null
+          # Compile the phone route with invalid input before timed app requests.
+          # No challenge/account/provider call is created; require the real 400.
+          test "$(curl --silent --show-error --max-time 180 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{}' http://localhost:3000/api/v1/mobile/auth/request-phone-code)" = 400
           curl -fsSL https://get.maestro.mobile.dev | bash
       - name: KVM permissions
         run: |
@@ -176,6 +179,9 @@ jobs:
           curl --retry 30 --retry-delay 1 --retry-connrefused --fail http://localhost:3000/api/health/live
           curl --fail --max-time 180 http://localhost:3000/api/v1/mobile/vehicles > /dev/null
           curl --fail --max-time 180 -H 'Content-Type: application/json' --data '{"email":"compile-only@example.test"}' http://localhost:3000/api/v1/mobile/auth/request-code > /dev/null
+          # Compile the phone route with invalid input before timed app requests.
+          # No challenge/account/provider call is created; require the real 400.
+          test "$(curl --silent --show-error --max-time 180 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{}' http://localhost:3000/api/v1/mobile/auth/request-phone-code)" = 400
           xcrun simctl install "$DEVICE" apps/customer/build/Build/Products/Release-iphonesimulator/RentA4Wheel.app
           npx tsx tests/helpers/customer-native-fixture.ts
           xcrun simctl addmedia "$DEVICE" /tmp/customer-native-fixtures/condition.png

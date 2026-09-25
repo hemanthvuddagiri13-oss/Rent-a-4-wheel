@@ -16,22 +16,23 @@ it.each([false, true])('recovers every secure snapshot mutation boundary (failur
     f.reset(); const restarted = f.make(), recovered = await restarted.read('account');
     expect([oldValue, nextValue], 'boundary ' + boundary).toContain(recovered);
     await restarted.write('account', '[]'); expect(await restarted.read('account')).toBe('[]');
-    expect(f.values.size, 'no unregistered generations at boundary ' + boundary).toBe(2);
+    expect(f.values.size, 'registry, pointer and active chunk only at boundary ' + boundary).toBe(3);
   }
 });
 it('refuses incomplete or corrupt active storage rather than treating it as an empty queue', async () => {
   const f = fixture(); await f.make().write('owner', '[]');
-  const chunk = [...f.values.keys()].find(key => key !== 'ra4w.recovery.owner')!; f.values.delete(chunk);
+  const chunk = [...f.values.keys()].find(key => key.startsWith('ra4w.recovery.owner.'))!; f.values.delete(chunk);
   await expect(f.make().read('owner')).rejects.toThrow('Incomplete');
   f.values.set('ra4w.recovery.owner', '{"active":{"id":"../invalid","count":1}}');
   await expect(f.make().read('owner')).rejects.toThrow('Invalid');
 });
 it('recovers initial creation failures without exposing a partial first intent', async () => {
-  for (const after of [false, true]) for (let boundary = 1; boundary <= 3; boundary++) {
+  const probe = fixture(); await probe.make().write('new-account', '[]');
+  for (const after of [false, true]) for (let boundary = 1; boundary <= probe.count(); boundary++) {
     const f = fixture(); f.reset(boundary, after);
     await expect(f.make().write('new-account', '[]')).rejects.toThrow('process died');
     f.reset(); expect([null, '[]']).toContain(await f.make().read('new-account'));
-    await f.make().write('new-account', '[]'); expect(f.values.size).toBe(2);
+    await f.make().write('new-account', '[]'); expect(f.values.size).toBe(3);
   }
 });
 it('retains cleanup evidence if the native delete resolves without deleting', async () => {
@@ -41,5 +42,5 @@ it('retains cleanup evidence if the native delete resolves without deleting', as
   await make().write('owner', '[1]'); dropDelete = true;
   await expect(make().write('owner', '[2]')).rejects.toThrow('cleanup remains pending');
   expect(JSON.parse(values.get('ra4w.recovery.owner')!).garbage).toBeDefined();
-  dropDelete = false; expect(await make().read('owner')).toBe('[2]'); expect(values.size).toBe(2);
+  dropDelete = false; expect(await make().read('owner')).toBe('[2]'); expect(values.size).toBe(3);
 });

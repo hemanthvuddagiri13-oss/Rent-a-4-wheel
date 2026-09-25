@@ -15,12 +15,18 @@ import { createServiceCase, createCaseSchema, caseAccess, caseCommand } from "@/
 import { saveTripReview } from "@/lib/trip-reviews";
 import { tripCommand } from "@/lib/trip-experience";
 import { cancelCustomerReservation, startCustomerTrip } from "@/lib/customer-reservation";
-import { mobileMutation } from "./mutation";
+import { mobileMutation, resolveMobileMutation } from "./mutation";
 import { mobileReservationAccess, mobileQuery } from "./queries";
 import { isVehicleAvailable } from "@/lib/availability";
 import { hasVerifiedBookingContact } from "@/lib/booking-contact";
 import { authenticateMobile, MobileError } from "./auth";
 import { mobileBody, mobileIp } from "./http";
+import { mobileOperation, recoveryResolutionInput } from "./contract";
+
+function checkedCommand<T extends z.ZodType>(req: Request, input: unknown, schema: T) {
+  const wire = mobileOperation(req)!.body!.safeParse(input);
+  return wire.success ? schema.safeParse(wire.data) : { success: false as const, error: wire.error };
+}
 
 function mobileBookingDates(data: { pickupAt: string; returnAt: string }, timezone: string) {
   try { return { pickupAt: bookingInstant(data.pickupAt, timezone), returnAt: bookingInstant(data.returnAt, timezone) }; }
@@ -41,7 +47,12 @@ export async function mobileCommand(req: Request, parts: string[]) {
   if (resource === "uploads" && id && action === "finalize" && parts.length === 3) {
     const { finalizeMobileUpload } = await import("./uploads"); return finalizeMobileUpload(req, id);
   }
-  const input = await mobileBody(req);
+  const rejectionReceipt = (resource === "cases" && (!id || action === "reply" && parts.length === 3)) || (resource === "conversations" && id && action === "messages" && parts.length === 3) || (resource === "reservations" && id === "hold" && parts.length === 2);
+  const input = await mobileBody(req, !rejectionReceipt);
+  if (resource === "recovery" && id === "resolve" && parts.length === 2) {
+    const data = recoveryResolutionInput.parse(input);
+    return resolveMobileMutation(req, data.operation, data.idempotencyKey);
+  }
   if (resource === "host") { const { hostWrite } = await import("./host"); return hostWrite(req, actor.userId, parts, input); }
   if (resource === "uploads" && !id) {
     const { initializeMobileUpload } = await import("./uploads"); return initializeMobileUpload(req, input);
@@ -92,9 +103,10 @@ export async function mobileCommand(req: Request, parts: string[]) {
     });
   }
   if (resource === "reservations" && id === "hold" && parts.length === 2) {
-    const data = createHoldSchema.parse(input), timezone = (await getSiteSettings()).bookingTimezone;
-    const { pickupAt, returnAt } = mobileBookingDates(data, timezone);
-    return mobileMutation(req, "reservation.hold", data, async (tx, userId) => { await active(tx, userId); if (!await hasVerifiedBookingContact(tx, userId)) throw new MobileError("CONFLICT", 409); }, async (tx, userId) => {
+    const parsed = checkedCommand(req, input, createHoldSchema), timezone = (await getSiteSettings()).bookingTimezone;
+    return mobileMutation(req, "reservation.hold", parsed.success ? parsed.data : { invalidInput: input }, async (tx, userId) => { await active(tx, userId); if (!await hasVerifiedBookingContact(tx, userId)) throw new MobileError("CONFLICT", 409); }, async (tx, userId) => {
+      if (!parsed.success) throw parsed.error;
+      const data = parsed.data, { pickupAt, returnAt } = mobileBookingDates(data, timezone);
       const held = await createOrRefreshHold({ ...data, customerId: userId, bookingTimezone: timezone, pickupAt, returnAt }, tx);
       return { id: held.id };
     });
@@ -112,18 +124,21 @@ export async function mobileCommand(req: Request, parts: string[]) {
     return mobileMutation(req, "conversation.open", data, async (tx, userId) => { await mobileReservationAccess(tx, userId, data.reservationId); }, (tx, userId) => openConversation(userId, data, tx));
   }
   if (resource === "conversations" && id && action === "messages" && parts.length === 3) {
-    const data = z.object({ body: z.string().min(1).max(5000) }).strict().parse(input);
-    return mobileMutation(req, "message.send", { id, ...data }, async (tx, userId) => { await conversationAccess(tx, userId, id); }, (tx, userId) => messageCommand(userId, id, { action: "send", ...data }, tx));
+    const parsed = checkedCommand(req, input, z.object({ body: z.string().min(1).max(5000) }).strict());
+    return mobileMutation(req, "message.send", parsed.success ? { id, ...parsed.data } : { id, invalidInput: input }, async (tx, userId) => { await conversationAccess(tx, userId, id); }, (tx, userId) => {
+      if (!parsed.success) throw parsed.error;
+      return messageCommand(userId, id, { action: "send", ...parsed.data }, tx);
+    });
   }
   if (resource === "cases" && !id) {
-    const data = createCaseSchema.parse(input);
-    return mobileMutation(req, "case.open", data, async (tx, userId) => {
-      await active(tx, userId); if (data.reservationId) await mobileReservationAccess(tx, userId, data.reservationId);
-    }, (tx, userId) => createServiceCase(userId, data, tx));
+    const parsed = checkedCommand(req, input, createCaseSchema);
+    return mobileMutation(req, "case.open", parsed.success ? parsed.data : { invalidInput: input }, async (tx, userId) => {
+      await active(tx, userId); if (parsed.success && parsed.data.reservationId) await mobileReservationAccess(tx, userId, parsed.data.reservationId);
+    }, (tx, userId) => { if (!parsed.success) throw parsed.error; return createServiceCase(userId, parsed.data, tx); });
   }
   if (resource === "cases" && id && action === "reply" && parts.length === 3) {
-    const data = z.object({ body: z.string().min(1).max(5000), version: z.number().int().min(0) }).strict().parse(input);
-    return mobileMutation(req, "case.reply", { id, ...data }, async (tx, userId) => { await caseAccess(tx, userId, id); }, async (tx, userId) => { await caseCommand(userId, id, { ...data, action: "reply" }, tx); return { id }; });
+    const parsed = checkedCommand(req, input, z.object({ body: z.string().min(1).max(5000), version: z.number().int().min(0) }).strict());
+    return mobileMutation(req, "case.reply", parsed.success ? { id, ...parsed.data } : { id, invalidInput: input }, async (tx, userId) => { await caseAccess(tx, userId, id); }, async (tx, userId) => { if (!parsed.success) throw parsed.error; await caseCommand(userId, id, { ...parsed.data, action: "reply" }, tx); return { id }; });
   }
   if (resource === "reviews" && !id) {
     const data = z.object({ reservationId: z.string().max(128), subject: z.enum(["VEHICLE", "HOST", "CUSTOMER"]), rating: z.number().int().min(1).max(5), body: z.string().min(3).max(5000), cleanliness: z.number().int().min(1).max(5), communication: z.number().int().min(1).max(5), accuracy: z.number().int().min(1).max(5), version: z.number().int().min(0).optional() }).strict().parse(input);

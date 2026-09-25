@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createHoldSchema, checkoutSchema } from "@/lib/validations/reservation";
 import { handoffSchema, calendarInput, hostAvailabilityInput } from "@/lib/validations/host-mobile";
+import { mutationOperations, type RecoverableOperation } from "../../../packages/mobile-client/src/mutation-operations";
 
 const id = z.string().min(1).max(128), date = z.iso.datetime(), cents = z.number().int(), empty = z.object({}).strict();
 const success = z.object({ success: z.boolean() }).strict(), identifier = z.object({ id }).strict();
@@ -11,6 +12,7 @@ const serviceCase = z.object({ id, kind: z.string(), category: z.string(), title
 const page = (item: z.ZodType) => z.object({ items: z.array(item), nextCursor: id.nullable() }).strict();
 const items = (item: z.ZodType) => z.object({ items: z.array(item) }).strict();
 const credentials = z.object({ tokenType: z.literal("Bearer"), accessToken: z.string(), refreshToken: z.string(), accessExpiresAt: date, refreshExpiresAt: date, sessionId: id }).strict();
+export const recoveryResolutionInput = z.object({ operation: z.enum(Object.keys(mutationOperations) as [RecoverableOperation, ...RecoverableOperation[]]), idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/) }).strict();
 const review = z.object({ reservationId: id, subject: z.enum(["VEHICLE", "HOST", "CUSTOMER"]), rating: z.number().int().min(1).max(5), body: z.string().min(3).max(5000), cleanliness: z.number().int().min(1).max(5), communication: z.number().int().min(1).max(5), accuracy: z.number().int().min(1).max(5), version: z.number().int().min(0).optional() }).strict();
 const caseInput = z.object({ kind: z.enum(["CLAIM", "DISPUTE", "INCIDENT", "TICKET"]), reservationId: id.optional(), category: z.string().min(1).max(60), title: z.string().min(3).max(160), body: z.string().min(10).max(5000), linkedCaseId: id.optional(), location: z.string().max(300).optional(), severity: z.enum(["MINOR", "MODERATE", "SEVERE"]).optional(), occurredAt: date.optional(), people: z.string().max(500).optional(), policeReport: z.string().max(100).optional(), provider: z.string().max(300).optional(), originalPhotoIds: z.array(id).max(30).optional() }).strict();
 const photoCategory = z.enum(["EXTERIOR", "INTERIOR", "ODOMETER", "FUEL_GAUGE", "DAMAGE"]);
@@ -32,6 +34,7 @@ export const mobileOperations: MobileOperation[] = [
   post("revokeDevice", "/auth/revoke", z.object({ sessionId: id }).strict(), z.object({ revoked: z.literal(true) }).strict(), { idempotent: false }),
   get("devices", "/auth/devices", z.object({ devices: z.array(z.object({ id, platform: z.string(), appVersion: z.string(), lastUsedAt: date, expiresAt: date }).strict()) }).strict()),
   get("me", "/me", z.object({ id, role: z.enum(["CUSTOMER", "HOST", "HOST_EMPLOYEE"]) }).strict()),
+  post("resolveMutation", "/recovery/resolve", recoveryResolutionInput, z.object({ outcome: z.enum(["COMMITTED", "NOT_COMMITTED"]), idempotencyKey: z.string() }).strict(), { idempotent: false }),
   get("vehicles", "/vehicles", page(vehicle), { auth: false, paginated: true }),
   get("vehicle", "/vehicles/{id}", vehicle, { auth: false }),
   get("listingPhotos", "/vehicles/{id}/photos", items(z.object({ id, path: z.string(), alt: z.string() }).strict()), { auth: false }),

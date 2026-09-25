@@ -44,7 +44,9 @@ async function main() {
     if (await db.tripEvent.count({ where: { reservationId: ready.id, type: 'TRIP_KEYS' } }) !== 1) throw new Error('Repeated keys taps must commit once');
     for (const type of ['TRIP_COMPLETE', 'RETURN_REVIEWED']) if (await db.tripEvent.count({ where: { reservationId: completed.id, type } }) !== 1) throw new Error('Repeated completion taps must commit once');
     if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native acceptance must not issue provider work');
-    console.log('Native database assertions: one reply, one handoff, blocked start/keys, completed return, zero provider operations/payouts.');
+    if (await db.conversationMessage.count({ where: { body: '<invalid>' } })) throw new Error('Rejected message must not create an effect');
+    if (await db.mobileMutation.count({ where: { operation: 'message.send', result: { path: ['mobileRejectedV1', 'status'], equals: 400 } } }) !== 1) throw new Error('Expected one durable rejected message receipt');
+    console.log('Native database assertions: one reply, one handoff, one rejected message receipt, blocked start/keys, completed return, zero provider operations/payouts.');
     return;
   }
   await fixtureJurisdiction(db);

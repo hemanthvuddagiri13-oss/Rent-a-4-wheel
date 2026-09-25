@@ -12,6 +12,16 @@ export class SecureRecoveryStore implements RecoveryStore {
   private tail: Promise<unknown> = Promise.resolve();
   constructor(private items: SecureItems, private hash: (scope: string) => Promise<string>, private random: () => string) {}
   private serial<T>(work: () => Promise<T>) { const next = this.tail.then(work, work); this.tail = next.catch(() => {}); return next; }
+  private async known() {
+    const raw = await this.items.get('ra4w.recovery.registry'), keys: unknown = raw === null ? [] : JSON.parse(raw);
+    if (!Array.isArray(keys) || keys.length > 16 || keys.some(k => typeof k !== 'string' || !/^ra4w\.recovery\.[a-zA-Z0-9_-]{1,128}$/.test(k) || k === 'ra4w.recovery.registry')) throw new Error('Invalid recovery registry');
+    return keys as string[];
+  }
+  private async register(key: string) {
+    const keys = await this.known(); if (keys.includes(key)) return;
+    if (keys.length >= 16) throw new Error('Recovery account registry requires support review');
+    await this.items.set('ra4w.recovery.registry', JSON.stringify([...keys, key]));
+  }
   private async remove(key: string, value: Generation) {
     for (let i = 0; i < value.count; i++) {
       const chunk = key + '.' + value.id + '.' + i;
@@ -30,15 +40,15 @@ export class SecureRecoveryStore implements RecoveryStore {
     if (p.pending || p.garbage) await this.items.set(key, JSON.stringify({ active: p.active }));
     return { active: p.active };
   }
-  read(scope: string) { return this.serial(async () => {
-    const key = 'ra4w.recovery.' + await this.hash(scope), p = await this.pointer(key);
+  private async readKey(key: string) {
+    const p = await this.pointer(key);
     if (!p.active) return null;
     let value = '';
     for (let i = 0; i < p.active.count; i++) { const part = await this.items.get(key + '.' + p.active.id + '.' + i); if (part === null) throw new Error('Incomplete secure recovery record'); value += part; }
     return value;
-  }); }
-  write(scope: string, value: string) { return this.serial(async () => {
-    const key = 'ra4w.recovery.' + await this.hash(scope), p = await this.pointer(key), points = Array.from(value), chunks: string[] = [];
+  }
+  private async writeKey(key: string, value: string) {
+    const p = await this.pointer(key), points = Array.from(value), chunks: string[] = [];
     for (let i = 0; i < points.length; i += 300) chunks.push(points.slice(i, i + 300).join(''));
     if (!chunks.length) chunks.push('');
     const next = { id: this.random(), count: chunks.length };
@@ -47,5 +57,19 @@ export class SecureRecoveryStore implements RecoveryStore {
     for (let i = 0; i < chunks.length; i++) await this.items.set(key + '.' + next.id + '.' + i, chunks[i]);
     await this.items.set(key, JSON.stringify({ active: next, ...(p.active ? { garbage: p.active } : {}) }));
     await this.pointer(key);
+  }
+  read(scope: string) { return this.serial(async () => {
+    const key = 'ra4w.recovery.' + await this.hash(scope); await this.register(key); return this.readKey(key);
+  }); }
+  write(scope: string, value: string) { return this.serial(async () => {
+    const key = 'ra4w.recovery.' + await this.hash(scope); await this.register(key); await this.writeKey(key, value);
+  }); }
+  /** Bounded registry supports cleanup after lost/invalid credentials, without
+   * retaining user IDs or enumerating unrelated Keychain items. */
+  rewriteKnown(protect: (value: string) => Promise<string>) { return this.serial(async () => {
+    for (const key of await this.known()) {
+      const raw = await this.readKey(key); if (raw === null) continue;
+      const next = await protect(raw); if (next !== raw) await this.writeKey(key, next);
+    }
   }); }
 }

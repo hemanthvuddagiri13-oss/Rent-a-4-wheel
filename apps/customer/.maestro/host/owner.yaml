@@ -40,6 +40,7 @@ appId: com.renta4wheel.host.acceptance
 - assertVisible: "Synthetic pickup bay A.*"
 - takeScreenshot: host-pickup
 - tapOn: "Message customer"
+- runFlow: rejected-message.yaml
 - tapOn:
     id: "input-Message"
 - inputText: "Synthetic host pickup instructions."
@@ -114,6 +115,13 @@ appId: com.renta4wheel.host.acceptance
     element: "Open support request"
     direction: DOWN
 - tapOn: "Open support request"
+- extendedWaitUntil:
+    visible:
+      id: case-detail-title
+      text: "Synthetic host recovery"
+    timeout: 60000
+- assertNotVisible:
+    id: "input-Request title"
 - tapOn:
     id: "input-Reply to case"
 - inputText: "Synthetic interrupted reply."
