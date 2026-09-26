@@ -1,0 +1,125 @@
+name: Device trial compile (unsigned)
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: device-trial-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  configuration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm --prefix apps/customer ci
+      - run: node --test tests/native-device-trial-gate.test.mjs tests/native-staging-probe.test.mjs tests/native-device-config.test.mjs tests/staging-public-config.test.mjs
+  android:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [customer, host]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      APP_ENV: staging
+      NATIVE_ACCEPTANCE: '0'
+      EXPO_PUBLIC_APP_MODE: ${{ matrix.mode }}
+      # Compile-only DNS label. No request or deployment is made to this host.
+      EXPO_PUBLIC_API_ORIGIN: https://staging.compile.renta4wheel.com
+      DEVICE_TRIAL_STAGING_ORIGIN: https://staging.compile.renta4wheel.com
+      ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+      LIVE_FINANCE_ENABLED: 'false'
+      MOBILE_SMS_PROVIDER: twilio
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm --prefix apps/customer ci
+      - run: npm --prefix apps/customer run device-trial:android-prebuild
+      - working-directory: apps/customer/android
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=2
+      - name: Verify unsigned arm64 output
+        run: |
+          export ANDROID_BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          python3 scripts/verify-unsigned-device.py android apps/customer/android/app/build/outputs/apk/release/app-release-unsigned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-NOT-INSTALLABLE-android-${{ matrix.mode }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            artifacts/unsigned-*.json
+            apps/customer/android/app/build/outputs/apk/release/app-release-unsigned.apk
+  ios:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [customer, host]
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      APP_ENV: staging
+      NATIVE_ACCEPTANCE: '0'
+      EXPO_PUBLIC_APP_MODE: ${{ matrix.mode }}
+      EXPO_PUBLIC_API_ORIGIN: https://staging.compile.renta4wheel.com
+      DEVICE_TRIAL_STAGING_ORIGIN: https://staging.compile.renta4wheel.com
+      ALLOW_DEV_PAYMENT_SIMULATION: 'false'
+      LIVE_FINANCE_ENABLED: 'false'
+      MOBILE_SMS_PROVIDER: twilio
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm --prefix apps/customer ci
+      - run: sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+      - run: npm --prefix apps/customer run device-trial:ios-prebuild
+      - working-directory: apps/customer/ios
+        run: pod install
+      - name: Compile device SDK without signing or Apple credentials
+        working-directory: apps/customer
+        run: |
+          WORKSPACE=$(find ios -maxdepth 1 -name '*.xcworkspace')
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -archivePath "$PWD/build/trial.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+      - run: python3 scripts/verify-unsigned-device.py ios apps/customer/build/trial.xcarchive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-NOT-INSTALLABLE-ios-${{ matrix.mode }}-${{ github.event.pull_request.head.sha || github.sha }}
+          # Archive is deliberately not distributed. Record compile evidence only.
+          path: artifacts/unsigned-*.json
+  staging-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: docker build -f Dockerfile.staging -t r4w-trial:ci .
+      - name: Verify liveness, fail-closed readiness and forbidden finance startup
+        run: |
+          docker run -d --name trial -p 127.0.0.1:3000:3000 r4w-trial:ci
+          trap 'docker logs trial; docker rm -f trial' EXIT
+          for attempt in {1..30}; do curl --fail http://127.0.0.1:3000/api/health/live && break; sleep 1; done
+          test "$(curl -s -o /tmp/ready.json -w '%{http_code}' http://127.0.0.1:3000/api/health/ready)" = 503
+          node -e 'const x=JSON.parse(require("fs").readFileSync("/tmp/ready.json"));if(x.ready!==false)process.exit(1)'
+          if docker run --rm -e LIVE_FINANCE_ENABLED=true r4w-trial:ci; then exit 1; fi
+          if docker run --rm -e SITE_URL=https://staging.other.renta4wheel.com r4w-trial:ci; then exit 1; fi
+          if docker run --rm -e NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_Different r4w-trial:ci; then exit 1; fi
+      - name: Validate restricted ingress template without deployment
+        run: docker run --rm -e TRIAL_HOST=staging.compile.renta4wheel.com -e TRIAL_ALLOWED_CIDRS=192.0.2.0/24 -v "$PWD/deploy/staging.Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 caddy validate --config /etc/caddy/Caddyfile
