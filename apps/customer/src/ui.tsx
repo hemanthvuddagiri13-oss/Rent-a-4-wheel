@@ -1,4 +1,5 @@
-import React, { useId } from 'react';
+import { trace } from './acceptance-trace';
+import React, { useId, useEffect } from 'react';
 import { ActivityIndicator, InputAccessoryView, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export const colors = { bg: '#050505', card: '#161616', text: '#FFFFFF', muted: '#B7BBC4', gold: '#D6B66A', border: '#44464D', error: '#F5A2AB' };
@@ -7,7 +8,7 @@ export function Page({ title, titleTestID, children }: React.PropsWithChildren<{
 export const Copy = ({ children }: React.PropsWithChildren) => <Text style={styles.text}>{children}</Text>;
 export const Hint = ({ children }: React.PropsWithChildren) => <Text style={styles.muted}>{children}</Text>;
 export const Card = ({ children }: React.PropsWithChildren) => <View style={styles.card}>{children}</View>;
-export function Button({ title, onPress, disabled = false, testID }: { title: string; onPress: () => void; disabled?: boolean; testID?: string }) { return <Pressable testID={testID} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled }} disabled={disabled} onPress={() => { Keyboard.dismiss(); onPress(); }} style={({ pressed }) => [styles.button, { opacity: disabled ? 0.5 : pressed ? 0.8 : 1 }]}><Text style={styles.buttonText}>{title}</Text></Pressable>; }
+export function Button({ title, onPress, disabled = false, testID }: { title: string; onPress: () => void; disabled?: boolean; testID?: string }) { useEffect(() => { trace(disabled ? 'disabled' : 'ready', testID); }, [disabled, testID]); return <Pressable onTouchStart={() => trace('touch', testID)} onPressIn={() => trace('press-in', testID)} onPressOut={() => trace('press-out', testID)} testID={testID} accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled }} disabled={disabled} onPress={() => { trace('press', testID); Keyboard.dismiss(); onPress(); }} style={({ pressed }) => [styles.button, { opacity: disabled ? 0.5 : pressed ? 0.8 : 1 }]}><Text style={styles.buttonText}>{title}</Text></Pressable>; }
 export function Field({ label, ...props }: TextInputProps & { label: string }) { const accessoryId = useId(); return <View style={{ gap: 6 }}><Text style={styles.text}>{label}</Text><TextInput {...props} inputAccessoryViewID={Platform.OS === 'ios' ? accessoryId : undefined} testID={"input-" + label} accessibilityLabel={label} placeholderTextColor={colors.muted} style={styles.input} />{Platform.OS === 'ios' && <InputAccessoryView nativeID={accessoryId}><View style={{ backgroundColor: colors.card, padding: 8 }}><Button title="Done editing" onPress={() => Keyboard.dismiss()} /></View></InputAccessoryView>}</View>; }
 export const Busy = () => <ActivityIndicator accessibilityLabel="Loading from server" color={colors.gold} size="large" />;
 export const ErrorText = ({ message }: { message: string }) => message ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.error}>{message}</Text> : null;

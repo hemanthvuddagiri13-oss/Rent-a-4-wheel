@@ -8,8 +8,9 @@ for (const path of ['/tmp/native-api.log', '/tmp/native-proxy.log']) {
   for (const line of text.split('\n')) {
     const start = line.indexOf('{'); if (start < 0) continue;
     try { const row = JSON.parse(line.slice(start));
+      if (row.event === 'native.ui') rows.push({ event: row.event, phase: row.phase, target: row.target, sequence: row.sequence, timestamp: row.timestamp, receivedAt: row.receivedAt, requestId: row.requestId, status: row.status });
       if (row.event === 'mobile.request') rows.push({ event: row.event, timestamp: row.timestamp, operation: row.operation, requestId: row.requestId, status: row.status, durationMs: row.durationMs, ...(['RESPONSE_CONTRACT', 'DATABASE_TRANSACTION', 'DATABASE_POOL', 'DATABASE_CONFLICT', 'DATABASE_OPERATION', 'RELEASE_GATE', 'INTERNAL'].includes(row.failureKind) ? { failureKind: row.failureKind } : {}) });
-      if (['synthetic.response_truncated_after_commit', 'synthetic.incident_rejected'].includes(row.event)) rows.push({ event: row.event, kind: row.kind });
+      if (['synthetic.response_truncated_after_commit', 'synthetic.incident_rejected'].includes(row.event)) rows.push({ event: row.event, kind: row.kind, timestamp: row.timestamp, requestId: row.requestId });
     } catch { /* Other backend output is not an artifact. */ }
   }
 }

@@ -1,3 +1,4 @@
+import { trace } from '../acceptance-trace';
 import React, { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -21,17 +22,19 @@ function PhoneCodeButton({ resendAt, hasChallenge, disabled, onPress }: { resend
   return <Button title={remaining ? `Resend available in ${remaining}s` : hasChallenge ? 'Resend text code' : 'Send text code'} disabled={disabled || remaining > 0} onPress={onPress} />;
 }
 export function SignIn() {
+  useEffect(() => { trace('mount', 'SignIn'); return () => trace('unmount', 'SignIn'); }, []);
   const navigation = useNavigation<NativeStackNavigationProp<Routes>>(), action = useAction();
   const [phone, setPhone] = useState(''), [code, setCode] = useState(''), [challenge, setChallenge] = useState<string | null>(null), [resendAt, setResendAt] = useState(0);
   return <Page titleTestID="phone-sign-in-screen" title={hostApp ? "Welcome to hosting." : "Welcome to your next trip."}><Hint>{hostApp ? "Sign in with the number linked to your existing host membership. Verification does not grant host permissions. Include your country code." : "Sign in or create your customer account with a verified mobile number. Include your country code; US numbers can also use the usual ten-digit format."}</Hint>
     <Field label="Mobile phone number" value={phone} onChangeText={value => { setPhone(value); setChallenge(null); setCode(''); }} keyboardType="phone-pad" autoComplete="tel" />
     <PhoneCodeButton key={resendAt} resendAt={resendAt} hasChallenge={Boolean(challenge)} disabled={action.busy || phone.trim().length < 7} onPress={() => void action.run(async () => { const sent = await publicApi.call('requestPhoneCode', { body: { phone, deviceId: await deviceId() } }); setChallenge(sent.challengeId); setResendAt(Date.now() + sent.retryAfterSeconds * 1000); setCode(''); })} />
     {challenge && <><Hint>If this number can receive a code, a text is on its way. Codes expire in 10 minutes. Message and data rates may apply.</Hint><Field label="Six-digit text code" value={code} onChangeText={setCode} keyboardType="number-pad" maxLength={6} autoComplete="one-time-code" textContentType="oneTimeCode" /><Button title="Verify phone & continue" disabled={action.busy || !/^\d{6}$/.test(code)} onPress={() => void action.run(async () => { await session.signInPhone({ body: { challengeId: challenge, code, deviceId: await deviceId(), platform: Platform.OS === 'ios' ? 'IOS' : 'ANDROID', appVersion: '0.1.0' } }); setCode(''); })} /></>}
-    <ErrorText message={action.error} /><Button testID="email-fallback" title="Use verified email instead" onPress={() => navigation.navigate('EmailSignIn')} /><Hint>Email fallback works only for an email previously verified and linked to your account. A new phone account must link a verified email before booking.</Hint>
+    <ErrorText message={action.error} /><Button testID="email-fallback" title="Use verified email instead" onPress={() => (trace('navigation', 'EmailSignIn'), navigation.navigate('EmailSignIn'))} /><Hint>Email fallback works only for an email previously verified and linked to your account. A new phone account must link a verified email before booking.</Hint>
     <Card><Copy>Lost or changed your phone?</Copy><Hint>Use your linked email to sign in, then open Login & recovery in Account. Replacing a lost number requires identity review; verifying a replacement number alone does not transfer an account. If you cannot access either method, contact support through the official website. Never send codes or identity photos in a message.</Hint></Card>
   </Page>;
 }
 export function EmailSignIn() {
+  useEffect(() => { trace('mount', 'EmailSignIn'); return () => trace('unmount', 'EmailSignIn'); }, []);
   const [email, setEmail] = useState(''), [code, setCode] = useState(''), [sent, setSent] = useState(false), action = useAction();
   return <Page titleTestID="email-sign-in-screen" title="Sign in with linked email"><Hint>Use an email already verified and linked to your account. This fallback does not create or merge accounts. New customers start with phone verification.</Hint><Field label="Email address" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
     <Button title={sent ? 'Send a new code' : 'Send sign-in code'} disabled={action.busy || !email.includes('@')} onPress={() => void action.run(async () => { await publicApi.call('requestCode', { body: { email: email.trim().toLowerCase() } }); setSent(true); })} />
