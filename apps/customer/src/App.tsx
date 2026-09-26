@@ -1,3 +1,4 @@
+import { trace } from './acceptance-trace';
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { AppState, View, Text, Platform, Pressable } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
@@ -7,6 +8,7 @@ import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-
 import { session, friendly, hostApp } from './runtime';
 import { colors, Page, Hint, Busy, ErrorText } from './ui';
 import type { Routes } from './navigation';
+import { Recovery } from './screens/recovery';
 import { Home, Vehicle } from './screens/discovery';
 import { SignIn, EmailSignIn, Account } from './screens/account';
 import { LoginMethods } from './screens/login-methods';
@@ -26,14 +28,15 @@ export default function App() {
   const [authRevision, setAuthRevision] = useState(0), [startupError, setStartupError] = useState('');
   const appState = useSyncExternalStore(subscribeAppState, () => AppState.currentState);
   const privateScreen = appState !== 'active';
+  useEffect(() => { trace(appState, 'App'); }, [appState]);
   useEffect(() => {
     session.onChange = value => { void queries.cancelQueries(); queries.clear(); setSignedIn(value); setAuthRevision(revision => revision + 1); };
     void session.restore().catch(error => setStartupError(friendly(error))).finally(() => setReady(true));
     const listener = AppState.addEventListener('change', state => { focusManager.setFocused(state === 'active'); });
     return () => { listener.remove(); session.onChange = () => {}; };
   }, []);
-  return <SafeAreaProvider initialMetrics={initialWindowMetrics}><QueryClientProvider client={queries}>{startupError ? <Page title="Secure storage needs attention"><ErrorText message={startupError} /><Hint>Unlock your device and reopen the app. Credentials will not be stored outside secure device storage.</Hint></Page> : !ready ? <Page title="Opening securely"><Busy /><Hint>Checking this device’s secure session.</Hint></Page> : <NavigationContainer key={`${signedIn}:${authRevision}`} theme={{ ...DarkTheme, colors: { ...DarkTheme.colors, primary: colors.gold, background: colors.bg, card: colors.card, text: colors.text, border: colors.border } }}><Stack.Navigator screenOptions={{ statusBarStyle: 'light', ...(Platform.OS === 'android' ? { header: AndroidHeader } : {}), headerBackTitle: 'Back', headerTintColor: colors.gold, contentStyle: { backgroundColor: colors.bg } }}>
-    <Stack.Screen name="Home" component={hostApp ? (signedIn ? HostDashboard : HostWelcome) : Home} options={{ title: 'Rent A 4Wheel' }} /><Stack.Screen name="Vehicle" component={Vehicle} options={{ title: 'Explore a vehicle' }} /><Stack.Screen name="SignIn" component={SignIn} options={{ title: 'Sign in' }} />
+  return <SafeAreaProvider initialMetrics={initialWindowMetrics}><QueryClientProvider client={queries}>{startupError ? <Page title="Secure storage needs attention"><ErrorText message={startupError} /><Hint>Unlock your device and reopen the app. Credentials will not be stored outside secure device storage.</Hint></Page> : !ready ? <Page title="Opening securely"><Busy /><Hint>Checking this device’s secure session.</Hint></Page> : <NavigationContainer key={`${signedIn}:${authRevision}`} theme={{ ...DarkTheme, colors: { ...DarkTheme.colors, primary: colors.gold, background: colors.bg, card: colors.card, text: colors.text, border: colors.border } }}><Stack.Navigator initialRouteName="Home" screenOptions={{ statusBarStyle: 'light', ...(Platform.OS === 'android' ? { header: AndroidHeader } : {}), headerBackTitle: 'Back', headerTintColor: colors.gold, contentStyle: { backgroundColor: colors.bg } }}>
+    <Stack.Screen name="Recovery" component={signedIn ? Recovery : SignIn} options={{ title: 'Interrupted requests' }} /><Stack.Screen name="Home" component={hostApp ? (signedIn ? HostDashboard : HostWelcome) : Home} options={{ title: 'Rent A 4Wheel' }} /><Stack.Screen name="Vehicle" component={Vehicle} options={{ title: 'Explore a vehicle' }} /><Stack.Screen name="SignIn" component={SignIn} options={{ title: 'Sign in' }} />
     <Stack.Screen name="EmailSignIn" component={EmailSignIn} options={{ title: 'Email fallback' }} /><Stack.Screen name="LoginMethods" component={signedIn ? LoginMethods : SignIn} options={{ title: 'Login & recovery' }} />
     <Stack.Screen name="Reservations" component={signedIn ? Reservations : SignIn} options={{ title: 'Your trips' }} />
     <Stack.Screen name="Reservation" component={signedIn ? Reservation : SignIn} options={{ title: 'Trip details' }} />

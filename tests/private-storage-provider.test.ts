@@ -13,8 +13,8 @@ import {createDeviceSession} from "@/lib/device-sessions";
 import {adminExecution} from "@/lib/protected-admin";
 import {PDFDocument} from "pdf-lib";
 import {NextRequest} from "next/server";
-const authState=vi.hoisted(()=>({user:null as null|{id:string;role:string}}));
-vi.mock("@/auth",()=>({auth:async()=>authState.user?{user:authState.user}:null}));
+const authState=vi.hoisted(()=>({user:null as null|{id:string;role:string},credential:null as null|{sessionId:string;credentialVersion:number}}));
+vi.mock("@/auth",()=>({auth:async()=>authState.user?{user:authState.user,...authState.credential}:null}));
 import {GET as downloadDocument} from "@/app/api/documents/[id]/route";
 async function executionFor(userId:string){const s=await createDeviceSession(userId);return adminExecution({user:{id:userId},sessionId:s.sid,credentialVersion:s.rotation},new Headers({origin:new URL(process.env.SITE_URL??process.env.AUTH_URL??process.env.NEXTAUTH_URL??"http://localhost:3000").origin}));}
 let server:Server,scanner:ScannerServer,endpoint:string,scannerPort:string;
@@ -103,8 +103,9 @@ it("imports only attached legacy bytes with matching evidence and fresh reauthen
  expect((await prisma.privateObject.findUniqueOrThrow({where:{key}}))).toMatchObject({hold:true,state:"QUARANTINED",writeState:"STORED"});await expect(readPrivateDocument(key)).rejects.toThrow("NOT_CLEAN");
  const validation=await prisma.privateValidation.findUniqueOrThrow({where:{sourceKey:key}});
  await prisma.operationsJob.update({where:{key:"scan:"+sha(validation.targetKey)},data:{nextAttemptAt:new Date(0)}});await runOperations("SCAN");expect((await prisma.driverDocument.findUniqueOrThrow({where:{id:document.id}})).malwareScanStatus).toBe("CLEAN");const clean=(await readPrivateDocument(key)).buffer;expect(clean).toEqual(Buffer.from(validation.bytes));expect((await sharp(clean).metadata()).exif).toBeUndefined();
- authState.user={id:admin.id,role:"CUSTOMER"};const unauthorizedReads=reads;
+ authState.user={id:admin.id,role:"CUSTOMER"};authState.credential={sessionId:execution.sessionId,credentialVersion:execution.credentialVersion};const unauthorizedReads=reads;
  expect((await downloadDocument(new NextRequest("http://localhost/api/documents/"+document.id),{params:Promise.resolve({id:document.id})})).status).toBe(403);expect(reads).toBe(unauthorizedReads);
+ const ownerSession=await createDeviceSession(owner.id);authState.credential={sessionId:ownerSession.sid,credentialVersion:ownerSession.rotation};
  authState.user={id:owner.id,role:"CUSTOMER"};const downloaded=await downloadDocument(new NextRequest("http://localhost/api/documents/"+document.id),{params:Promise.resolve({id:document.id})});
  expect(downloaded.status).toBe(200);expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(clean);
  expect(await prisma.documentAccessLog.count({where:{documentId:document.id,accessedById:owner.id}})).toBe(1);

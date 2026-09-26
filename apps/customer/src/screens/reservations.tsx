@@ -8,7 +8,7 @@ import { useAction } from '../hooks';
 export function Reservations({ navigation }: NativeStackScreenProps<Routes, 'Reservations'>) {
   const [cursor, setCursor] = useState<string | undefined>();
   const q = useQuery({ queryKey: ['reservations', cursor], queryFn: ({ signal }) => session.call('reservations', { query: { cursor } }, signal) });
-  return <Page title="Your trips"><Button title="Refresh trips" onPress={() => { void q.refetch(); }} />{q.isPending ? <Busy /> : q.isError ? <ErrorText message={friendly(q.error)} /> : <>{!q.data.items.length && <Hint>No reservations yet. Explore vehicles to plan your next trip.</Hint>}{q.data.items.map(r => <Card key={r.id}><Copy>{r.confirmationNumber}</Copy><Hint>{new Date(r.pickupAt).toLocaleString()} → {new Date(r.returnAt).toLocaleString()}</Hint><Hint>{r.status === 'CONFIRMED' ? 'Open trip to verify payment and deposit.' : r.status.replaceAll('_', ' ')}</Hint><Button title={`View trip ${r.confirmationNumber}`} onPress={() => navigation.navigate('Reservation', { id: r.id })} /></Card>)}{q.data.nextCursor && <Button title="More trips" onPress={() => setCursor(q.data.nextCursor ?? undefined)} />}</>}</Page>;
+  return <Page title="Your trips"><Button title="Refresh trips" onPress={() => { void q.refetch(); }} />{q.isPending ? <Busy /> : q.isError ? <ErrorText message={friendly(q.error)} /> : <>{!q.data.items.length && <Hint>No reservations yet. Explore vehicles to plan your next trip.</Hint>}{q.data.items.map(r => <Card key={r.id}><Copy>{r.confirmationNumber}</Copy><Hint>{`Pickup: ${new Date(r.pickupAt).toLocaleString()}`}</Hint><Hint>{`Return: ${new Date(r.returnAt).toLocaleString()}`}</Hint><Hint>{r.status === 'CONFIRMED' ? 'Open trip to verify payment and deposit.' : r.status.replaceAll('_', ' ')}</Hint><Button title={`View trip ${r.confirmationNumber}`} onPress={() => navigation.navigate('Reservation', { id: r.id })} /></Card>)}{q.data.nextCursor && <Button title="More trips" onPress={() => setCursor(q.data.nextCursor ?? undefined)} />}</>}</Page>;
 }
 export function FinancialStatus({ value: p }: { value: Output<'paymentStatus'> }) {
   const confirmed = p.outcome === 'confirmed';
@@ -22,8 +22,11 @@ export function Reservation({ navigation, route }: NativeStackScreenProps<Routes
   const pricing = useQuery({ queryKey: ['pricing', id], queryFn: ({ signal }) => session.call('pricing', { params: { id } }, signal) });
   const trip = useQuery({ queryKey: ['trip', id], queryFn: ({ signal }) => session.call('trip', { params: { id } }, signal) });
   const refresh = async () => { await Promise.all([r.refetch(), payment.refetch(), pricing.refetch(), trip.refetch()]); };
-  return <Page title={r.data?.confirmationNumber ?? 'Your reservation'}><Button title="Refresh reservation status" onPress={() => void refresh()} />{r.isPending && <Busy />}{[r, payment, pricing, trip].filter(q => q.isError).map((q, i) => <ErrorText key={i} message={friendly(q.error)} />)}
-    {r.data && <Hint>{new Date(r.data.pickupAt).toLocaleString()} → {new Date(r.data.returnAt).toLocaleString()}{r.data.expiresAt ? ` · Hold deadline ${new Date(r.data.expiresAt).toLocaleString()}` : ''}</Hint>}
+  // Settle the initial sections before exposing actions: late price/gate content
+  // must not move a button underneath a customer's finger after process restart.
+  if ([r, payment, pricing, trip].some(q => q.isPending)) return <Page title="Loading your reservation"><Busy /></Page>;
+  return <Page titleTestID="reservation-loaded" title={r.data?.confirmationNumber ?? 'Your reservation'}><Button title="Refresh reservation status" onPress={() => void refresh()} />{[r, payment, pricing, trip].filter(q => q.isError).map((q, i) => <ErrorText key={i} message={friendly(q.error)} />)}
+    {r.data && <><Hint>{`Pickup: ${new Date(r.data.pickupAt).toLocaleString()}`}</Hint><Hint>{`Return: ${new Date(r.data.returnAt).toLocaleString()}`}</Hint>{r.data.expiresAt && <Hint>{`Hold deadline: ${new Date(r.data.expiresAt).toLocaleString()}`}</Hint>}</>}
     {r.data && <Hint>Pickup location: {r.data.pickupLocation}</Hint>}
     {payment.data && !payment.isError && <FinancialStatus value={payment.data} />}{pricing.data && <Pricing value={pricing.data} />}
     <Card><Copy>Payment and deposit completion unavailable in this app</Copy><Hint>No secure web-session handoff has been approved. Preparing checkout does not pay or confirm a reservation. Live payments remain disabled.</Hint></Card>

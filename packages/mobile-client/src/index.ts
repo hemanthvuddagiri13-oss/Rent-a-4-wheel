@@ -1,7 +1,8 @@
 import { operationMetadata, type MobileOperations } from "./generated";
+import { mutationOperations } from './mutation-operations';
 export type { MobileOperations } from "./generated";
 export class MobileApiError extends Error {
-  constructor(public readonly status: number, public readonly code: string, public readonly requestId: string) { super(code); }
+  constructor(public readonly status: number, public readonly code: string, public readonly requestId: string, public readonly nonCommitKey?: string) { super(code); }
 }
 /** No storage and no automatic retries. The Expo application owns Keychain /
  * Keystore integration and serializes refresh. Never log request options. */
@@ -25,8 +26,17 @@ export function createMobileClient(options: { baseUrl: string; accessToken: () =
       const response = await (options.fetch ?? fetch)(url, { method: op.method, headers, credentials: "omit", redirect: "error", cache: "no-store", signal, ...(args.body !== undefined ? { body: op.binary === "request" ? new Uint8Array(args.body as Uint8Array) : JSON.stringify(args.body) } : {}) });
       if (response.headers.get("x-api-version") !== "1") throw new MobileApiError(response.status, "API_VERSION_MISMATCH", response.headers.get("x-request-id") ?? "");
       if (response.ok && op.binary === "response") return await response.arrayBuffer() as MobileOperations[K]["output"];
-      const envelope = await response.json() as { data: MobileOperations[K]["output"]; error: { code: string } | null; requestId: string };
-      if (!response.ok || envelope.error) throw new MobileApiError(response.status, envelope.error?.code ?? "UNAVAILABLE", envelope.requestId);
+      const envelope = await response.json() as { data: MobileOperations[K]["output"]; error: { code: string; nonCommit?: { idempotencyKey?: string } } | null; requestId: string };
+      if (!response.ok || envelope.error) {
+        // A status alone is not proof: post-commit errors and intermediaries may
+        // produce the same status. Only the versioned, key-bound receipt qualifies.
+        const proven = Object.hasOwn(mutationOperations, operation) &&
+          ((response.status === 400 && envelope.error?.code === "INVALID_REQUEST") || (response.status === 409 && envelope.error?.code === "CONFLICT")) &&
+          envelope.data === null && Boolean(envelope.requestId) && envelope.requestId === response.headers.get("x-request-id") &&
+          Boolean(args.idempotencyKey) && envelope.error?.nonCommit?.idempotencyKey === args.idempotencyKey;
+        throw new MobileApiError(response.status, envelope.error?.code ?? "UNAVAILABLE", envelope.requestId, proven ? args.idempotencyKey : undefined);
+      }
+      if (operation === "resolveMutation" && (!envelope.requestId || envelope.requestId !== response.headers.get("x-request-id"))) throw new MobileApiError(response.status, "UNVERIFIED_RECOVERY", envelope.requestId);
       return envelope.data;
     },
   };

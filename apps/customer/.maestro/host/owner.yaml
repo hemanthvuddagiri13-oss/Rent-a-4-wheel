@@ -18,6 +18,8 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: "Fleet & calendar"
 - tapOn: "Manage Synthetic Host Car"
 - assertVisible: "Synthetic/demo inventory"
+- waitForAnimationToEnd
+- assertVisible: "Synthetic Host Car"
 - takeScreenshot: host-listing
 - scrollUntilVisible:
     element: "Save calendar block"
@@ -31,16 +33,28 @@ appId: com.renta4wheel.host.acceptance
 - runFlow: back.yaml
 - runFlow: back.yaml
 - tapOn: "Reservations & handoffs"
+- waitForAnimationToEnd
+- assertVisible: "Reservations & handoffs"
 - takeScreenshot: host-reservations
 - tapOn: "Open HOST-PICKUP"
 - assertVisible: "Synthetic pickup bay A.*"
 - takeScreenshot: host-pickup
 - tapOn: "Message customer"
+- runFlow: rejected-message.yaml
 - tapOn:
     id: "input-Message"
 - inputText: "Synthetic host pickup instructions."
 - runFlow: dismiss-keyboard.yaml
 - tapOn: "Send message"
+- extendedWaitUntil:
+    visible: "Connection interrupted.*"
+    timeout: 40000
+- runFlow:
+    file: restart-recovery.yaml
+    env:
+      OPERATION: sendMessage
+- tapOn: "Open HOST-PICKUP"
+- tapOn: "Message customer"
 # Composer text is not proof of delivery. Await the initially empty conversation.
 - extendedWaitUntil:
     notVisible: "No messages yet."
@@ -101,6 +115,13 @@ appId: com.renta4wheel.host.acceptance
     element: "Open support request"
     direction: DOWN
 - tapOn: "Open support request"
+- extendedWaitUntil:
+    visible:
+      id: case-detail-title
+      text: "Synthetic host recovery"
+    timeout: 60000
+- assertNotVisible:
+    id: "input-Request title"
 - tapOn:
     id: "input-Reply to case"
 - inputText: "Synthetic interrupted reply."
@@ -111,16 +132,18 @@ appId: com.renta4wheel.host.acceptance
 - tapOn: "Send case reply"
 - extendedWaitUntil:
     visible: "Connection interrupted.*"
-    timeout: 25000
+    timeout: 40000
 - takeScreenshot: host-reply-interrupted
+- runFlow:
+    file: restart-recovery.yaml
+    env:
+      OPERATION: replyCase
+- tapOn: "Open HOST-PICKUP"
 - scrollUntilVisible:
-    element: "Refresh case"
+    element: "Reservation support"
     direction: DOWN
-- tapOn: "Refresh case"
-- scrollUntilVisible:
-    element: "Send case reply"
-    direction: DOWN
-- tapOn: "Send case reply"
+- tapOn: "Reservation support"
+- tapOn: "View case"
 - scrollUntilVisible:
     element: "HOST_REPLY.*"
     direction: UP
@@ -140,6 +163,18 @@ appId: com.renta4wheel.host.acceptance
     element: "Begin return inspection"
     direction: DOWN
 - tapOn: "Begin return inspection"
+# The shared action error is below the incident/support controls. A visible
+# return button does not imply the error is inside the viewport after a tap.
+- scrollUntilVisible:
+    element: "Connection interrupted.*"
+    direction: DOWN
+    centerElement: true
+    timeout: 40000
+- runFlow:
+    file: restart-recovery.yaml
+    env:
+      OPERATION: tripReturn
+- tapOn: "Open HOST-RETURN"
 - scrollUntilVisible:
     element: "Host photos & condition reports"
     direction: UP

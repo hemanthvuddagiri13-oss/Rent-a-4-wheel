@@ -11,7 +11,7 @@ export class PendingReply {
     catch (error) {
       // These are authoritative route rejections before this command commits.
       // Transport/5xx uncertainty retains the exact intention for replay.
-      if (error instanceof MobileApiError && [400, 401, 403, 404, 409, 415, 422].includes(error.status)) this.input = null;
+      if (error instanceof MobileApiError && error.nonCommitKey) this.input = null;
       throw error;
     }
   }

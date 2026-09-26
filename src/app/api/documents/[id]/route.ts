@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { validateDeviceSession } from "@/lib/device-sessions";
 import { prisma } from "@/lib/prisma";
 import { readPrivateDocument } from "@/lib/storage";
 import { logDocumentAccess, assertDocumentViewable, InvalidDocumentError } from "@/lib/documents";
@@ -16,18 +17,24 @@ import { getHostContext, hostOwnsVehicle } from "@/lib/host-access";
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user || !session.sessionId || typeof session.credentialVersion !== "number") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const { sessionId, credentialVersion } = session;
+  const userId = session.user.id;
+  const authorize = async () => {
+  if (!await validateDeviceSession(userId, sessionId, credentialVersion)) throw new InvalidDocumentError("Forbidden");
+  const actor = await prisma.user.findUnique({ where: { id: session.user.id }, select: { isActive: true, role: true } });
+  if (!actor?.isActive) throw new InvalidDocumentError("Forbidden");
   const document = await prisma.driverDocument.findUnique({
     where: { id },
     include: { reservation: { select: { vehicleId: true } } },
   });
-  if (!document || document.deletedAt) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!document || document.deletedAt || document.retentionExpiresAt && document.retentionExpiresAt <= new Date()) throw new InvalidDocumentError("Not found");
 
   const isOwner = document.userId === session.user.id;
-  const isReviewer = ["ADMIN", "STAFF"].includes(session.user.role);
+  const isReviewer = ["ADMIN", "STAFF"].includes(actor.role);
 
   let isHostReviewer = false;
   let purpose = "owner_view";
@@ -42,22 +49,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 
   if (!isOwner && !isReviewer && !isHostReviewer) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    throw new InvalidDocumentError("Forbidden");
   }
 
-  // Fail-closed malware-scan gate: only the document's own owner may view
-  // it before it has actually cleared scanning. A staff reviewer or host
-  // is refused until `malwareScanStatus` is CLEAN — in this deployment
-  // (no scanner configured) that means non-owner access never succeeds,
-  // which is the intended fail-closed behavior, not a bug.
+  assertDocumentViewable(document, session.user.id);
+  return { document, purpose };
+  };
   try {
-    assertDocumentViewable(document, session.user.id);
-  } catch (err) {
-    if (err instanceof InvalidDocumentError) {
-      return NextResponse.json({ error: err.message }, { status: 403 });
-    }
-    throw err;
-  }
+  const { document, purpose } = await authorize();
 
   await logDocumentAccess({
     documentId: document.id,
@@ -66,11 +65,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     ipAddress: getRequestIp(req.headers),
   });
 
-  const { buffer } = await readPrivateDocument(document.storageKey);
+  const { buffer, revalidate } = await readPrivateDocument(document.storageKey);
+  const { document: current } = await authorize();
+  if (current.storageKey !== document.storageKey || current.mimeType !== document.mimeType || current.userId !== document.userId || current.reservationId !== document.reservationId || current.contentSha256 !== document.contentSha256) throw new InvalidDocumentError("Not found");
+  await revalidate();
+  // Revalidate the captured credential, never a newly rotated/replacement session.
+  if (!await validateDeviceSession(userId, sessionId, credentialVersion)) throw new InvalidDocumentError("Forbidden");
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": document.mimeType || "application/octet-stream",
       "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
     },
   });
+  } catch (error) {
+    const status = error instanceof InvalidDocumentError && error.message !== "Not found" ? 403 : 404;
+    return NextResponse.json({ error: status === 403 ? "Forbidden" : "Not found" }, { status });
+  }
 }

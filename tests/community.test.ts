@@ -19,7 +19,7 @@ import { withReservationLock,assertFinancialTripStart } from "@/lib/financial-lo
 import { assertNoUnresolvedFinancialReview } from "@/lib/return-financial-authority";
 import { fileHeld } from "@/lib/collaboration-retention";
 const privateDelete=vi.hoisted(()=>vi.fn(async(key:string)=>{void key;}));
-const privateRead=vi.hoisted(()=>vi.fn(async()=>({buffer:Buffer.from("private evidence")})));
+const privateRead=vi.hoisted(()=>vi.fn(async()=>({buffer:Buffer.from("private evidence"),revalidate:async()=>{}})));
 vi.mock("@/lib/storage",async original=>({...await original<typeof import("@/lib/storage")>(),readPrivateDocument:privateRead,deletePrivateDocument:privateDelete}));
 const session=vi.hoisted(()=>({id:""}));vi.mock("@/auth",()=>({auth:async()=>session.id ? {user:{id:session.id}} : null}));
 import { POST } from "@/app/api/community/route";

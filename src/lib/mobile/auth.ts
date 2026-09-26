@@ -8,6 +8,10 @@ import type { DomainDatabase } from "@/lib/domain-transaction";
 export class MobileError extends Error {
   constructor(public code: "UNAUTHORIZED" | "FORBIDDEN" | "INVALID_REQUEST" | "NOT_FOUND" | "CONFLICT" | "RATE_LIMITED" | "UNAVAILABLE", public status: number) { super(code); }
 }
+/** Issued only after a durable rejection receipt fences this exact key. */
+export class MobileNonCommit extends MobileError {
+  constructor(status: 400 | 409, public readonly idempotencyKey: string) { super(status === 400 ? "INVALID_REQUEST" : "CONFLICT", status); }
+}
 export const mobileDeviceSchema = z.object({
   deviceId: z.uuid(), platform: z.enum(["IOS", "ANDROID"]),
   appVersion: z.string().regex(/^[0-9A-Za-z.+-]{1,40}$/),

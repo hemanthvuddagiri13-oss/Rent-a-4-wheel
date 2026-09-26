@@ -16,8 +16,16 @@ appId: com.renta4wheel.host.acceptance
     element: "Account & devices"
     direction: DOWN
 - tapOn: "Account & devices"
+# Await the device row before locating logout: loading it shifts the button.
+- extendedWaitUntil:
+    visible: "Revoke .* device"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
+    centerElement: true
+- assertVisible:
+    text: "Log out this device"
+    enabled: true
 - tapOn: "Log out this device"
 - assertVisible: "Your hosting day, in hand."

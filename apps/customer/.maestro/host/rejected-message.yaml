@@ -1,0 +1,27 @@
+appId: com.renta4wheel.host.acceptance
+---
+- tapOn:
+    id: input-Message
+- inputText: '<invalid>'
+- runFlow: dismiss-keyboard.yaml
+- tapOn: Send message
+- extendedWaitUntil:
+    visible: Check the information you entered.*
+    timeout: 40000
+- stopApp
+- launchApp
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Same measured cold-Keychain readiness budget as host/login.yaml.
+      # Wait for the loaded host context, never substitute a splash assertion.
+      - extendedWaitUntil:
+          visible: Host dashboard
+          timeout: 75000
+- assertVisible: Host dashboard
+- assertVisible: Synthetic host business.*OWNER
+- tapOn: Reservations & handoffs
+- tapOn: Open HOST-PICKUP
+- tapOn: Message customer
+- assertVisible: No messages yet.

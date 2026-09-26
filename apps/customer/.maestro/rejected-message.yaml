@@ -1,0 +1,20 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- tapOn:
+    id: input-Message
+- inputText: '<invalid>'
+- runFlow: dismiss-keyboard.yaml
+- tapOn: Send message
+- extendedWaitUntil:
+    visible: Check the information you entered.*
+    timeout: 40000
+- stopApp
+- launchApp
+- assertVisible: Your next drive starts here.
+- tapOn: Your trips
+- tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- scrollUntilVisible:
+    element: Message your host
+    direction: DOWN
+- tapOn: Message your host
+- assertVisible: No messages yet.

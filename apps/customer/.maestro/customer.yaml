@@ -14,7 +14,16 @@ env:
 - takeScreenshot: native-launch
 - assertVisible: "Your next drive starts here."
 - takeScreenshot: native-home
-- tapOn: "Sign in"
+- runFlow: email-navigation.yaml
+- scrollUntilVisible:
+    element:
+      id: home-sign-in
+    direction: UP
+    centerElement: true
+- tapOn:
+    id: home-sign-in
+- assertVisible:
+    id: phone-sign-in-screen
 - scrollUntilVisible:
     element: "Use verified email instead"
     direction: DOWN
@@ -25,8 +34,13 @@ env:
 - tapOn:
     id: "input-Email address"
 - inputText: "native-customer@example.test"
+- assertVisible:
+    id: "input-Email address"
+    text: "native-customer@example[.]test"
 - runFlow: dismiss-keyboard.yaml
-- tapOn: "Send sign-in code"
+- tapOn:
+    text: "Send sign-in code"
+    enabled: true
 - scrollUntilVisible:
     element:
       id: "input-Six-digit email code"
@@ -38,7 +52,9 @@ env:
 - scrollUntilVisible:
     element: "Verify & sign in"
     direction: DOWN
-- tapOn: "Verify & sign in"
+- tapOn:
+    text: "Verify & sign in"
+    enabled: true
 - runFlow:
     when:
       platform: iOS
@@ -66,7 +82,15 @@ env:
     centerElement: true
 - tapOn: "Log out this device"
 - assertVisible: "Your next drive starts here."
-- tapOn: "Sign in"
+- scrollUntilVisible:
+    element:
+      id: home-sign-in
+    direction: UP
+    centerElement: true
+- tapOn:
+    id: home-sign-in
+- assertVisible:
+    id: phone-sign-in-screen
 - scrollUntilVisible:
     element:
       id: "input-Mobile phone number"
@@ -88,6 +112,10 @@ env:
       - repeat:
           times: ${PHONE.length}
           commands:
+            # XCTest may lose first-responder focus between injections. Restore
+            # it explicitly; keep the exact prefix assertion after every digit.
+            - tapOn:
+                id: "input-Mobile phone number"
             - inputText: ${PHONE.charAt(output.phoneIndex)}
             - evalScript: ${output.phoneIndex = output.phoneIndex + 1}
             - assertVisible:
@@ -142,17 +170,27 @@ env:
     element: "View Synthetic Acceptance Car"
     direction: DOWN
 - tapOn: "View Synthetic Acceptance Car"
+# Do not aim at the disabled pre-load button: the listing response inserts
+# content above it and changes its position. Require the loaded vehicle first.
+- assertVisible: "Synthetic Acceptance Car"
 - scrollUntilVisible:
-    element: "Check availability"
+    element:
+      text: "Check availability"
+      enabled: true
     direction: DOWN
-- tapOn: "Check availability"
+- tapOn:
+    text: "Check availability"
+    enabled: true
 - assertVisible: "Available at last check. A hold is required to reserve these dates."
 - takeScreenshot: native-availability
 - tapOn: "Hold dates & review price"
 - scrollUntilVisible:
     element: "Server price breakdown"
     direction: DOWN
+    centerElement: true
+- waitForAnimationToEnd
 - assertVisible: "Server price breakdown"
+- assertVisible: "Vehicle:.*"
 - takeScreenshot: native-price
 - scrollUntilVisible:
     element: "Documents & checkout preparation"
@@ -167,6 +205,12 @@ env:
     direction: DOWN
 - assertVisible:
     id: "input-First name"
+# Traverse the five-page form through a semantic waypoint instead of racing a
+# single scroll command's deadline. Keep the final agreement assertion intact.
+- scrollUntilVisible:
+    element: "Choose selfie with license"
+    direction: DOWN
+- assertVisible: "Choose selfie with license"
 - scrollUntilVisible:
     element: "I have read and accept this agreement"
     direction: DOWN
@@ -188,10 +232,12 @@ env:
 - assertVisible: "Reservation is not financially confirmed"
 - assertNotVisible: "Reservation confirmed by server"
 - takeScreenshot: native-payment-status
+- runFlow: restart-upload.yaml
 - scrollUntilVisible:
     element: "Message your host"
     direction: DOWN
 - tapOn: "Message your host"
+- runFlow: rejected-message.yaml
 - tapOn:
     id: "input-Message"
 - inputText: "Synthetic native acceptance message"
@@ -206,6 +252,7 @@ env:
     commands:
       - tapOn: "Done editing"
 - tapOn: "Send message"
+- runFlow: restart-message.yaml
 - assertVisible: "Synthetic native acceptance message"
 - takeScreenshot: native-message
 - runFlow:
@@ -245,7 +292,13 @@ env:
     element: "Open support request"
     direction: DOWN
 - tapOn: "Open support request"
-- assertVisible: "Synthetic native support request"
+- extendedWaitUntil:
+    visible:
+      id: case-detail-title
+      text: "Synthetic native support request"
+    timeout: 60000
+- assertNotVisible:
+    id: "input-Request title"
 - assertVisible: "Synthetic acceptance request with no private evidence."
 - tapOn:
     id: "input-Reply to case"
@@ -264,6 +317,7 @@ env:
 - takeScreenshot: native-case
 - runFlow: back.yaml
 - runFlow: back.yaml
+- runFlow: restart-cancellation.yaml
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN

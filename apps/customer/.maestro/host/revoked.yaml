@@ -5,19 +5,35 @@ appId: com.renta4wheel.host.acceptance
     element: "Refresh host access"
     direction: DOWN
 - tapOn: "Refresh host access"
-- scrollUntilVisible:
-    element: "Hosting requires a current owner or employee membership.*"
-    direction: UP
+# Refresh can include credential rotation before hostContext. Await its exact
+# terminal denial using the existing multi-request completion budget, rather
+# than scrolling the previously loaded dashboard while the request is pending.
+- extendedWaitUntil:
+    visible: "Hosting requires a current owner or employee membership.*"
+    timeout: 60000
 - assertVisible: "This action is not available for your current access.*"
+- assertNotVisible: "Synthetic host business.*STAFF"
+- assertNotVisible: "Fleet & calendar"
+- assertNotVisible: "Reservations & handoffs"
 - takeScreenshot: host-revoked
 - scrollUntilVisible:
     element: "Account & devices"
     direction: DOWN
 - tapOn: "Account & devices"
+# The device query inserts a card above logout. Use the same loaded-row barrier
+# as the customer journey before resolving logout's tap coordinates.
+- extendedWaitUntil:
+    visible: "Revoke .* device"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Log out this device"
     direction: DOWN
+    centerElement: true
+- assertVisible:
+    text: "Log out this device"
+    enabled: true
 - tapOn: "Log out this device"
+- assertVisible: "Your hosting day, in hand."
 - runFlow:
     file: login.yaml
     env:

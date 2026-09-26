@@ -1,0 +1,39 @@
+appId: com.renta4wheel.host.acceptance
+---
+- stopApp
+- launchApp
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Same measured cold-Keychain readiness budget as host/login.yaml.
+      # Wait for the loaded host context, never substitute a splash assertion.
+      - extendedWaitUntil:
+          visible: Host dashboard
+          timeout: 75000
+- assertVisible: Host dashboard
+- assertVisible: Synthetic host business.*OWNER
+- scrollUntilVisible:
+    element: Account & devices
+    direction: DOWN
+    centerElement: true
+- tapOn: Account & devices
+- assertVisible: Login & recovery
+- tapOn: Interrupted requests
+# This screen is capture protected; no screenshots or credentials are exported.
+- extendedWaitUntil:
+    visible:
+      id: recover-${OPERATION}
+    timeout: 20000
+- tapOn:
+    id: recover-${OPERATION}
+- extendedWaitUntil:
+    visible: No interrupted requests for this account.
+    timeout: 60000
+- assertVisible: Server acknowledged ${OPERATION}.*
+- runFlow: back.yaml
+- runFlow: back.yaml
+- scrollUntilVisible:
+    element: Reservations & handoffs
+    direction: UP
+- tapOn: Reservations & handoffs

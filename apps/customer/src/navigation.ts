@@ -1,5 +1,5 @@
 export type Routes = {
-  Home: undefined; SignIn: undefined; EmailSignIn: undefined; LoginMethods: undefined; Vehicle: { id: string }; Reservations: undefined;
+  Recovery: undefined; Home: undefined; SignIn: undefined; EmailSignIn: undefined; LoginMethods: undefined; Vehicle: { id: string }; Reservations: undefined;
   Reservation: { id: string }; Checkout: { id: string }; Inspection: { id: string; host?: boolean };
   HostFleet: undefined; HostVehicle: { id: string }; HostReservations: undefined;
   HostTrip: { id: string }; HostIdentity: { id: string }; HostEarnings: undefined; HostIncident: { id: string };

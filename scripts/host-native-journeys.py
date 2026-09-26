@@ -3,6 +3,7 @@
 Only disposable synthetic CI uses the fault file. Database assertions run before
 any accepted incident screenshot, and every other driver/assertion failure aborts.
 """
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -46,7 +47,9 @@ def main():
         report = Path(f'artifacts/{platform}-{label}.xml')
         report.unlink(missing_ok=True)
         offset = log.stat().st_size
+        print(json.dumps({'event': 'native.driver', 'flow': label, 'phase': 'start', 'timestamp': datetime.now(timezone.utc).isoformat()}), flush=True)
         result = subprocess.run(command + ['test', f'apps/customer/.maestro/host/{flow}.yaml', '--test-output-dir', str(Path('artifacts', label).resolve()), '--format', 'junit', '--output', str(report)], timeout=1200)
+        print(json.dumps({'event': 'native.driver', 'flow': label, 'phase': 'finished', 'exitCode': result.returncode, 'timestamp': datetime.now(timezone.utc).isoformat()}), flush=True)
         if rejection:
             if result.returncode == 0:
                 raise AssertionError('Failed incident unexpectedly satisfied acceptance')

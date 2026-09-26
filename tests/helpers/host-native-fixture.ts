@@ -28,18 +28,25 @@ async function main() {
     await assertIncident();
     const reply = await db.serviceCaseEvent.count({ where: { body: 'Synthetic interrupted reply.' } });
     if (reply !== 1) throw new Error('Interrupted reply must commit exactly once');
+    if (await db.conversationMessage.count({ where: { body: 'Synthetic host pickup instructions.' } }) !== 1) throw new Error('Restarted message must commit exactly once');
     const handoffs = await db.identityHandoffVerification.count({ where: { reservation: { confirmationNumber: 'HOST-PICKUP' }, verifiedAt: { not: null } } });
     if (handoffs !== 1) throw new Error('Host handoff missing');
     const r = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-PICKUP' } });
     if (r.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: r.id } })) throw new Error('Blocked gates were bypassed');
     const completed = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-RETURN' } });
     if (completed.status !== 'COMPLETED') throw new Error('Return journey did not complete');
+    if (await db.mobileMutation.count({ where: { operation: 'reservation.return' } }) !== 1) throw new Error('Interrupted return must use one durable receipt');
+    const owner = await db.user.findUniqueOrThrow({ where: { email: 'host-owner@example.test' } });
+    const uploads = await db.mobileUpload.findMany({ where: { userId: owner.id } });
+    if (uploads.length !== 4 || uploads.some(upload => !upload.finalizedAt) || uploads.filter(upload => upload.reservationId === completed.id).length !== 2) throw new Error('Restarted uploads must finalize exactly four original host intents, two per report');
     const ready = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-READY' } });
     if (ready.status !== 'CONFIRMED' || await db.tripChecklist.count({ where: { reservationId: ready.id, step: 'KEYS_RELEASED' } }) !== 1 || await db.trip.count({ where: { reservationId: ready.id } })) throw new Error('Keys must not start the guest trip');
     if (await db.tripEvent.count({ where: { reservationId: ready.id, type: 'TRIP_KEYS' } }) !== 1) throw new Error('Repeated keys taps must commit once');
     for (const type of ['TRIP_COMPLETE', 'RETURN_REVIEWED']) if (await db.tripEvent.count({ where: { reservationId: completed.id, type } }) !== 1) throw new Error('Repeated completion taps must commit once');
     if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native acceptance must not issue provider work');
-    console.log('Native database assertions: one reply, one handoff, blocked start/keys, completed return, zero provider operations/payouts.');
+    if (await db.conversationMessage.count({ where: { body: '<invalid>' } })) throw new Error('Rejected message must not create an effect');
+    if (await db.mobileMutation.count({ where: { operation: 'message.send', result: { path: ['mobileRejectedV1', 'status'], equals: 400 } } }) !== 1) throw new Error('Expected one durable rejected message receipt');
+    console.log('Native database assertions: one reply, one handoff, one rejected message receipt, blocked start/keys, completed return, zero provider operations/payouts.');
     return;
   }
   await fixtureJurisdiction(db);

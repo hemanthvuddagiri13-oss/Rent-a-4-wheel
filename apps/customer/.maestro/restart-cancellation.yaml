@@ -1,0 +1,37 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- scrollUntilVisible:
+    element: Your trips
+    direction: UP
+- tapOn: Your trips
+- tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- scrollUntilVisible:
+    element: Cancel reservation
+    direction: DOWN
+- tapOn: Cancel reservation
+- extendedWaitUntil:
+    visible: Connection interrupted.*
+    timeout: 40000
+- stopApp
+- launchApp
+- scrollUntilVisible:
+    element: Account & devices
+    direction: DOWN
+    centerElement: true
+- tapOn: Account & devices
+- tapOn: Interrupted requests
+- extendedWaitUntil:
+    visible:
+      id: recover-tripCancel
+    timeout: 20000
+- tapOn:
+    id: recover-tripCancel
+- extendedWaitUntil:
+    visible: No interrupted requests for this account.
+    timeout: 60000
+- runFlow: back.yaml
+- runFlow: back.yaml
+- tapOn: Your trips
+- assertVisible: CANCELLED BY CUSTOMER
+- takeScreenshot: native-cancellation-recovered
+- runFlow: back.yaml

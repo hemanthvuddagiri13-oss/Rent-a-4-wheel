@@ -8,7 +8,8 @@ import { createHash, createHmac } from "node:crypto";
 import sharp from "sharp";
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { createMobileClient } from "../packages/mobile-client/src";
-const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", emails: [] as string[], storageRead: vi.fn(), providerRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
+const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", webUser: null as { id: string; role: string } | null, webSession: null as { sessionId: string; credentialVersion: number } | null, emails: [] as string[], storageRead: vi.fn(), providerRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
+vi.mock("@/auth", () => ({ auth: async () => fixture.webUser ? { user: fixture.webUser, ...fixture.webSession } : null }));
 vi.mock("@/lib/prisma", async () => {
   const { PrismaClient } = await import("@prisma/client");
   const url = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!); url.pathname = "/" + fixture.name;
@@ -24,11 +25,18 @@ vi.mock("@/lib/mobile/sms-provider", () => ({ smsProvider: () => ({ start: fixtu
 import { prisma } from "@/lib/prisma";
 import { POST as authPost, GET as authGet } from "@/app/api/v1/mobile/auth/[action]/route";
 import { POST as apiPost, GET as apiGet } from "@/app/api/v1/mobile/[...path]/route";
-import { refreshMobileCredential, tokenHash } from "@/lib/mobile/auth";
+import { refreshMobileCredential, tokenHash, MobileNonCommit } from "@/lib/mobile/auth";
 import { mobileMutation } from "@/lib/mobile/mutation";
 import { messageCommand, conversationAccess } from "@/lib/conversations";
 import { createOrRefreshHold } from "@/lib/checkout-hold";
 import { verifyLoginChallenge } from "@/lib/mobile/login-identity";
+import { GET as webIdentity } from "@/app/api/documents/[id]/route";
+import { GET as webBusiness } from "@/app/api/marketplace/files/[id]/route";
+import { GET as webCollaboration } from "@/app/api/community/files/[id]/route";
+import type { NextRequest } from "next/server";
+
+// Web authentication alone is a fixture. Routes, current tenant authorization,
+// storage snapshots and PostgreSQL run unchanged over actual HTTP below.
 
 const source = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!);
 const target = new URL(source); target.pathname = "/" + fixture.name;
@@ -44,7 +52,8 @@ beforeAll(async () => {
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const request = new Request(base + req.url, { method: req.method, headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(",") : v ?? ""])), ...(req.method === "POST" ? { body: Buffer.concat(chunks) } : {}) });
       const parts = new URL(request.url).pathname.replace("/api/v1/mobile/", "").split("/");
-      const result = parts[0] === "auth" ? await (req.method === "POST" ? authPost : authGet)(request, { params: Promise.resolve({ action: parts[1] }) }) : await (req.method === "POST" ? apiPost : apiGet)(request, { params: Promise.resolve({ path: parts }) });
+      const web = new URL(request.url).pathname.match(/^\/web\/(identity|business|collaboration)\/(.+)$/);
+      const result = web ? await ({ identity: webIdentity, business: webBusiness, collaboration: webCollaboration }[web[1] as 'identity'])(request as NextRequest, { params: Promise.resolve({ id: web[2] }) }) : parts[0] === "auth" ? await (req.method === "POST" ? authPost : authGet)(request, { params: Promise.resolve({ action: parts[1] }) }) : await (req.method === "POST" ? apiPost : apiGet)(request, { params: Promise.resolve({ path: parts }) });
       res.writeHead(result.status, Object.fromEntries(result.headers)); res.end(Buffer.from(await result.arrayBuffer()));
     } catch { res.writeHead(500); res.end(); }
   });
@@ -54,6 +63,8 @@ beforeEach(async () => {
   const tables = await prisma.$queryRaw<Array<{ tablename: string }>>`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_prisma_migrations'`;
   await prisma.$executeRawUnsafe("TRUNCATE " + tables.map(t => '"' + t.tablename.replaceAll('"', '""') + '"').join(",") + " CASCADE");
   fixture.emails.length = 0;
+  fixture.webUser = null;
+  fixture.webSession = null;
   fixture.smsStart.mockReset().mockImplementation(async () => "fixture:" + crypto.randomUUID());
   fixture.smsCheck.mockReset().mockImplementation(async (_sid: string, code: string) => code === "123456");
   fixture.providerRead.mockReset();
@@ -299,7 +310,7 @@ it.each(["2056-04-01T12:00:01.000Z", "2056-04-01T12:00:00.123Z"])("HTTP availabi
   expect(held.status).toBe(400);
   expect((await held.json()).error.code).toBe("INVALID_REQUEST");
   expect(await prisma.reservation.count()).toBe(1);
-  expect(await prisma.mobileMutation.count()).toBe(0);
+  expect(await prisma.mobileMutation.count()).toBe(1); // terminal non-commit receipt only
   expect(await prisma.bookingDraft.count()).toBe(0);
 });
 
@@ -1036,7 +1047,124 @@ it('interrupted support reply freezes its version across refreshed case state an
   expect(await prisma.mobileMutation.count({ where: { operation: 'case.reply' } })).toBe(1);
 });
 
+it('a replacement app process recovers a committed reply through real HTTP without duplicating its PostgreSQL event', async () => {
+  const { RecoveryJournal } = await import('../packages/mobile-client/src/recovery');
+  const f = await tenantFixture(), values = new Map<string, string>();
+  const store = { read: async (scope: string) => values.get(scope) ?? null, write: async (scope: string, value: string) => { values.set(scope, value); } };
+  const opened = await post('cases', { kind: 'TICKET', reservationId: f.reservation.id, category: 'GENERAL', title: 'Restart recovery', body: 'Synthetic process restart recovery.' }, f.owner.accessToken, crypto.randomUUID());
+  expect(opened.status).toBe(200); const { id } = (await opened.json()).data;
+  const initial = (await (await get('cases/' + id, f.owner.accessToken)).json()).data;
+  const record = { key: crypto.randomUUID(), operation: 'replyCase', input: { params: { id }, body: { body: 'One restart reply', version: initial.version } }, createdAt: new Date().toISOString() };
+  const first = new RecoveryJournal(store);
+  await expect(first.execute('owner', record, async frozen => {
+    const response = await post('cases/' + id + '/reply', (frozen.input as typeof record.input).body, f.owner.accessToken, frozen.key);
+    expect(response.status).toBe(200); await response.arrayBuffer(); throw new Error('Lost committed reply');
+  })).rejects.toThrow('Lost committed reply');
+  const restarted = new RecoveryJournal(store), [pending] = await restarted.list('owner');
+  expect(pending).toEqual(record);
+  const response = await restarted.execute('owner', pending, frozen => post('cases/' + id + '/reply', (frozen.input as typeof record.input).body, f.owner.accessToken, frozen.key));
+  expect(response.status).toBe(200); expect(await restarted.list('owner')).toEqual([]);
+  expect(await prisma.serviceCaseEvent.count({ where: { caseId: id, body: 'One restart reply' } })).toBe(1);
+  expect(await prisma.mobileMutation.count({ where: { operation: 'case.reply' } })).toBe(1);
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
+
 function deferred<T>() { let resolve!: (value: T | PromiseLike<T>) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+
+// The same production runtime used by Expo, real Session/client/journal and
+// SecureRecoveryStore. Only device storage/crypto adapters and response loss are
+// fixtures. New instances model restart; installed journeys cover OS restart.
+async function correctionRuntime(credentials: Credentials, afterDelivery?: (response: Response) => Promise<void>) {
+  const { createMutationRuntime } = await import('../packages/mobile-client/src/mutation-runtime');
+  const { IntentKeys } = await import('../packages/mobile-client/src/recovery');
+  const { SecureRecoveryStore } = await import('../packages/mobile-client/src/secure-recovery-store');
+  const { Session } = await import('../packages/mobile-client/src/session');
+  const disk = new Map<string, string>(); let drop = false;
+  const requests: Array<{ path: string; key: string; body: string; status: number }> = [];
+  const adapter = { get: async (k: string) => disk.get(k) ?? null, set: async (k: string, v: string) => { disk.set(k, v); }, remove: async (k: string) => { disk.delete(k); } };
+  await adapter.set('session', JSON.stringify({ credentials }));
+  const hashString = async (v: string) => createHash('sha256').update(v).digest('hex');
+  const restart = async () => {
+    const session = new Session({ get: () => adapter.get('session'), set: v => adapter.set('session', v), clear: () => adapter.remove('session') }, base, async (url, init) => {
+      const response = await fetch(url, init);
+      if (init?.method === 'POST' && !String(url).includes('/auth/')) {
+        requests.push({ path: new URL(String(url)).pathname, key: new Headers(init.headers).get('idempotency-key')!, body: String(init.body), status: response.status });
+        await afterDelivery?.(response);
+        if (drop && response.ok) { drop = false; await response.arrayBuffer(); throw new TypeError('Lost committed response'); }
+      }
+      return response;
+    }, true);
+    const runtime = createMutationRuntime({ session, store: new SecureRecoveryStore(adapter, hashString, () => crypto.randomUUID()), intentKeys: new IntentKeys(adapter, () => crypto.randomUUID()), hashString, hashBytes: async v => createHash('sha256').update(v).digest('hex') });
+    expect(await session.restore()).toBe(true);
+    return runtime;
+  };
+  return { restart, requests, disk, replaceCredentials: (value: Credentials) => adapter.set('session', JSON.stringify({ credentials: value })), loseNextCommit: () => { drop = true; } };
+}
+
+it('full runtime: invalid message permits correction after restart; lost corrected response replays one effect', async () => {
+  const f = await tenantFixture();
+  const opened = await post('conversations', { reservationId: f.reservation.id }, f.owner.accessToken, crypto.randomUUID()); expect(opened.status).toBe(200);
+  const { id } = (await opened.json()).data, fixture = await correctionRuntime(f.owner);
+  let app = await fixture.restart();
+  await expect(app.mutate('sendMessage', { params: { id }, body: { body: '' } })).rejects.toMatchObject({ status: 400, nonCommitKey: expect.any(String) });
+  expect(await app.pendingRequests()).toEqual([]); expect(await prisma.conversationMessage.count()).toBe(0);
+  app = await fixture.restart(); fixture.loseNextCommit();
+  const input = { params: { id }, body: { body: 'Corrected intended message' } };
+  await expect(app.mutate('sendMessage', input)).rejects.toThrow('Lost committed response');
+  app = await fixture.restart(); const [pending] = await app.pendingRequests();
+  await expect(app.mutate('sendMessage', { params: { id }, body: { body: 'Unauthorized replacement' } })).rejects.toThrow('earlier request');
+  await app.recoverRequest(pending); expect(await app.pendingRequests()).toEqual([]);
+  expect(await prisma.conversationMessage.findMany({ select: { body: true } })).toEqual([{ body: input.body.body }]);
+  expect(fixture.requests.map(r => r.status)).toEqual([400, 200, 200]);
+  expect(fixture.requests[1].key).not.toBe(fixture.requests[0].key);
+  expect(fixture.requests[2].path).toBe('/api/v1/mobile/recovery/resolve'); expect(JSON.parse(fixture.requests[2].body).idempotencyKey).toBe(fixture.requests[1].key);
+  // The original rejected key is terminal and cannot be restored as a mutation.
+  const stale = await post('conversations/' + id + '/messages', { body: '' }, f.owner.accessToken, fixture.requests[0].key);
+  expect(stale.status).toBe(400); expect((await stale.json()).error.nonCommit.idempotencyKey).toBe(fixture.requests[0].key);
+  expect(await prisma.mobileMutation.count({ where: { operation: 'message.send' } })).toBe(2); // one rejection, one effect receipt
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
+
+it('full runtime and PendingReply: stale reply releases only proven rejection; refreshed reply survives restart and lost response', async () => {
+  const { PendingReply } = await import('../packages/mobile-client/src/pending-reply');
+  const f = await tenantFixture();
+  const opened = await post('cases', { kind: 'TICKET', category: 'GENERAL', title: 'Version recovery', body: 'Synthetic original case body', reservationId: f.reservation.id }, f.owner.accessToken, crypto.randomUUID()); expect(opened.status).toBe(200);
+  const { id } = (await opened.json()).data;
+  expect((await post('cases/' + id + '/reply', { body: 'Concurrent first reply', version: 0 }, f.owner.accessToken, crypto.randomUUID())).status).toBe(200);
+  const fixture = await correctionRuntime(f.owner); let app = await fixture.restart(); const pending = new PendingReply();
+  await expect(pending.send({ id, body: 'Intended refreshed reply', version: 0 }, input => app.mutate('replyCase', { params: { id: input.id }, body: { body: input.body, version: input.version } }))).rejects.toMatchObject({ status: 409, nonCommitKey: expect.any(String) });
+  expect(pending.pending).toBe(false); expect(await app.pendingRequests()).toEqual([]);
+  app = await fixture.restart(); const current = (await (await get('cases/' + id, f.owner.accessToken)).json()).data;
+  expect(current.version).toBe(1); fixture.loseNextCommit();
+  await expect(app.mutate('replyCase', { params: { id }, body: { body: 'Intended refreshed reply', version: current.version } })).rejects.toThrow('Lost committed response');
+  app = await fixture.restart(); const [record] = await app.pendingRequests();
+  await expect(app.mutate('replyCase', { params: { id }, body: { body: 'Intended refreshed reply', version: 2 } })).rejects.toThrow('earlier request');
+  await app.recoverRequest(record); expect(await app.pendingRequests()).toEqual([]);
+  expect(await prisma.serviceCaseEvent.count({ where: { caseId: id, body: 'Intended refreshed reply' } })).toBe(1);
+  expect((await prisma.serviceCase.findUniqueOrThrow({ where: { id } })).version).toBe(2);
+  expect(fixture.requests.map(r => r.status)).toEqual([409, 200, 200]); expect(fixture.requests[1].key).not.toBe(fixture.requests[0].key); expect(fixture.requests[2].path).toBe('/api/v1/mobile/recovery/resolve'); expect(JSON.parse(fixture.requests[2].body).idempotencyKey).toBe(fixture.requests[1].key);
+  const conflict = await post('cases/' + id + '/reply', { body: 'Different body', version: 2 }, f.owner.accessToken, fixture.requests[1].key);
+  expect(conflict.status).toBe(409); expect((await conflict.json()).error.nonCommit).toBeUndefined();
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
+
+it('full runtime: rejected openCase releases the operation-wide scope; ambiguous creation blocks other cases across restart', async () => {
+  const f = await tenantFixture(), fixture = await correctionRuntime(f.owner);
+  const input = { body: { kind: 'TICKET' as const, category: 'INVALID_CATEGORY', title: 'Correctable case', body: 'Synthetic intended case body', reservationId: f.reservation.id } };
+  let app = await fixture.restart();
+  await expect(app.mutate('openCase', input)).rejects.toMatchObject({ status: 400, nonCommitKey: expect.any(String) });
+  expect(await prisma.serviceCase.count()).toBe(0);
+  app = await fixture.restart(); fixture.loseNextCommit();
+  await expect(app.mutate('openCase', { body: { ...input.body, category: 'GENERAL' } })).rejects.toThrow('Lost committed response');
+  app = await fixture.restart();
+  // openCase has no path params: a standalone/different reservation request is
+  // in the same conservative conflict scope until the uncertain create settles.
+  await expect(app.mutate('openCase', { body: { kind: 'TICKET', category: 'GENERAL', title: 'Another case', body: 'Another synthetic case body' } })).rejects.toThrow('earlier request');
+  const [record] = await app.pendingRequests(); await app.recoverRequest(record);
+  expect(await app.pendingRequests()).toEqual([]); expect(await prisma.serviceCase.count()).toBe(1); expect(await prisma.serviceCaseEvent.count({ where: { action: 'OPEN' } })).toBe(1);
+  expect(fixture.requests.map(r => r.status)).toEqual([400, 200, 200]); expect(fixture.requests[2].path).toBe('/api/v1/mobile/recovery/resolve'); expect(JSON.parse(fixture.requests[2].body).idempotencyKey).toBe(fixture.requests[1].key);
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
 it('host interrupted inspection upload resumes one durable intent, and another author cannot accept the report', async () => {
   const f = await tenantFixture(), photos: Array<{ uploadId: string; category: 'EXTERIOR' | 'INTERIOR' }> = [];
   for (const [index, category] of (['EXTERIOR', 'INTERIOR'] as const).entries()) {
@@ -1107,5 +1235,226 @@ it.each([
   await prisma.reservation.update({ where: { id: f.reservation.id }, data: { status, expiresAt } });
   const response = await post(path, window, f.employee.accessToken); expect(response.status).toBe(200);
   expect((await response.json()).data.reservations.map((r: { id: string }) => r.id), status).toEqual(blocks ? [f.reservation.id] : []);
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
+
+it.each(['dates', 'vehicle'] as const)('runtime hold non-commit permits corrected %s across restart, while a lost successful hold remains exclusive', async correction => {
+  const f = await tenantFixture(); await fixtureJurisdiction(prisma);
+  const dates = { pickupAt: '2056-04-01T12:00:00Z', returnAt: '2056-04-02T12:00:00Z' };
+  const original = { ...dates, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), revision: 1, extraIds: [] };
+  expect((await post('reservations/hold', { ...original, draftId: crypto.randomUUID() }, f.other.accessToken, crypto.randomUUID())).status).toBe(200);
+  const fixture = await correctionRuntime(f.customer); let app = await fixture.restart();
+  await expect(app.mutate('hold', { body: original })).rejects.toMatchObject({ status: 409, nonCommitKey: expect.any(String) });
+  expect(await app.pendingRequests()).toEqual([]);
+  const corrected = { ...original, draftId: crypto.randomUUID() };
+  if (correction === 'dates') { corrected.pickupAt = '2056-05-01T12:00:00Z'; corrected.returnAt = '2056-05-02T12:00:00Z'; }
+  else {
+    const id = crypto.randomUUID();
+    const vehicle = await prisma.vehicle.create({ data: { hostId: f.host.id, jurisdictionCode: 'TX', slug: id, vin: id, licensePlate: id, year: 2024, make: 'Synthetic', model: 'Alternative', category: 'SEDAN', dailyRateCents: 10000, weeklyRateCents: 50000, monthlyRateCents: 100000 } });
+    corrected.vehicleId = vehicle.id;
+  }
+  app = await fixture.restart(); fixture.loseNextCommit();
+  await expect(app.mutate('hold', { body: corrected })).rejects.toThrow('Lost committed response');
+  app = await fixture.restart(); const [pending] = await app.pendingRequests();
+  // No path parameters: another vehicle/date is also blocked while uncertain.
+  await expect(app.mutate('hold', { body: { ...corrected, vehicleId: f.vehicle.id, draftId: crypto.randomUUID(), pickupAt: '2057-06-01T12:00:00Z', returnAt: '2057-06-02T12:00:00Z' } })).rejects.toThrow('earlier request');
+  expect(await app.recoverRequest(pending)).toEqual({ outcome: 'COMMITTED', idempotencyKey: pending.key });
+  const replay = await post('reservations/hold', corrected, f.customer.accessToken, pending.key); expect(replay.status).toBe(200);
+  expect(await prisma.reservation.count({ where: { customerId: f.user.id } })).toBe(2); // existing fixture + exactly one corrected hold
+  expect(await prisma.bookingDraft.count({ where: { customerId: f.user.id } })).toBe(1);
+  expect(await prisma.financialOperation.count()).toBe(0);
+});
+
+it.each(['mutation', 'resolution'] as const)('recovery fence: %s wins the real PostgreSQL lock, with no late or duplicate effect', async first => {
+  const { resolveMobileMutation } = await import('@/lib/mobile/mutation');
+  const f = await tenantFixture(), key = crypto.randomUUID();
+  const req = new Request(base, { headers: { authorization: 'Bearer ' + f.owner.accessToken, 'idempotency-key': key } });
+  const [a, b] = await independentClients(), locked = signal(), release = signal(); let stopped = false;
+  const [winnerPid] = await a.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const [waiterPid] = await b.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  const instrumented = a.$extends({ query: { $allOperations: async ({ operation, args, query }) => {
+    const result = await query(args);
+    if (!stopped && operation === '$queryRaw' && JSON.stringify(args).includes('mobile-mutation:')) { stopped = true; locked.resolve(); await release.promise; }
+    return result;
+  } } }) as unknown as PrismaClient;
+  const mutate = (db: PrismaClient) => mobileMutation(req, 'case.open', { synthetic: true }, async () => {}, async tx => {
+    const row = await tx.serviceCase.create({ data: { kind: 'TICKET', category: 'GENERAL', title: 'Fence effect', openedById: f.host.userId, reservationId: f.reservation.id, details: {}, dueAt: new Date('2056-01-01'), retainUntil: new Date('2058-01-01') } });
+    return { id: row.id };
+  }, db);
+  const resolve = (db: PrismaClient) => resolveMobileMutation(req, 'openCase', key, db);
+  const winner = (first === 'mutation' ? mutate : resolve)(instrumented);
+  let both: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  try {
+    await locked.promise;
+    both = Promise.allSettled([winner, (first === 'mutation' ? resolve : mutate)(b)]);
+    let blocked = false; const deadline = Date.now() + 4000;
+    while (!blocked && Date.now() < deadline) {
+      const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`SELECT ${winnerPid.pid}::int = ANY(pg_blocking_pids(${waiterPid.pid}::int)) AS blocked`; blocked = row.blocked;
+    }
+    expect(blocked).toBe(true); release.resolve();
+    const results = await both;
+    expect(results[0].status).toBe('fulfilled'); expect(results[1].status).toBe(first === 'mutation' ? 'fulfilled' : 'rejected');
+    if (first === 'resolution') { const error = (results[1] as PromiseRejectedResult).reason; expect(error).toBeInstanceOf(MobileNonCommit); expect(error).toMatchObject({ idempotencyKey: key, status: 409, code: 'CONFLICT' }); }
+    expect(await prisma.serviceCase.count()).toBe(first === 'mutation' ? 1 : 0);
+    expect(await prisma.mobileMutation.count()).toBe(1);
+    for (let replay = 0; replay < 2; replay++) {
+      const response = await post('recovery/resolve', { operation: 'openCase', idempotencyKey: key }, f.owner.accessToken);
+      expect(response.status).toBe(200); expect((await response.json()).data).toEqual({ outcome: first === 'mutation' ? 'COMMITTED' : 'NOT_COMMITTED', idempotencyKey: key });
+    }
+    expect(await prisma.mobileMutation.count()).toBe(1); expect(await prisma.financialOperation.count()).toBe(0);
+  } finally { release.resolve(); await Promise.allSettled([winner, ...(both ? [both] : [])]); await Promise.all([a.$disconnect(), b.$disconnect()]); }
+});
+
+it('HTTP recovery is caller-scoped and a terminal absent-request fence rejects delayed delivery without an effect', async () => {
+  const f = await tenantFixture(), key = crypto.randomUUID();
+  const input = { operation: 'openCase', idempotencyKey: key };
+  expect((await post('recovery/resolve', input)).status).toBe(401);
+  expect((await post('recovery/resolve', { ...input, operation: 'logoutAll' }, f.owner.accessToken)).status).toBe(400);
+  const resolved = await post('recovery/resolve', input, f.owner.accessToken);
+  expect(resolved.status).toBe(200); expect((await resolved.json()).data).toEqual({ outcome: 'NOT_COMMITTED', idempotencyKey: key });
+  const body = { kind: 'TICKET', category: 'GENERAL', title: 'Delayed request', body: 'Synthetic delayed case body', reservationId: f.reservation.id };
+  const late = await post('cases', body, f.owner.accessToken, key);
+  expect(late.status).toBe(409); expect((await late.json()).error.nonCommit.idempotencyKey).toBe(key);
+  expect(await prisma.serviceCase.count()).toBe(0);
+  // Another authenticated actor's same random key has a separate namespace.
+  const other = await post('cases', { ...body, reservationId: undefined }, f.other.accessToken, key);
+  expect(other.status).toBe(200);
+  const replay = await post('recovery/resolve', input, f.owner.accessToken);
+  expect((await replay.json()).data).toEqual({ outcome: 'NOT_COMMITTED', idempotencyKey: key });
+  const otherReceipt = await post('recovery/resolve', input, f.other.accessToken);
+  expect((await otherReceipt.json()).data).toEqual({ outcome: 'COMMITTED', idempotencyKey: key });
+  expect(await prisma.serviceCase.count()).toBe(1); expect(await prisma.mobileMutation.count()).toBe(2);
+});
+
+it.each(['session', 'membership'] as const)('committed response loss followed by %s revocation retains evidence across restart', async revoked => {
+  const f = await tenantFixture();
+  const opened = await post('conversations', { reservationId: f.reservation.id }, f.owner.accessToken, crypto.randomUUID());
+  const { id } = (await opened.json()).data, runtime = await correctionRuntime(f.employee);
+  let app = await runtime.restart(); runtime.loseNextCommit();
+  const input = { params: { id }, body: { body: 'Synthetic committed before revocation' } };
+  await expect(app.mutate('sendMessage', input)).rejects.toThrow('Lost committed response');
+  app = await runtime.restart(); const [record] = await app.pendingRequests();
+  if (revoked === 'membership') await prisma.hostEmployee.delete({ where: { id: f.membership.id } });
+  else expect((await post('auth/logout-all', {}, f.employee.accessToken)).status).toBe(200);
+  await expect(app.mutate('sendMessage', input)).rejects.toThrow();
+  expect(JSON.stringify([...runtime.disk])).toContain(record.key);
+  expect(await prisma.conversationMessage.count({ where: { conversationId: id } })).toBe(1);
+  // A new credential proves the same account; it does not restore tenant access.
+  // Model a later sign-in without sleeping through the real resend cooldown.
+  // Only the consumed fixture challenge is aged; a new delivered code is required.
+  await prisma.authCode.updateMany({ where: { email: f.employee.email, consumedAt: { not: null } }, data: { createdAt: new Date(Date.now() - 120000) } });
+  const deliveredCodes = fixture.emails.length;
+  const fresh = await login(f.employee.email); expect(fixture.emails.length).toBe(deliveredCodes + 1);
+  await runtime.replaceCredentials(fresh); app = await runtime.restart();
+  const [retained] = await app.pendingRequests(); expect(retained.key).toBe(record.key);
+  const outcome = await app.recoverRequest(retained);
+  expect(outcome).toEqual({ outcome: 'COMMITTED', idempotencyKey: record.key });
+  expect(Object.keys(outcome).sort()).toEqual(['idempotencyKey', 'outcome']);
+  if (revoked === 'membership') {
+    const denied = await get('conversations/' + id, fresh.accessToken);
+    // The existing marketplaceHost guard reports removed membership as 403.
+    expect(denied.status).toBe(403); expect(await denied.json()).toMatchObject({ data: null, error: { code: 'FORBIDDEN' } });
+  }
+  expect(await prisma.conversationMessage.count({ where: { conversationId: id } })).toBe(1);
+  expect(await prisma.mobileMutation.count({ where: { operation: 'message.send' } })).toBe(1);
+});
+
+it('process death at the response boundary preserves resource-scoped intent and one effect after restart', async () => {
+  const f = await tenantFixture();
+  const first = await prisma.conversation.create({ data: { reservationId: f.reservation.id, vehicleId: f.vehicle.id, customerId: f.user.id, retainUntil: new Date('2058-01-01') } });
+  const second = await prisma.conversation.create({ data: { vehicleId: f.vehicle.id, customerId: f.user.id, retainUntil: new Date('2058-01-01') } });
+  const delivered = deferred<void>(), terminate = deferred<void>(); let stopped = false;
+  const runtime = await correctionRuntime(f.customer, async response => { if (!stopped && response.ok) { stopped = true; delivered.resolve(); await terminate.promise; throw new Error('Synthetic process terminated before response delivery'); } });
+  const original = await runtime.restart();
+  const pending = original.mutate('sendMessage', { params: { id: first.id }, body: { body: 'Synthetic interrupted message' } });
+  const observed = pending.catch(error => error);
+  try {
+    await delivered.promise;
+    const restarted = await runtime.restart(); const [record] = await restarted.pendingRequests();
+    await expect(restarted.mutate('sendMessage', { params: { id: first.id }, body: { body: 'Changed uncertain message' } })).rejects.toThrow('earlier request');
+    // A separate resource is not falsely locked by another conversation's intent.
+    await restarted.mutate('sendMessage', { params: { id: second.id }, body: { body: 'Synthetic independent message' } });
+    expect(await restarted.recoverRequest(record)).toEqual({ outcome: 'COMMITTED', idempotencyKey: record.key });
+    expect(await prisma.conversationMessage.count({ where: { conversationId: first.id } })).toBe(1);
+    expect(await prisma.conversationMessage.count({ where: { conversationId: second.id } })).toBe(1);
+    expect(await prisma.mobileMutation.count({ where: { operation: 'message.send' } })).toBe(2);
+  } finally { terminate.resolve(); expect(await observed).toBeInstanceOf(Error); }
+});
+
+it.each(['identity', 'business', 'conversation', 'case'] as const)('web %s download rechecks access and effective storage across independent-connection IO barriers', async kind => {
+  const f = await tenantFixture(), bytes = Buffer.from('SYNTHETIC_WEB_PRIVATE_SENTINEL');
+  const sha256 = createHash('sha256').update(bytes).digest('hex'), key = 's3:web-private.png';
+  await prisma.hostEmployee.update({ where: { id: f.membership.id }, data: { role: 'MANAGER' } });
+  await prisma.privateObject.create({ data: { key, sha256, size: bytes.length, mimeType: 'image/png', state: 'CLEAN', writeState: 'STORED' } });
+  let id: string;
+  if (kind === 'identity') id = (await prisma.driverDocument.create({ data: { userId: f.user.id, reservationId: f.reservation.id, type: 'LICENSE_FRONT', storageKey: key, mimeType: 'image/png', fileSizeBytes: bytes.length, contentSha256: sha256, malwareScanStatus: 'CLEAN', retentionExpiresAt: new Date('2058-01-01') } })).id;
+  else if (kind === 'business') id = (await prisma.marketplaceFile.create({ data: { hostId: f.host.id, vehicleId: f.vehicle.id, uploadedById: f.membership.userId, purpose: 'INSURANCE', storageKey: key, mimeType: 'image/png', sha256, scanStatus: 'CLEAN' } })).id;
+  else {
+    const scope = kind === 'conversation'
+      ? { conversationId: (await prisma.conversation.create({ data: { vehicleId: f.vehicle.id, reservationId: f.reservation.id, customerId: f.user.id, retainUntil: new Date('2058-01-01') } })).id }
+      : { caseId: (await prisma.serviceCase.create({ data: { kind: 'TICKET', category: 'GENERAL', title: 'Synthetic private evidence', openedById: f.membership.userId, reservationId: f.reservation.id, vehicleId: f.vehicle.id, details: {}, dueAt: new Date('2057-01-01'), retainUntil: new Date('2058-01-01') } })).id };
+    id = (await prisma.collaborationFile.create({ data: { ...scope, uploadedById: f.membership.userId, purpose: 'SUPPORT', storageKey: key, mimeType: 'image/png', sha256, size: bytes.length, scanStatus: 'CLEAN', retainUntil: new Date('2058-01-01') } })).id;
+  }
+  const real = await vi.importActual<typeof import('@/lib/storage')>('@/lib/storage'); fixture.storageRead.mockImplementation(real.readPrivateDocument); fixture.providerRead.mockResolvedValue(bytes);
+  const route = kind === 'conversation' || kind === 'case' ? 'collaboration' : kind;
+  const read = () => fetch(base + '/web/' + route + '/' + id);
+  const browser = async (user: { id: string; role: string }) => {
+    fixture.webUser = user;
+    const row = await prisma.session.create({ data: { userId: user.id, sessionToken: crypto.randomUUID(), expires: new Date(Date.now() + 3600000) } });
+    fixture.webSession = { sessionId: row.id, credentialVersion: row.rotation };
+    return row;
+  };
+  await browser({ id: f.host.userId, role: 'HOST' });
+  const owner = await read(); expect(owner.status).toBe(200); expect(Buffer.from(await owner.arrayBuffer())).toEqual(bytes);
+  const unrelated = await prisma.user.update({ where: { email: f.other.email }, data: { role: 'HOST' } });
+  await prisma.hostProfile.create({ data: { userId: unrelated.id, legalName: 'Other synthetic host', jurisdictionCode: 'TX', onboardingStatus: 'APPROVED' } });
+  await browser(unrelated); fixture.providerRead.mockClear();
+  expect([403, 404]).toContain((await read()).status); expect(fixture.providerRead).not.toHaveBeenCalled();
+  await browser({ id: f.membership.userId, role: 'HOST_EMPLOYEE' });
+  const control = await read(); expect(control.status).toBe(200); expect(Buffer.from(await control.arrayBuffer())).toEqual(bytes);
+  const [observer, writer] = await independentClients();
+  try {
+    if (kind !== 'business') for (const change of ['revocation', 'expiry', 'idle', 'rotation'] as const) {
+      const credential = await browser({ id: f.membership.userId, role: 'HOST_EMPLOYEE' });
+      const entered = deferred<void>(), release = deferred<void>();
+      fixture.providerRead.mockReset().mockImplementation(async () => { entered.resolve(); await release.promise; return bytes; });
+      const response = read();
+      try {
+        await entered.promise;
+        const data = change === 'revocation' ? { revokedAt: new Date() } : change === 'expiry' ? { expires: new Date(0) } : change === 'idle' ? { lastSeenAt: new Date(0) } : { rotation: credential.rotation + 1 };
+        await writer.session.update({ where: { id: credential.id }, data });
+        expect(await observer.session.findUniqueOrThrow({ where: { id: credential.id } })).toMatchObject(data);
+        expect(await observer.user.findUniqueOrThrow({ where: { id: f.membership.userId } })).toMatchObject({ isActive: true });
+        expect(await observer.hostEmployee.findUnique({ where: { id: f.membership.id } })).not.toBeNull();
+        expect(await observer.privateObject.findUniqueOrThrow({ where: { key } })).toMatchObject({ state: 'CLEAN', writeState: 'STORED', deletedAt: null });
+        release.resolve(); const denied = await response;
+        expect([403, 404]).toContain(denied.status);
+        expect(await denied.text()).not.toContain(bytes.toString());
+        expect(fixture.providerRead).toHaveBeenCalledTimes(1);
+        // An independently authenticated replacement can still read the same resource.
+        await browser({ id: f.membership.userId, role: 'HOST_EMPLOYEE' });
+        fixture.providerRead.mockReset().mockResolvedValue(bytes);
+        const allowed = await read(); expect(allowed.status).toBe(200);
+        expect(Buffer.from(await allowed.arrayBuffer())).toEqual(bytes);
+      } finally { release.resolve(); await response; }
+    }
+    for (const change of ['membership', 'quarantine', 'deleted'] as const) {
+      if (change === 'quarantine') await writer.hostEmployee.create({ data: { id: f.membership.id, hostId: f.host.id, userId: f.membership.userId, role: 'MANAGER' } });
+      if (change === 'deleted') await writer.privateObject.update({ where: { key }, data: { state: 'CLEAN' } });
+      const entered = deferred<void>(), release = deferred<void>();
+      fixture.providerRead.mockReset().mockImplementation(async () => { entered.resolve(); await release.promise; return bytes; });
+      const response = read();
+      try {
+        await entered.promise;
+        if (change === 'membership') await writer.hostEmployee.delete({ where: { id: f.membership.id } });
+        else await writer.privateObject.update({ where: { key }, data: change === 'quarantine' ? { state: 'QUARANTINED' } : { deletedAt: new Date() } });
+        // The independent observer sees the committed change before provider IO resumes.
+        if (change === 'membership') expect(await observer.hostEmployee.findUnique({ where: { id: f.membership.id } })).toBeNull();
+        else expect(await observer.privateObject.findUnique({ where: { key } })).toMatchObject(change === 'quarantine' ? { state: 'QUARANTINED' } : { deletedAt: expect.any(Date) });
+        release.resolve(); const denied = await response;
+        expect([403, 404]).toContain(denied.status); expect(await denied.text()).not.toContain(bytes.toString()); expect(fixture.providerRead).toHaveBeenCalledTimes(1);
+      } finally { release.resolve(); await response; }
+    }
+  } finally { await Promise.all([observer.$disconnect(), writer.$disconnect()]); }
   expect(await prisma.financialOperation.count()).toBe(0);
 });

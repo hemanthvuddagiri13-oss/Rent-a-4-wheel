@@ -1,10 +1,29 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import sharp from 'sharp';
 import { fixtureJurisdiction } from './jurisdiction-fixture';
 const db = new PrismaClient();
 if (process.env.CI !== 'true' || !new URL(process.env.DATABASE_URL!).pathname.endsWith('_test')) throw new Error('Disposable CI database only');
 async function main() {
+if (process.argv.includes('--assert')) {
+  const customer = await db.user.findUniqueOrThrow({ where: { email: 'native-customer@example.test' } });
+  const messages = await db.conversationMessage.findMany({ where: { body: 'Synthetic native acceptance message' } });
+  if (messages.length !== 1 || messages[0].senderId !== customer.id) throw new Error('Restart recovery must commit one correctly authored message');
+  const reservation = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'NATIVE-SYNTHETIC-TRIP' } });
+  if (reservation.status !== 'CANCELLED_BY_CUSTOMER') throw new Error('Restarted cancellation must remain terminal');
+  if (await db.mobileMutation.count({ where: { userId: customer.id, operation: 'reservation.cancel' } }) !== 1) throw new Error('Restarted cancellation must use one durable receipt');
+  const uploads = await db.mobileUpload.findMany({ where: { userId: customer.id } });
+  if (uploads.length !== 1 || !uploads[0].finalizedAt || uploads[0].reservationId !== reservation.id) throw new Error('Restarted customer photo must finalize one original upload');
+  if (await db.financialOperation.count() || await db.payoutItem.count()) throw new Error('Native recovery must not enable provider work');
+  if (await db.conversationMessage.count({ where: { body: '<invalid>' } })) throw new Error('Rejected message must not create an effect');
+  if (await db.mobileMutation.count({ where: { operation: 'message.send', result: { path: ['mobileRejectedV1', 'status'], equals: 400 } } }) !== 1) throw new Error('Expected one durable rejected message receipt');
+  console.log('Customer restart recovery: one message, one rejection receipt, zero provider operations and payouts.');
+  await db.$disconnect(); return;
+}
 await fixtureJurisdiction(db);
+await mkdir('/tmp/customer-native-fixtures', { recursive: true });
+await writeFile('/tmp/customer-native-fixtures/condition.png', await sharp({ create: { width: 600, height: 400, channels: 3, background: '#243c54' } }).png().toBuffer());
 const user = await db.user.create({ data: { email: 'native-customer@example.test', emailVerified: new Date(), name: 'Synthetic customer', role: 'CUSTOMER' } });
 await db.mobilePhoneIdentity.create({ data: { userId: user.id, phone: '+12025550101' } });
 // Code-verification fixture, NOT email issuance/delivery coverage. Four consumed

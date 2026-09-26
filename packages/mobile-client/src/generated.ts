@@ -13,6 +13,7 @@ export interface MobileOperations {
   "revokeDevice": { input: { params?: never; body: { "sessionId": string }; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "revoked": true } };
   "devices": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "devices": Array<{ "id": string; "platform": string; "appVersion": string; "lastUsedAt": string; "expiresAt": string }> } };
   "me": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "role": "CUSTOMER" | "HOST" | "HOST_EMPLOYEE" } };
+  "resolveMutation": { input: { params?: never; body: { "operation": "hold" | "checkout" | "hostAvailability" | "openConversation" | "saveReview" | "sendMessage" | "replyCase" | "openCase" | "submitReport" | "acceptReport" | "hostHandoff" | "tripStart" | "tripReturn" | "tripCancel" | "tripKeys" | "tripComplete"; "idempotencyKey": string }; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "outcome": "COMMITTED" | "NOT_COMMITTED"; "idempotencyKey": string } };
   "vehicles": { input: { params?: never; body?: never; idempotencyKey?: never; fileAccess?: never; query?: { limit?: number; cursor?: string } }; output: { "items": Array<{ "id": string; "slug": string; "year": number; "make": string; "model": string; "category": string; "transmission": string; "fuelType": string; "seats": number; "dailyRateCents": number; "securityDepositCents": number; "location": string; "jurisdictionCode": string | null }>; "nextCursor": string | null } };
   "vehicle": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "id": string; "slug": string; "year": number; "make": string; "model": string; "category": string; "transmission": string; "fuelType": string; "seats": number; "dailyRateCents": number; "securityDepositCents": number; "location": string; "jurisdictionCode": string | null } };
   "listingPhotos": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "path": string; "alt": string }> } };
@@ -138,6 +139,12 @@ export const operationMetadata = {
   "me": {
     "path": "/me",
     "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "resolveMutation": {
+    "path": "/recovery/resolve",
+    "method": "POST",
     "auth": true,
     "binary": null
   },

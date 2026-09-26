@@ -1,0 +1,32 @@
+appId: com.renta4wheel.customer.acceptance
+---
+# Each iteration verifies actual destinations, not the driver's tap success.
+# No tap retry, sleep or optional assertion masks a missed navigation.
+- repeat:
+    times: 5
+    commands:
+      - scrollUntilVisible:
+          element:
+            id: home-sign-in
+          direction: UP
+          centerElement: true
+      - tapOn:
+          id: home-sign-in
+      - assertVisible:
+          id: phone-sign-in-screen
+      - scrollUntilVisible:
+          element:
+            id: email-fallback
+          direction: DOWN
+          centerElement: true
+      - tapOn:
+          id: email-fallback
+      - assertVisible:
+          id: email-sign-in-screen
+      - assertVisible:
+          id: input-Email address
+      - runFlow: back.yaml
+      - assertVisible:
+          id: phone-sign-in-screen
+      - runFlow: back.yaml
+      - assertVisible: Your next drive starts here.
