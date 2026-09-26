@@ -171,3 +171,11 @@ request was recorded and the failure screenshot remained on Account. Both host
 logout transitions now reuse the customer's existing 20-second loaded-device-row
 barrier, center and require enabled logout, then require the signed-out welcome
 screen. No logout retry, sleep or timeout increase is introduced.
+
+## N1 browser credential follow-up
+
+Identity-document and community attachment web routes capture the authenticated browser session ID and credential version. They validate that exact database session before reading and again after provider I/O and the existing resource/effective-storage checks, immediately before constructing the byte response. Revocation, absolute expiry, idle expiry, rotation, inactive users and missing credential context fail closed. A replacement session cannot authorize the original response. Existing membership, document identity, quarantine, deletion and legacy-chain protections remain unchanged.
+
+The existing real HTTP/PostgreSQL web barrier regressions now use persisted browser sessions. Identity, conversation and case reads each pause provider I/O while an independent connection commits revocation, absolute expiry, idle expiry or rotation. A second independent observer confirms the change, with active user, membership and clean/stored object unchanged, before releasing the provider. Each denied request performs exactly one provider read and returns no sentinel bytes. A new valid session then reads the same unchanged resource successfully. Existing employee-removal, quarantine/deletion and unrelated-host controls are retained. Browser cookie decoding and external provider bytes are fixtures; database session validation, routes, resource authorization and storage validation are real. No timed sleep is used as race evidence.
+
+No schema/migration or financial-gate change. Exact-commit verification is recorded on PR #10; this follow-up requires narrow independent review.

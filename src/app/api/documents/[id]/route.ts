@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { validateDeviceSession } from "@/lib/device-sessions";
 import { prisma } from "@/lib/prisma";
 import { readPrivateDocument } from "@/lib/storage";
 import { logDocumentAccess, assertDocumentViewable, InvalidDocumentError } from "@/lib/documents";
@@ -16,11 +17,14 @@ import { getHostContext, hostOwnsVehicle } from "@/lib/host-access";
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user || !session.sessionId || typeof session.credentialVersion !== "number") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const { sessionId, credentialVersion } = session;
+  const userId = session.user.id;
   const authorize = async () => {
+  if (!await validateDeviceSession(userId, sessionId, credentialVersion)) throw new InvalidDocumentError("Forbidden");
   const actor = await prisma.user.findUnique({ where: { id: session.user.id }, select: { isActive: true, role: true } });
   if (!actor?.isActive) throw new InvalidDocumentError("Forbidden");
   const document = await prisma.driverDocument.findUnique({
@@ -65,6 +69,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { document: current } = await authorize();
   if (current.storageKey !== document.storageKey || current.mimeType !== document.mimeType || current.userId !== document.userId || current.reservationId !== document.reservationId || current.contentSha256 !== document.contentSha256) throw new InvalidDocumentError("Not found");
   await revalidate();
+  // Revalidate the captured credential, never a newly rotated/replacement session.
+  if (!await validateDeviceSession(userId, sessionId, credentialVersion)) throw new InvalidDocumentError("Forbidden");
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": document.mimeType || "application/octet-stream",

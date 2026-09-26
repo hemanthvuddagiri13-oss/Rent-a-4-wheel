@@ -8,8 +8,8 @@ import { createHash, createHmac } from "node:crypto";
 import sharp from "sharp";
 import { fixtureJurisdiction } from "./helpers/jurisdiction-fixture";
 import { createMobileClient } from "../packages/mobile-client/src";
-const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", webUser: null as { id: string; role: string } | null, emails: [] as string[], storageRead: vi.fn(), providerRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
-vi.mock("@/auth", () => ({ auth: async () => fixture.webUser ? { user: fixture.webUser } : null }));
+const fixture = vi.hoisted(() => ({ name: "mobile_" + crypto.randomUUID().replaceAll("-", "") + "_test", webUser: null as { id: string; role: string } | null, webSession: null as { sessionId: string; credentialVersion: number } | null, emails: [] as string[], storageRead: vi.fn(), providerRead: vi.fn(), storageWrite: vi.fn(), scan: vi.fn(), smsStart: vi.fn(), smsCheck: vi.fn() }));
+vi.mock("@/auth", () => ({ auth: async () => fixture.webUser ? { user: fixture.webUser, ...fixture.webSession } : null }));
 vi.mock("@/lib/prisma", async () => {
   const { PrismaClient } = await import("@prisma/client");
   const url = new URL(process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL!); url.pathname = "/" + fixture.name;
@@ -64,6 +64,7 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe("TRUNCATE " + tables.map(t => '"' + t.tablename.replaceAll('"', '""') + '"').join(",") + " CASCADE");
   fixture.emails.length = 0;
   fixture.webUser = null;
+  fixture.webSession = null;
   fixture.smsStart.mockReset().mockImplementation(async () => "fixture:" + crypto.randomUUID());
   fixture.smsCheck.mockReset().mockImplementation(async (_sid: string, code: string) => code === "123456");
   fixture.providerRead.mockReset();
@@ -1397,16 +1398,46 @@ it.each(['identity', 'business', 'conversation', 'case'] as const)('web %s downl
   const real = await vi.importActual<typeof import('@/lib/storage')>('@/lib/storage'); fixture.storageRead.mockImplementation(real.readPrivateDocument); fixture.providerRead.mockResolvedValue(bytes);
   const route = kind === 'conversation' || kind === 'case' ? 'collaboration' : kind;
   const read = () => fetch(base + '/web/' + route + '/' + id);
-  fixture.webUser = { id: f.host.userId, role: 'HOST' };
+  const browser = async (user: { id: string; role: string }) => {
+    fixture.webUser = user;
+    const row = await prisma.session.create({ data: { userId: user.id, sessionToken: crypto.randomUUID(), expires: new Date(Date.now() + 3600000) } });
+    fixture.webSession = { sessionId: row.id, credentialVersion: row.rotation };
+    return row;
+  };
+  await browser({ id: f.host.userId, role: 'HOST' });
   const owner = await read(); expect(owner.status).toBe(200); expect(Buffer.from(await owner.arrayBuffer())).toEqual(bytes);
   const unrelated = await prisma.user.update({ where: { email: f.other.email }, data: { role: 'HOST' } });
   await prisma.hostProfile.create({ data: { userId: unrelated.id, legalName: 'Other synthetic host', jurisdictionCode: 'TX', onboardingStatus: 'APPROVED' } });
-  fixture.webUser = unrelated; fixture.providerRead.mockClear();
+  await browser(unrelated); fixture.providerRead.mockClear();
   expect([403, 404]).toContain((await read()).status); expect(fixture.providerRead).not.toHaveBeenCalled();
-  fixture.webUser = { id: f.membership.userId, role: 'HOST_EMPLOYEE' };
+  await browser({ id: f.membership.userId, role: 'HOST_EMPLOYEE' });
   const control = await read(); expect(control.status).toBe(200); expect(Buffer.from(await control.arrayBuffer())).toEqual(bytes);
   const [observer, writer] = await independentClients();
   try {
+    if (kind !== 'business') for (const change of ['revocation', 'expiry', 'idle', 'rotation'] as const) {
+      const credential = await browser({ id: f.membership.userId, role: 'HOST_EMPLOYEE' });
+      const entered = deferred<void>(), release = deferred<void>();
+      fixture.providerRead.mockReset().mockImplementation(async () => { entered.resolve(); await release.promise; return bytes; });
+      const response = read();
+      try {
+        await entered.promise;
+        const data = change === 'revocation' ? { revokedAt: new Date() } : change === 'expiry' ? { expires: new Date(0) } : change === 'idle' ? { lastSeenAt: new Date(0) } : { rotation: credential.rotation + 1 };
+        await writer.session.update({ where: { id: credential.id }, data });
+        expect(await observer.session.findUniqueOrThrow({ where: { id: credential.id } })).toMatchObject(data);
+        expect(await observer.user.findUniqueOrThrow({ where: { id: f.membership.userId } })).toMatchObject({ isActive: true });
+        expect(await observer.hostEmployee.findUnique({ where: { id: f.membership.id } })).not.toBeNull();
+        expect(await observer.privateObject.findUniqueOrThrow({ where: { key } })).toMatchObject({ state: 'CLEAN', writeState: 'STORED', deletedAt: null });
+        release.resolve(); const denied = await response;
+        expect([403, 404]).toContain(denied.status);
+        expect(await denied.text()).not.toContain(bytes.toString());
+        expect(fixture.providerRead).toHaveBeenCalledTimes(1);
+        // An independently authenticated replacement can still read the same resource.
+        await browser({ id: f.membership.userId, role: 'HOST_EMPLOYEE' });
+        fixture.providerRead.mockReset().mockResolvedValue(bytes);
+        const allowed = await read(); expect(allowed.status).toBe(200);
+        expect(Buffer.from(await allowed.arrayBuffer())).toEqual(bytes);
+      } finally { release.resolve(); await response; }
+    }
     for (const change of ['membership', 'quarantine', 'deleted'] as const) {
       if (change === 'quarantine') await writer.hostEmployee.create({ data: { id: f.membership.id, hostId: f.host.id, userId: f.membership.userId, role: 'MANAGER' } });
       if (change === 'deleted') await writer.privateObject.update({ where: { key }, data: { state: 'CLEAN' } });
