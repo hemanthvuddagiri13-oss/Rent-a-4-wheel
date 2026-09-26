@@ -44,7 +44,7 @@ jobs:
       - run: npx prisma generate && npx next typegen && npm run typecheck
       - run: npm run lint
       - name: Physical-device trial configuration guard
-        run: node --test tests/native-device-trial-gate.test.mjs
+        run: node --test tests/native-device-trial-gate.test.mjs tests/native-staging-probe.test.mjs
       - name: OpenAPI validation and generated-client drift
         run: npx tsx scripts/generate-mobile-contract.ts --check && node scripts/validate-mobile-openapi.mjs
       - name: Dependency security audit
