@@ -1,3 +1,4 @@
+import { trace } from './acceptance-trace';
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { AppState, View, Text, Platform, Pressable } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
@@ -27,6 +28,7 @@ export default function App() {
   const [authRevision, setAuthRevision] = useState(0), [startupError, setStartupError] = useState('');
   const appState = useSyncExternalStore(subscribeAppState, () => AppState.currentState);
   const privateScreen = appState !== 'active';
+  useEffect(() => { trace(appState, 'App'); }, [appState]);
   useEffect(() => {
     session.onChange = value => { void queries.cancelQueries(); queries.clear(); setSignedIn(value); setAuthRevision(revision => revision + 1); };
     void session.restore().catch(error => setStartupError(friendly(error))).finally(() => setReady(true));

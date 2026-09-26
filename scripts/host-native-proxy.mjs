@@ -11,10 +11,10 @@ httpServer((req, res) => {
     let body = ''; req.on('data', chunk => { body += chunk; if (body.length > 1024) req.destroy(); });
     req.on('end', () => {
       try { const row = JSON.parse(body);
-        const phases = ['ready', 'disabled', 'touch', 'press-in', 'press-out', 'press', 'navigation', 'mount', 'unmount', 'action', 'refresh', 'loading', 'loaded', 'error', 'request', 'response', 'transport-error'];
+        const phases = ['ready', 'disabled', 'touch', 'press-in', 'press-out', 'press', 'navigation', 'mount', 'unmount', 'action', 'refresh', 'loading', 'loaded', 'error', 'request', 'response', 'transport-error', 'active', 'inactive', 'background'];
         // Strict fixed vocabulary: even a malicious loopback request cannot put
         // private text into the exported trace through this diagnostic endpoint.
-        const targets = ['home-sign-in', 'email-fallback', 'case-refresh', 'recover-replyCase', 'recover-sendMessage', 'recover-tripReturn', 'recover-tripCancel', 'Home', 'SignIn', 'EmailSignIn', 'Case', 'Recovery', 'vehicles', 'me', 'serviceCase', 'caseEvents', 'replyCase', 'openCase', 'resolveMutation'];
+        const targets = ['home-sign-in', 'email-fallback', 'case-refresh', 'case-reply', 'open-recovery', 'submit-incident', 'open-case', 'recover-replyCase', 'recover-sendMessage', 'recover-tripReturn', 'recover-tripCancel', 'App', 'Home', 'SignIn', 'EmailSignIn', 'Case', 'Recovery', 'vehicles', 'me', 'serviceCase', 'caseEvents', 'replyCase', 'openCase', 'resolveMutation'];
         if (row.event !== 'native.ui' || !phases.includes(row.phase) || !targets.includes(row.target) || !Number.isSafeInteger(row.sequence) || row.sequence < 1 || !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(row.timestamp)) throw new Error('Invalid trace');
         console.log(JSON.stringify({ event: 'native.ui', phase: row.phase, target: row.target, sequence: row.sequence, timestamp: row.timestamp, receivedAt: new Date().toISOString(), ...(/^[0-9a-f-]{36}$/i.test(row.requestId ?? '') ? { requestId: row.requestId } : {}), ...(Number.isInteger(row.status) && row.status >= 100 && row.status <= 599 ? { status: row.status } : {}) }));
         res.writeHead(204); res.end();

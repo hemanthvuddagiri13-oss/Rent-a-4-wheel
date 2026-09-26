@@ -20,6 +20,7 @@ describe('acceptance tracing privacy and isolation', () => {
     let tracing = createAcceptanceTrace(true, fetch);
     expect(() => tracing.trace('press', 'home-sign-in')).not.toThrow(); await Promise.resolve();
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(() => createAcceptanceTrace(true, () => { throw new Error('native transport unavailable'); }).trace('press', 'home-sign-in')).not.toThrow();
     tracing = createAcceptanceTrace(false, fetch); tracing.trace('press', 'home-sign-in');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
