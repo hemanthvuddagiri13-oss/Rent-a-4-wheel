@@ -7,6 +7,8 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "device-trial:android-prebuild": "node ../../scripts/native-device-trial-gate.mjs && expo prebuild --platform android --no-install",
+    "device-trial:ios-prebuild": "node ../../scripts/native-device-trial-gate.mjs && expo prebuild --platform ios --no-install",
     "typecheck": "tsc --noEmit",
     "export": "expo export --platform all"
   },
