@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: 24
       - run: npm --prefix apps/customer ci
-      - run: node --test tests/native-device-trial-gate.test.mjs tests/native-staging-probe.test.mjs tests/native-device-config.test.mjs
+      - run: node --test tests/native-device-trial-gate.test.mjs tests/native-staging-probe.test.mjs tests/native-device-config.test.mjs tests/staging-public-config.test.mjs
   android:
     strategy:
       fail-fast: false
@@ -119,5 +119,7 @@ jobs:
           test "$(curl -s -o /tmp/ready.json -w '%{http_code}' http://127.0.0.1:3000/api/health/ready)" = 503
           node -e 'const x=JSON.parse(require("fs").readFileSync("/tmp/ready.json"));if(x.ready!==false)process.exit(1)'
           if docker run --rm -e LIVE_FINANCE_ENABLED=true r4w-trial:ci; then exit 1; fi
+          if docker run --rm -e SITE_URL=https://staging.other.renta4wheel.com r4w-trial:ci; then exit 1; fi
+          if docker run --rm -e NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_Different r4w-trial:ci; then exit 1; fi
       - name: Validate restricted ingress template without deployment
         run: docker run --rm -e TRIAL_HOST=staging.compile.renta4wheel.com -e TRIAL_ALLOWED_CIDRS=192.0.2.0/24 -v "$PWD/deploy/staging.Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2 caddy validate --config /etc/caddy/Caddyfile

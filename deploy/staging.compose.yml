@@ -5,6 +5,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.staging
+      args:
+        NEXT_PUBLIC_SITE_URL: ${TRIAL_PUBLIC_SITE_URL:?Set the same verified HTTPS origin as runtime SITE_URL}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${TRIAL_STRIPE_TEST_PUBLISHABLE_KEY:?Set only the public pk_test key}
     env_file: ${TRIAL_ENV_FILE:?Set an absolute path outside the repository}
     restart: unless-stopped
     read_only: true

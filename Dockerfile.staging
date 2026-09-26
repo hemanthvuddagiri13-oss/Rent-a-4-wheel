@@ -6,8 +6,11 @@ COPY prisma ./prisma
 RUN npm ci && npx prisma generate
 COPY . .
 # No database/provider/signing credentials or .env files enter the image.
+ARG NEXT_PUBLIC_SITE_URL=https://staging.compile.renta4wheel.com
+ARG NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 ENV STAGING_CONTAINER_BUILD=true NEXT_TELEMETRY_DISABLED=1
-RUN npm run build && node scripts/verify-release.mjs --client
+RUN node scripts/staging-public-config.mjs && npm run build && node scripts/verify-release.mjs --client
 
 FROM build AS migration
 # Explicit operator invocation only, through the existing direct-DB guard.
@@ -21,6 +24,8 @@ COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
 COPY --chown=node:node scripts/staging-container-entry.mjs ./staging-container-entry.mjs
+COPY --chown=node:node scripts/staging-public-config.mjs ./staging-public-config.mjs
+COPY --from=build --chown=node:node /app/staging-public-config.json ./staging-public-config.json
 USER node
 EXPOSE 3000
 CMD ["node", "staging-container-entry.mjs"]
