@@ -2,10 +2,18 @@ import { test } from 'node:test';
 import { deepEqual, ok } from 'node:assert/strict';
 import { deviceTrialProblems } from '../scripts/native-device-trial-gate.mjs';
 
-const staging = { APP_ENV: 'staging', NATIVE_ACCEPTANCE: '0', EXPO_PUBLIC_APP_MODE: 'customer', ALLOW_DEV_PAYMENT_SIMULATION: 'false', LIVE_FINANCE_ENABLED: 'false', MOBILE_SMS_PROVIDER: 'twilio', EXPO_PUBLIC_API_ORIGIN: 'https://staging.renta4wheel.com' };
+const staging = { APP_ENV: 'staging', NATIVE_ACCEPTANCE: '0', EXPO_PUBLIC_APP_MODE: 'customer', ALLOW_DEV_PAYMENT_SIMULATION: 'false', LIVE_FINANCE_ENABLED: 'false', MOBILE_SMS_PROVIDER: 'twilio', EXPO_PUBLIC_API_ORIGIN: 'https://staging.renta4wheel.com', DEVICE_TRIAL_STAGING_ORIGIN: 'https://staging.renta4wheel.com' };
 
 test('only explicit isolated staging configuration passes local checks', () => {
   deepEqual(deviceTrialProblems(staging), []);
+});
+
+test('rejects IP literals, alternate production names and ambient backend changes', () => {
+  for (const origin of ['https://10.0.0.1', 'https://192.168.1.1', 'https://[::1]', 'https://[fc00::1]', 'https://127.1', 'https://rentafourwheel.com', 'https://www.rentafourwheel.com', 'https://renta4wheel.com.', 'https://staging.local', 'https://api.other.org']) {
+    ok(deviceTrialProblems({ ...staging, EXPO_PUBLIC_API_ORIGIN: origin, DEVICE_TRIAL_STAGING_ORIGIN: origin }).length > 0, origin);
+  }
+  ok(deviceTrialProblems({ ...staging, EXPO_PUBLIC_API_ORIGIN: 'https://staging.other.org' }).length);
+  ok(deviceTrialProblems({ ...staging, MOBILE_SMS_PROVIDER: 'unknown' }).length);
 });
 
 test('rejects synthetic acceptance builds and finance fixtures', () => {

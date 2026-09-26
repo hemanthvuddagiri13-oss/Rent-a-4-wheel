@@ -33,6 +33,12 @@ apps/customer/build/
 # misc
 .DS_Store
 *.pem
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+**/credentials.json
+**/ExportOptions.plist
 
 # debug
 npm-debug.log*

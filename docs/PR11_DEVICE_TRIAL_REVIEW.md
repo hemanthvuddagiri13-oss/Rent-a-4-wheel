@@ -1,0 +1,11 @@
+# Independent review of f0cfa30269a678569131e17b326a7954b304778b
+
+Compared with merged Phase7D main `60cfc4ed0a308a193b345fb17474725aa72c8f83`. There are seven changed files, not five: workflow, package scripts, documentation, guard, probe and two test files. Reviewed all seven and the immediate Expo, mobile HTTP, readiness and deployment dependencies. The five original tests passed locally with Node's no-isolation runner (default child-process execution is blocked by this Windows sandbox).
+
+Confirmed P2: `native-device-trial-gate.mjs` accepted `https://10.0.0.1`, `https://rentafourwheel.com` and `https://renta4wheel.com.`. Each reproduced with zero reported problems. It also accepted unsupported provider strings. Local/alternate production configurations could therefore pass a gate that claimed to reject them. Corrected IP/domain normalization, an explicit matching operator-selected staging origin and the supported provider allowlist; negative regressions added. This is configuration validation, not DNS/IAM certification.
+
+Confirmed P2: `native-staging-probe.mjs` treated missing `data` as valid because `undefined !== null`, and did not check collection shape or mobile correlation/version headers. It could falsely approve an unhealthy/incompatible catalog. Corrected bounded JSON reading, collection/pagination/envelope checks and version/request-ID agreement; malformed/missing/oversized/header/transport regressions added. Only GET is used; no business mutation or provider call is introduced.
+
+Packaging gap: the guard was only in optional npm wrappers; direct Expo commands used the old default origin and future-production package IDs. The trial guard now executes in Expo configuration, trial package IDs are separate, Android targets arm64 and cannot silently use Expo's debug release key. Existing synthetic acceptance configuration remains separate. Real Expo config tests and native device-SDK compile jobs verify this boundary.
+
+No schema/migration, booking, private-file, authentication, trip, ledger or payout authority changes. No UI redesign, approval, deployment, live finance or account transfer. Draft PR requires independent review before merge. See DEVICE_TRIAL.md for exact credential/infrastructure requirements and the distinction between compile evidence and installable/distributable apps.

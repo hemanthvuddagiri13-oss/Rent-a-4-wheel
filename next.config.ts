@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Optional standalone container target; preserve the default CI/server build.
+  ...(process.env.STAGING_CONTAINER_BUILD === 'true' ? { output: 'standalone' as const } : {}),
   devIndicators: process.env.BROWSER_TEST_PORT ? false : undefined,
   // Browser suites start independent Next servers. Keep their route manifests
   // separate from each other and from the production build.

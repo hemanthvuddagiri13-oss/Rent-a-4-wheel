@@ -1,0 +1,31 @@
+# Run from repository root with an external, protected TRIAL_ENV_FILE.
+# Managed PostgreSQL/S3/scanner/provider resources must already exist.
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile.staging
+    env_file: ${TRIAL_ENV_FILE:?Set an absolute path outside the repository}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=1000,gid=1000
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # No public origin port. Only the HTTPS ingress can reach this service.
+  ingress:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    environment:
+      TRIAL_HOST: ${TRIAL_HOST:?Set the staging DNS hostname}
+      TRIAL_ALLOWED_CIDRS: ${TRIAL_ALLOWED_CIDRS:?Set tester VPN egress CIDRs}
+    volumes:
+      - ./staging.Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls_data:/data
+      - tls_config:/config
+    depends_on: [app]
+    restart: unless-stopped
+volumes:
+  tls_data:
+  tls_config:
