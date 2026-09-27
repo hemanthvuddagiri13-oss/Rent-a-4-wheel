@@ -11,16 +11,22 @@ httpServer((req, res) => {
     let body = ''; req.on('data', chunk => { body += chunk; if (body.length > 1024) req.destroy(); });
     req.on('end', () => {
       try { const row = JSON.parse(body);
-        const phases = ['ready', 'disabled', 'touch', 'press-in', 'press-out', 'press', 'navigation', 'mount', 'unmount', 'action', 'refresh', 'loading', 'loaded', 'error', 'request', 'response', 'transport-error', 'active', 'inactive', 'background'];
+        const phases = ['ready', 'disabled', 'touch', 'press-in', 'press-out', 'press', 'navigation', 'mount', 'unmount', 'action', 'refresh', 'loading', 'loaded', 'error', 'request', 'response', 'transport-error', 'deadline', 'active', 'inactive', 'background'];
         // Strict fixed vocabulary: even a malicious loopback request cannot put
         // private text into the exported trace through this diagnostic endpoint.
-        const targets = ['home-sign-in', 'email-fallback', 'case-refresh', 'case-reply', 'open-recovery', 'submit-incident', 'open-case', 'recover-replyCase', 'recover-sendMessage', 'recover-tripReturn', 'recover-tripCancel', 'App', 'Home', 'SignIn', 'EmailSignIn', 'Case', 'Recovery', 'vehicles', 'me', 'serviceCase', 'caseEvents', 'replyCase', 'openCase', 'resolveMutation'];
+        const targets = ['home-sign-in', 'email-fallback', 'case-refresh', 'case-reply', 'open-recovery', 'submit-incident', 'open-case', 'recover-replyCase', 'recover-sendMessage', 'recover-tripReturn', 'recover-tripCancel', 'App', 'Home', 'SignIn', 'EmailSignIn', 'Case', 'Recovery', 'vehicles', 'me', 'serviceCase', 'caseEvents', 'replyCase', 'openCase', 'resolveMutation', 'requestCode'];
         if (row.event !== 'native.ui' || !phases.includes(row.phase) || !targets.includes(row.target) || !Number.isSafeInteger(row.sequence) || row.sequence < 1 || !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(row.timestamp)) throw new Error('Invalid trace');
         console.log(JSON.stringify({ event: 'native.ui', phase: row.phase, target: row.target, sequence: row.sequence, timestamp: row.timestamp, receivedAt: new Date().toISOString(), ...(/^[0-9a-f-]{36}$/i.test(row.requestId ?? '') ? { requestId: row.requestId } : {}), ...(Number.isInteger(row.status) && row.status >= 100 && row.status <= 599 ? { status: row.status } : {}) }));
         res.writeHead(204); res.end();
       } catch { res.writeHead(400); res.end(); }
     }); return;
   }
+  const correlationId = req.headers['x-native-timing-id'];
+  const timed = req.method === 'POST' && req.url === '/api/v1/mobile/auth/request-code' && typeof correlationId === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(correlationId);
+  const timing = (stage, requestId) => { if (timed) console.log(JSON.stringify({ event: 'native.timing', operation: 'requestCode', stage, correlationId, timestamp: new Date().toISOString(), ...(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId ?? '') ? { requestId } : {}) })); };
+  timing('ingress-entry');
+  res.on('finish', () => timing('response-finish'));
+  res.on('close', () => timing(res.writableFinished ? 'response-close' : 'response-disconnected'));
   const fault = existsSync('/tmp/host-incident-fault') ? readFileSync('/tmp/host-incident-fault', 'utf8').trim() : '';
   if (fault === 'submission' && req.method === 'POST' && req.url === '/api/v1/mobile/cases' || fault === 'readback' && req.method === 'GET' && /^\/api\/v1\/mobile\/cases\/[^/]+(?:\/events)?$/.test(req.url.split('?')[0])) {
     const requestId = randomUUID(); req.resume(); console.log(JSON.stringify({ event: 'synthetic.incident_rejected', kind: fault, timestamp: new Date().toISOString(), requestId }));
@@ -28,6 +34,8 @@ httpServer((req, res) => {
     res.end(JSON.stringify({ requestId, error: { code: 'UNAVAILABLE', message: 'Synthetic incident acceptance failure.' } })); return;
   }
   const upstream = request({ hostname: '127.0.0.1', port: 3001, path: req.url, method: req.method, headers: { ...req.headers, host: 'localhost:3001' } }, response => {
+    timing('upstream-headers', response.headers['x-request-id']);
+    response.on('end', () => timing('upstream-end', response.headers['x-request-id']));
     const kind = req.method === 'POST' && /\/cases\/[^/]+\/reply$/.test(req.url) ? 'reply' : req.method === 'POST' && /\/uploads\/[^/]+\/finalize$/.test(req.url) ? 'upload' : req.method === 'POST' && /\/conversations\/[^/]+\/messages$/.test(req.url) ? 'message' : req.method === 'POST' && /\/reservations\/[^/]+\/return$/.test(req.url) ? 'return' : req.method === 'POST' && /\/reservations\/[^/]+\/cancel$/.test(req.url) ? 'cancel' : null;
     if (kind && (process.env.CUSTOMER_RECOVERY !== 'true' || kind === 'message' || kind === 'cancel' || kind === 'upload') && response.statusCode === 200 && !dropped.has(kind)) {
       dropped.add(kind); response.resume(); response.on('end', () => {
@@ -42,6 +50,7 @@ httpServer((req, res) => {
     }
     res.writeHead(response.statusCode, response.headers); response.pipe(res);
   });
+  timing('upstream-dispatch');
   upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); }); req.pipe(upstream);
 }).listen(3000, '127.0.0.1');
 // Explicit protocol fixture, NOT real malware scanning evidence. Only installed

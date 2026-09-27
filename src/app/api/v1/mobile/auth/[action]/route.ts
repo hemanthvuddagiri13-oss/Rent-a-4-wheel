@@ -1,3 +1,4 @@
+import { acceptanceTiming } from "@/lib/mobile/acceptance-timing";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requestAuthCode } from "@/lib/auth-code";
@@ -7,10 +8,11 @@ import { requestLoginChallenge, verifyLoginChallenge, loginMethods } from "@/lib
 
 const actions = ["request-code", "sign-in", "request-phone-code", "phone-sign-in", "request-identity-code", "verify-identity-code", "refresh", "logout", "logout-all", "revoke"] as const;
 export async function POST(req: Request, ctx: { params: Promise<{ action: string }> }) {
+  const timing = acceptanceTiming(req); timing("route-entry");
   const { action } = await ctx.params;
   return mobileHandler(req, actions.includes(action as typeof actions[number]) ? `auth.${action}` : "auth.unknown", async () => {
     if (!actions.includes(action as typeof actions[number])) throw new MobileError("NOT_FOUND", 404);
-    const input = await mobileBody(req);
+    const input = await mobileBody(req); timing("body-complete");
     if (action === "request-phone-code") return requestLoginChallenge(input, mobileIp(req.headers));
     if (action === "phone-sign-in") return verifyLoginChallenge(input);
     if (action === "request-identity-code") return requestLoginChallenge(input, mobileIp(req.headers), req.headers);
@@ -19,9 +21,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
       const { email } = z.object({ email: z.email().max(254) }).strict().parse(input);
       // Same response for unknown, existing, disabled and throttled accounts.
       const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+      timing("user-complete");
       if (!user?.emailVerified || !user.isActive || !["CUSTOMER", "HOST", "HOST_EMPLOYEE"].includes(user.role) || user.email.endsWith("@phone.identity.invalid")) return { accepted: true };
-      const issued = await requestAuthCode({ email, ip: mobileIp(req.headers), purpose: "MOBILE_SIGN_IN" });
+      const issued = await requestAuthCode({ email, ip: mobileIp(req.headers), purpose: "MOBILE_SIGN_IN" }, timing);
       if (!issued.ok) await prisma.auditLog.create({ data: { action: "mobile.code_throttled", entityType: "MobileAuthentication", entityId: mobileIp(req.headers), metadata: { reason: issued.reason } } });
+      timing("audit-complete");
       return { accepted: true };
     }
     if (action === "sign-in") return mobileSignIn(input, mobileIp(req.headers));

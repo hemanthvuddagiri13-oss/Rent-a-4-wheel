@@ -1,3 +1,4 @@
+import { acceptanceTiming } from "./acceptance-timing";
 import { createHmac, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { z, ZodError } from "zod";
@@ -33,6 +34,7 @@ export function mobileHeaders(requestId: string) {
 }
 export async function mobileHandler(req: Request, operation: string, run: (requestId: string) => Promise<unknown>) {
   const requestId = randomUUID(), start = performance.now(); let status = 200, telemetryOperation = operation, failureKind: string | undefined;
+  const timing = acceptanceTiming(req); timing("handler-entry", requestId);
   try {
     const requested = req.headers.get("x-api-version");
     if (requested && requested !== MOBILE_VERSION) throw new MobileError("INVALID_REQUEST", 400);
@@ -40,6 +42,7 @@ export async function mobileHandler(req: Request, operation: string, run: (reque
     if (!contract) throw new MobileError("NOT_FOUND", 404);
     telemetryOperation = contract.operationId;
     if (!await sharedRequestLimit(req.headers, operation.startsWith("auth.") ? "mobile-auth" : "mobile-api", operation.startsWith("auth.") ? 30 : 120)) throw new MobileError("RATE_LIMITED", 429);
+    timing("limit-complete", requestId);
     const data = await run(requestId);
     if (data instanceof Response) { status = data.status; for (const [key, value] of Object.entries(mobileHeaders(requestId))) data.headers.set(key, value); return data; }
     // Validate serialized DTOs against the same schemas used to generate the
@@ -57,6 +60,7 @@ export async function mobileHandler(req: Request, operation: string, run: (reque
     const code = error instanceof MobileError ? error.code : status === 400 || status === 413 ? "INVALID_REQUEST" : status === 403 ? "FORBIDDEN" : status === 404 ? "NOT_FOUND" : status === 409 ? "CONFLICT" : status === 429 ? "RATE_LIMITED" : "UNAVAILABLE";
     return Response.json({ data: null, error: { code, ...(error instanceof MobileNonCommit ? { nonCommit: { idempotencyKey: error.idempotencyKey } } : {}) }, requestId }, { status, headers: { ...mobileHeaders(requestId), ...(status === 429 ? { "Retry-After": "60" } : {}) } });
   } finally {
+    timing("handler-complete", requestId);
     // Callers supply a fixed operation label, never a URL, ID or request data.
     console.info(JSON.stringify({ event: "mobile.request", timestamp: new Date().toISOString(), operation: telemetryOperation, requestId, status, durationMs: Math.round(performance.now() - start), ...(failureKind ? { failureKind } : {}) }));
   }
