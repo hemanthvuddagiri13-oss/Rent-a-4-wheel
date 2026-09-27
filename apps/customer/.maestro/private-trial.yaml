@@ -29,7 +29,9 @@ appId: com.renta4wheel.customer.acceptance
     visible: 'Sign In'
     timeout: 20000
 - assertNotVisible: 'NATIVE-SYNTHETIC-TRIP'
-- launchApp
+# Foreground the existing navigation state; the later stopApp tests restart.
+- launchApp:
+    stopApp: false
 - assertVisible:
     id: reservation-loaded
 - scrollUntilVisible:
