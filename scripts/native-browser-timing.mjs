@@ -14,11 +14,13 @@ export function browserTiming(row) {
     ...(uuid.test(row.requestId ?? '') ? { requestId: row.requestId } : {}),
     ...(Number.isInteger(row.status) && row.status >= 100 && row.status <= 599 ? { status: row.status } : {}) };
 }
-export function browserCompileTiming(line) {
-  // Next development-server timing only; discard the entire URL and log line.
-  const match = line.replace(/\x1b\[[0-9;]*m/g, '').match(/^\s*GET (\/sign-in|\/account\/reservations\/[A-Za-z0-9_-]{1,128})(?:\?\S*)? ([1-5]\d{2}) in ([\d.]+)(ms|s) \(compile: ([\d.]+)(ms|s),/);
+export function browserServerTiming(line) {
+  // Next 16.3 development-server timing only; discard the URL and log line.
+  // The next.js bucket includes framework work, not only compilation.
+  const match = line.replace(/\x1b\[[0-9;]*m/g, '').match(/^\s*GET (\/sign-in|\/account\/reservations\/[A-Za-z0-9_-]{1,128})(?:\?\S*)? ([1-5]\d{2}) in ([\d.]+)(ms|s|min) \(next\.js: ([\d.]+)(ms|s|min),/);
   if (!match) return null;
-  const durationMs = Number(match[3]) * (match[4] === 's' ? 1000 : 1), compileMs = Number(match[5]) * (match[6] === 's' ? 1000 : 1);
-  if (!Number.isFinite(durationMs) || !Number.isFinite(compileMs)) return null;
-  return { event: 'native.browser.compile', operation: match[1] === '/sign-in' ? 'browserSignIn' : 'browserReservation', status: Number(match[2]), durationMs, compileMs };
+  const scale = unit => unit === 'min' ? 60000 : unit === 's' ? 1000 : 1;
+  const durationMs = Number(match[3]) * scale(match[4]), frameworkMs = Number(match[5]) * scale(match[6]);
+  if (!Number.isFinite(durationMs) || !Number.isFinite(frameworkMs)) return null;
+  return { event: 'native.browser.server', operation: match[1] === '/sign-in' ? 'browserSignIn' : 'browserReservation', status: Number(match[2]), durationMs, frameworkMs };
 }

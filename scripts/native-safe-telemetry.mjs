@@ -1,13 +1,13 @@
 // Whitelist operational telemetry only. Never upload raw API request logs,
 // uploaded bytes, auth headers, capabilities or database contents.
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { browserTiming, browserCompileTiming } from './native-browser-timing.mjs';
+import { browserTiming, browserServerTiming } from './native-browser-timing.mjs';
 mkdirSync('artifacts', { recursive: true });
 const rows = [];
 for (const path of ['/tmp/native-api.log', '/tmp/native-proxy.log']) {
   let text; try { text = readFileSync(path, 'utf8'); } catch { continue; }
   for (const line of text.split('\n')) {
-    const compile = browserCompileTiming(line); if (compile) rows.push(compile);
+    const compile = browserServerTiming(line); if (compile) rows.push(compile);
     const start = line.indexOf('{'); if (start < 0) continue;
     try { const row = JSON.parse(line.slice(start));
       if (row.event === 'native.browser') { const safe = browserTiming(row); if (safe) rows.push(safe); }

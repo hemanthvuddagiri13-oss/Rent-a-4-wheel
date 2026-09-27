@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { browserOperation, browserTiming, browserCompileTiming } from '../scripts/native-browser-timing.mjs';
+import { browserOperation, browserTiming, browserServerTiming } from '../scripts/native-browser-timing.mjs';
 
 it('allows only the two anonymous browser read families without retaining private inputs', () => {
   expect(browserOperation('GET', '/account/reservations/private-id?email=private@example.test')).toBe('browserReservation');
@@ -13,8 +13,9 @@ it('allows only the two anonymous browser read families without retaining privat
   expect(browserTiming({ ...row, status: 999 })).not.toHaveProperty('status');
 });
 
-it('extracts only numeric development compilation timing, never URLs or private query values', () => {
-  expect(browserCompileTiming(' GET /sign-in?callbackUrl=private&email=private@example.test 200 in 27.3s (compile: 27.2s, proxy.ts: 5ms, render: 95ms)')).toEqual({ event: 'native.browser.compile', operation: 'browserSignIn', status: 200, durationMs: 27300, compileMs: 27200 });
-  expect(browserCompileTiming(' GET /account/reservations/private-id 307 in 18ms (compile: 1ms, render: 17ms)')).toEqual({ event: 'native.browser.compile', operation: 'browserReservation', status: 307, durationMs: 18, compileMs: 1 });
-  for (const line of ['POST /sign-in 200 in 1s (compile: 1s,', 'GET /api/private 200 in 1s (compile: 1s,', 'GET /sign-in 200 in NaNs (compile: 1s,', 'private exception', 'GET /sign-in 200 in 1s (private: body)']) expect(browserCompileTiming(line)).toBeNull();
+it('extracts only numeric development framework timing, never URLs or private query values', () => {
+  expect(browserServerTiming(' GET /sign-in?callbackUrl=private&email=private@example.test 200 in 27.3s (next.js: 27.2s, proxy.ts: 5ms, application-code: 95ms)')).toEqual({ event: 'native.browser.server', operation: 'browserSignIn', status: 200, durationMs: 27300, frameworkMs: 27200 });
+  expect(browserServerTiming(' GET /account/reservations/private-id 307 in 18ms (next.js: 1ms, application-code: 17ms)')).toEqual({ event: 'native.browser.server', operation: 'browserReservation', status: 307, durationMs: 18, frameworkMs: 1 });
+  expect(browserServerTiming(' GET /sign-in 200 in 2.1min (next.js: 2.0min, application-code: 6s)')).toMatchObject({ durationMs: 126000, frameworkMs: 120000 });
+  for (const line of ['POST /sign-in 200 in 1s (next.js: 1s,', 'GET /api/private 200 in 1s (next.js: 1s,', 'GET /sign-in 200 in NaNs (next.js: 1s,', 'private exception', 'GET /sign-in 200 in 1s (private: body)']) expect(browserServerTiming(line)).toBeNull();
 });
