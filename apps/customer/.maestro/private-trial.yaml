@@ -32,6 +32,10 @@ appId: com.renta4wheel.customer.acceptance
 # Foreground the existing navigation state; the later stopApp tests restart.
 - launchApp:
     stopApp: false
+- scrollUntilVisible:
+    element:
+      id: reservation-loaded
+    direction: UP
 - assertVisible:
     id: reservation-loaded
 - scrollUntilVisible:
@@ -51,8 +55,15 @@ appId: com.renta4wheel.customer.acceptance
     element: View private license front
     direction: DOWN
 - tapOn: View private license front
+- scrollUntilVisible:
+    element: 'This service is currently unavailable. Your booking is not confirmed.*'
+    direction: DOWN
 - assertVisible: 'This service is currently unavailable. Your booking is not confirmed.*'
 - assertNotVisible: Close private preview
+- scrollUntilVisible:
+    element: View private license front
+    direction: UP
+    centerElement: true
 - tapOn: View private license front
 - assertVisible: Close private preview
 - tapOn: Close private preview
@@ -65,6 +76,10 @@ appId: com.renta4wheel.customer.acceptance
 - launchApp
 - tapOn: Your trips
 - tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- scrollUntilVisible:
+    element:
+      id: reservation-loaded
+    direction: UP
 - assertVisible:
     id: reservation-loaded
 - scrollUntilVisible:
@@ -79,5 +94,9 @@ appId: com.renta4wheel.customer.acceptance
 - assertVisible: Close private preview
 - tapOn: Close private preview
 - runFlow: back.yaml
+- scrollUntilVisible:
+    element:
+      id: reservation-loaded
+    direction: UP
 - assertVisible:
     id: reservation-loaded
