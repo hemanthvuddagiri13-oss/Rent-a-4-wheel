@@ -1,3 +1,4 @@
+import { acceptanceTiming } from "@/lib/mobile/acceptance-timing";
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
 import { authConfig } from "@/auth.config";
@@ -10,6 +11,7 @@ import {requestBodyLimit} from "@/lib/request-body-policy";
 const { auth } = NextAuth(authConfig);
 
 export default auth(async (req) => {
+  const timing = acceptanceTiming(req); timing("proxy-entry");
   const { pathname } = req.nextUrl;
   const deployed = !localDevelopment(), requestId = newRequestId();
   const nativeApi = pathname.startsWith("/api/v1/mobile/");
@@ -52,6 +54,7 @@ export default auth(async (req) => {
   if(!nativeApi){response.headers.set("x-request-id",requestId);response.headers.set("Content-Security-Policy",csp);}
   if(pathname.startsWith("/api/")||isAccountRoute||isAdminRoute)response.headers.set("Cache-Control","private, no-store");
   if(deployed)response.headers.set("Strict-Transport-Security","max-age=31536000; includeSubDomains");
+  timing("proxy-forward");
   return response;
 });
 

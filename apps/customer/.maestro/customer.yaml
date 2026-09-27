@@ -316,7 +316,14 @@ env:
 - assertVisible: "Synthetic follow-up."
 - takeScreenshot: native-case
 - runFlow: back.yaml
+# Prove Case -> Support before issuing the next native Back action. A completed
+# driver tap alone did not prove this transition in the preserved iOS failure.
+- assertVisible: "Support"
 - runFlow: back.yaml
+- scrollUntilVisible:
+    element: "Your next drive starts here."
+    direction: UP
+- assertVisible: "Your next drive starts here."
 - runFlow: restart-cancellation.yaml
 - scrollUntilVisible:
     element: "Account & devices"

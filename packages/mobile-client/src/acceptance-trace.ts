@@ -3,7 +3,7 @@ import { operationMetadata } from './generated';
 // labels, user IDs, idempotency keys or arbitrary error strings as trace fields.
 const controls = new Set(['home-sign-in', 'email-fallback', 'case-refresh', 'case-reply', 'open-recovery', 'submit-incident', 'open-case', 'recover-replyCase', 'recover-sendMessage', 'recover-tripReturn', 'recover-tripCancel']);
 const screens = new Set(['App', 'Home', 'SignIn', 'EmailSignIn', 'Case', 'Recovery']);
-const phases = new Set(['ready', 'disabled', 'touch', 'press-in', 'press-out', 'press', 'navigation', 'mount', 'unmount', 'action', 'refresh', 'loading', 'loaded', 'error', 'request', 'response', 'transport-error', 'active', 'inactive', 'background']);
+const phases = new Set(['ready', 'disabled', 'touch', 'press-in', 'press-out', 'press', 'navigation', 'mount', 'unmount', 'action', 'refresh', 'loading', 'loaded', 'error', 'request', 'response', 'transport-error', 'deadline', 'active', 'inactive', 'background']);
 export function createAcceptanceTrace(enabled: boolean, deliver: typeof fetch) {
 let sequence = 0;
 function trace(phase: string, target: string | undefined, requestId?: string, status?: number) {

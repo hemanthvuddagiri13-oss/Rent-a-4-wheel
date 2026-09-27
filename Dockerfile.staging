@@ -1,0 +1,31 @@
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+RUN npm ci && npx prisma generate
+COPY . .
+# No database/provider/signing credentials or .env files enter the image.
+ARG NEXT_PUBLIC_SITE_URL=https://staging.compile.renta4wheel.com
+ARG NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+ENV STAGING_CONTAINER_BUILD=true NEXT_TELEMETRY_DISABLED=1
+RUN node scripts/staging-public-config.mjs && npm run build && node scripts/verify-release.mjs --client
+
+FROM build AS migration
+# Explicit operator invocation only, through the existing direct-DB guard.
+CMD ["node", "scripts/migrate.mjs", "deploy"]
+
+FROM node:24-bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ENV NODE_ENV=production APP_ENV=staging HOSTNAME=0.0.0.0 PORT=3000 NEXT_TELEMETRY_DISABLED=1 LIVE_FINANCE_ENABLED=false ALLOW_DEV_PAYMENT_SIMULATION=false
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+COPY --chown=node:node scripts/staging-container-entry.mjs ./staging-container-entry.mjs
+COPY --chown=node:node scripts/staging-public-config.mjs ./staging-public-config.mjs
+COPY --from=build --chown=node:node /app/staging-public-config.json ./staging-public-config.json
+USER node
+EXPOSE 3000
+CMD ["node", "staging-container-entry.mjs"]

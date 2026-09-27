@@ -56,21 +56,25 @@ async function auditAuthEvent(params: {
  *
  * The plaintext code is only ever returned when `NODE_ENV !== "production"`
  * AND email sending isn't configured, so local development can proceed
- * without a real inbox — this mirrors the existing dev-mode fallback used
+ * without a real inbox â€” this mirrors the existing dev-mode fallback used
  * elsewhere in the app (Stripe, storage) and is never available in
  * production regardless of configuration.
  */
-export async function requestAuthCode(params: { email: string; ip: string | null; purpose?: "MOBILE_SIGN_IN" | "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" | "FINANCE_STEP_UP" | "SECURITY_STEP_UP" }): Promise<RequestCodeResult> {
+export async function requestAuthCode(params: { email: string; ip: string | null; purpose?: "MOBILE_SIGN_IN" | "SIGN_IN" | "EMERGENCY_OVERRIDE_STEP_UP" | "FINANCE_STEP_UP" | "SECURITY_STEP_UP" }, timing: (stage: string) => void = () => {}): Promise<RequestCodeResult> {
   const email = normalizeEmail(params.email);
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
 
   const code = generateSixDigitCode();
+  timing("hash-start");
   const codeHash = await bcrypt.hash(code, BCRYPT_COST);
+  timing("hash-complete");
   const issued = await prisma.$transaction(async tx => {
+    timing("transaction-entry");
     // Stable ordering serializes both per-email and per-IP issuance limits.
     const scopes = ["auth-email:" + email, ...(params.ip ? ["auth-ip:" + params.ip] : [])].sort();
     for (const scope of scopes) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope},0))::text`;
+    timing("locks-acquired");
     const last = await tx.authCode.findFirst({ where: { email, purpose: params.purpose ?? "SIGN_IN" }, orderBy: { createdAt: "desc" } });
     if (last && now.getTime() - last.createdAt.getTime() < RESEND_COOLDOWN_SECONDS * 1000) return { ok: false as const, reason: "cooldown" as const, retryAfterSeconds: Math.ceil((RESEND_COOLDOWN_SECONDS * 1000 - (now.getTime() - last.createdAt.getTime())) / 1000) };
     const emailCount = await tx.authCode.count({ where: { email, purpose: params.purpose ?? "SIGN_IN", createdAt: { gt: hourAgo } } });
@@ -80,6 +84,7 @@ export async function requestAuthCode(params: { email: string; ip: string | null
     await tx.authCode.create({ data: { email, purpose: params.purpose ?? "SIGN_IN", codeHash, maxAttempts: MAX_VERIFY_ATTEMPTS, requestIp: params.ip, expiresAt: new Date(now.getTime() + CODE_TTL_MINUTES * 60000) } });
     return { ok: true as const };
   });
+  timing("transaction-complete");
   if (!issued.ok) return issued;
 
   const emailResult = await sendEmail({
@@ -88,6 +93,7 @@ export async function requestAuthCode(params: { email: string; ip: string | null
     html: signInCodeEmail({ code, expiresInMinutes: CODE_TTL_MINUTES }),
   });
 
+  timing("delivery-complete");
   await auditAuthEvent({ action: "auth.code_requested", email, metadata: { ip: params.ip, emailSent: emailResult.sent } });
 
   const isDev = localDevelopment();
@@ -96,7 +102,7 @@ export async function requestAuthCode(params: { email: string; ip: string | null
 
 /**
  * Verifies a submitted code against the most recent non-consumed AuthCode
- * for `email`. Single-use (marks `consumedAt` on success — a consumed code
+ * for `email`. Single-use (marks `consumedAt` on success â€” a consumed code
  * can never be replayed), expiring, and attempt-limited (locks out further
  * guesses against that code after MAX_VERIFY_ATTEMPTS wrong tries).
  */
