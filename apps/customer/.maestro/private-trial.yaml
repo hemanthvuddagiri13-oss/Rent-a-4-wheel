@@ -38,6 +38,10 @@ appId: com.renta4wheel.customer.acceptance
 - assertVisible: Reservation is not financially confirmed
 - assertNotVisible: Reservation confirmed by server
 - scrollUntilVisible:
+    element: Review payment in browser
+    direction: DOWN
+- takeScreenshot: native-browser-handoff
+- scrollUntilVisible:
     element: Private documents & signed terms
     direction: DOWN
 - tapOn: Private documents & signed terms
