@@ -30,6 +30,8 @@ export interface MobileOperations {
   "tripReturn": { input: { params: { "id": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
   "tripComplete": { input: { params: { "id": string }; body: Record<string, never>; idempotencyKey: string; fileAccess?: never; query?: never }; output: { "success": boolean } };
   "paymentStatus": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "status": string; "depositRequired": boolean; "outcome": string; "paidCents": number; "refundedCents": number; "pendingRefundCents": number; "refundStatus": string; "depositValid": boolean; "moneyAvailable": boolean; "financialEligible": boolean; "rentalPaymentStatus": string | null; "depositStatus": string | null } };
+  "webPayment": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "path": string; "authentication": "INDEPENDENT_WEB_SESSION"; "confirmsPayment": false; "provider": "TEST_CONFIGURED" | "UNAVAILABLE" } };
+  "signedAgreement": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "agreement": { "id": string; "documentVersion": string; "contentHash": string; "contentSnapshot": string; "signedAt": string; "pdfAvailable": boolean; "browserPath": string } | null } };
   "agreements": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "type": string; "documentVersion": string; "contentHash": string; "signedAt": string }> } };
   "trip": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "trip": { "startedAt": string | null; "endedAt": string | null; "startMileage": number | null; "endMileage": number | null; "startFuelLevel": number | null; "endFuelLevel": number | null } | null; "gate": { "canStart": boolean; "reasons": Array<string> } } };
   "reservationDocuments": { input: { params: { "id": string }; body?: never; idempotencyKey?: never; fileAccess?: never; query?: never }; output: { "items": Array<{ "id": string; "type": string; "status": string; "malwareScanStatus": string }> } };
@@ -240,6 +242,18 @@ export const operationMetadata = {
   },
   "paymentStatus": {
     "path": "/reservations/{id}/payment-status",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "webPayment": {
+    "path": "/reservations/{id}/web-payment",
+    "method": "GET",
+    "auth": true,
+    "binary": null
+  },
+  "signedAgreement": {
+    "path": "/reservations/{id}/signed-agreement",
     "method": "GET",
     "auth": true,
     "binary": null

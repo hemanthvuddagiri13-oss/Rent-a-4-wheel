@@ -188,6 +188,8 @@ jobs:
           mkdir -p artifacts
           trap 'xcrun simctl io "$DEVICE" screenshot artifacts/ios-final.png; xcrun simctl spawn "$DEVICE" log show --last 3m --predicate '\''process == "RentA4Wheel"'\'' --style compact > artifacts/ios-runtime.txt' EXIT
           python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:], check=True, timeout=1200)' "$MAESTRO_BIN" --device "$DEVICE" test apps/customer/.maestro/customer.yaml --test-output-dir "$PWD/artifacts/maestro" --format junit --output artifacts/ios-results.xml
+          python3 -c 'import subprocess,sys; subprocess.run(sys.argv[1:], check=True, timeout=720)' "$MAESTRO_BIN" --device "$DEVICE" test apps/customer/.maestro/customer-private-trial.yaml --test-output-dir "$PWD/artifacts/maestro-private-trial" --format junit --output artifacts/ios-private-trial-results.xml
+          node scripts/assert-private-trial-evidence.mjs
           npx tsx tests/helpers/customer-native-fixture.ts --assert
       - name: Sanitized API timing evidence
         if: always()

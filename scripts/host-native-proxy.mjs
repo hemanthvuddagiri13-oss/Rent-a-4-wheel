@@ -36,6 +36,15 @@ httpServer((req, res) => {
   const upstream = request({ hostname: '127.0.0.1', port: 3001, path: req.url, method: req.method, headers: { ...req.headers, host: 'localhost:3001' } }, response => {
     timing('upstream-headers', response.headers['x-request-id']);
     response.on('end', () => timing('upstream-end', response.headers['x-request-id']));
+    const trialRead = process.env.CUSTOMER_RECOVERY === 'true' && req.method === 'GET' && (/^\/api\/v1\/mobile\/files\/[^/]+$/.test(req.url) ? 'private-preview' : /^\/api\/v1\/mobile\/reservations\/[^/]+\/web-payment$/.test(req.url) ? 'browser-handoff' : null);
+    if (trialRead && response.statusCode === 200 && !dropped.has(trialRead)) {
+      dropped.add(trialRead); response.resume(); response.on('end', () => {
+        const requestId = response.headers['x-request-id'];
+        console.log(JSON.stringify({ event: 'synthetic.read_interrupted', kind: trialRead, timestamp: new Date().toISOString(), requestId }));
+        res.writeHead(503, { 'x-request-id': requestId, 'x-api-version': '1', 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ data: null, error: { code: 'UNAVAILABLE' }, requestId }));
+      }); return;
+    }
     const kind = req.method === 'POST' && /\/cases\/[^/]+\/reply$/.test(req.url) ? 'reply' : req.method === 'POST' && /\/uploads\/[^/]+\/finalize$/.test(req.url) ? 'upload' : req.method === 'POST' && /\/conversations\/[^/]+\/messages$/.test(req.url) ? 'message' : req.method === 'POST' && /\/reservations\/[^/]+\/return$/.test(req.url) ? 'return' : req.method === 'POST' && /\/reservations\/[^/]+\/cancel$/.test(req.url) ? 'cancel' : null;
     if (kind && (process.env.CUSTOMER_RECOVERY !== 'true' || kind === 'message' || kind === 'cancel' || kind === 'upload') && response.statusCode === 200 && !dropped.has(kind)) {
       dropped.add(kind); response.resume(); response.on('end', () => {

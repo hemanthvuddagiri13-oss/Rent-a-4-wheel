@@ -1,0 +1,77 @@
+appId: com.renta4wheel.customer.acceptance
+---
+- scrollUntilVisible:
+    element: Review payment in browser
+    direction: DOWN
+    centerElement: true
+- tapOn:
+    id: browser-payment
+# The synthetic proxy fails the first completed read. No payment mutation occurs.
+- assertVisible: 'This service is currently unavailable. Your booking is not confirmed.*'
+- tapOn:
+    id: browser-payment
+# Independent browser sign-in must be required; no native credential is exchanged.
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - runFlow:
+          when:
+            visible: 'Use without an account'
+          commands:
+            - tapOn: 'Use without an account'
+      - runFlow:
+          when:
+            visible: 'No thanks'
+          commands:
+            - tapOn: 'No thanks'
+- extendedWaitUntil:
+    visible: 'Sign In'
+    timeout: 20000
+- assertNotVisible: 'NATIVE-SYNTHETIC-TRIP'
+- launchApp
+- assertVisible:
+    id: reservation-loaded
+- scrollUntilVisible:
+    element: Reservation is not financially confirmed
+    direction: UP
+- assertVisible: Reservation is not financially confirmed
+- assertNotVisible: Reservation confirmed by server
+- scrollUntilVisible:
+    element: Private documents & signed terms
+    direction: DOWN
+- tapOn: Private documents & signed terms
+- scrollUntilVisible:
+    element: View private license front
+    direction: DOWN
+- tapOn: View private license front
+- assertVisible: 'This service is currently unavailable. Your booking is not confirmed.*'
+- assertNotVisible: Close private preview
+- tapOn: View private license front
+- assertVisible: Close private preview
+- tapOn: Close private preview
+- scrollUntilVisible:
+    element: Synthetic frozen trial terms. No real rental agreement.
+    direction: DOWN
+- assertVisible: Synthetic frozen trial terms. No real rental agreement.
+# Private evidence screens intentionally have no screenshot commands.
+- stopApp
+- launchApp
+- tapOn: Your trips
+- tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- assertVisible:
+    id: reservation-loaded
+- scrollUntilVisible:
+    element: Private documents & signed terms
+    direction: DOWN
+- tapOn: Private documents & signed terms
+- assertNotVisible: Close private preview
+- scrollUntilVisible:
+    element: View private license front
+    direction: DOWN
+- tapOn: View private license front
+- assertVisible: Close private preview
+- tapOn: Close private preview
+- runFlow: back.yaml
+- assertVisible:
+    id: reservation-loaded

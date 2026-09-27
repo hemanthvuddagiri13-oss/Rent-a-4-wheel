@@ -12,4 +12,6 @@ adb push /tmp/customer-native-fixtures/condition.png /sdcard/Download/condition.
 adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Download/condition.png
 "$HOME/.maestro/bin/maestro" test apps/customer/.maestro/customer.yaml --test-output-dir "$PWD/artifacts/maestro" --format junit --output artifacts/android-results.xml
 
+"$HOME/.maestro/bin/maestro" test apps/customer/.maestro/customer-private-trial.yaml --test-output-dir "$PWD/artifacts/maestro-private-trial" --format junit --output artifacts/android-private-trial-results.xml
+node scripts/assert-private-trial-evidence.mjs
 npx tsx tests/helpers/customer-native-fixture.ts --assert
