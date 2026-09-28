@@ -9,6 +9,10 @@ if (process.env.CI !== 'true' || !new URL(process.env.DATABASE_URL!).pathname.en
 async function main() {
 if (process.argv.includes('--assert')) {
   const customer = await db.user.findUniqueOrThrow({ where: { email: 'native-customer@example.test' } });
+  const cases = await db.serviceCase.findMany({ where: { title: 'Synthetic native support request' }, include: { events: true } });
+  if (cases.length !== 1 || cases[0].openedById !== customer.id || cases[0].kind !== 'TICKET' || cases[0].category !== 'GENERAL' || cases[0].reservationId !== null || cases[0].vehicleId !== null) throw new Error('Expected one correctly scoped standalone customer support case');
+  const replies = await db.serviceCaseEvent.findMany({ where: { body: 'Synthetic follow-up.' } });
+  if (replies.length !== 1 || replies[0].caseId !== cases[0].id || replies[0].actorId !== customer.id || replies[0].action !== 'CUSTOMER_REPLY' || cases[0].events.length !== 2) throw new Error('Expected one correctly authored customer reply and no duplicate case events');
   const messages = await db.conversationMessage.findMany({ where: { body: 'Synthetic native acceptance message' } });
   if (messages.length !== 1 || messages[0].senderId !== customer.id) throw new Error('Restart recovery must commit one correctly authored message');
   const reservation = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'NATIVE-SYNTHETIC-TRIP' } });
@@ -23,7 +27,7 @@ if (process.argv.includes('--assert')) {
   if (signed.length !== 1 || signed[0].contentSnapshot !== 'Synthetic frozen trial terms. No real rental agreement.') throw new Error('Private trial must preserve one frozen agreement');
   const document = await db.driverDocument.findFirstOrThrow({ where: { userId: customer.id, type: 'LICENSE_FRONT' } });
   if (await db.documentAccessLog.count({ where: { documentId: document.id, purpose: 'mobile_identity_preview' } }) < 3) throw new Error('Expected interrupted, corrected and restarted authorized private reads');
-  console.log('Customer restart recovery: one message, one rejection receipt, zero provider operations and payouts.');
+  console.log('Customer restart recovery: one scoped support case/reply, one message, one rejection receipt, zero provider operations and payouts.');
   await db.$disconnect(); return;
 }
 await fixtureJurisdiction(db);
