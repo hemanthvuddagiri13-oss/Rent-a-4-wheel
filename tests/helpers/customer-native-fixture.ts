@@ -7,8 +7,33 @@ import { fixtureJurisdiction } from './jurisdiction-fixture';
 const db = new PrismaClient();
 if (process.env.CI !== 'true' || !new URL(process.env.DATABASE_URL!).pathname.endsWith('_test')) throw new Error('Disposable CI database only');
 async function main() {
+if (process.argv.includes('--auth-evidence')) {
+  const now = Date.now();
+  const codes = await db.authCode.findMany({ where: { email: 'native-customer@example.test', purpose: 'MOBILE_SIGN_IN' }, select: { createdAt: true, expiresAt: true, consumedAt: true, attempts: true } });
+  const audit = await db.auditLog.findFirst({ where: { entityType: 'AuthCode', entityId: 'native-customer@example.test', action: { in: ['auth.code_verify_failed', 'auth.code_verify_succeeded'] } }, orderBy: { createdAt: 'desc' }, select: { action: true, metadata: true } });
+  const reason = (audit?.metadata as { reason?: string } | null)?.reason;
+  const evidence = { event: 'synthetic.email_verification', timestamp: new Date(now).toISOString(), codeCount: codes.length, codes: codes.map(c => ({ ageMs: now - c.createdAt.getTime(), expired: c.expiresAt.getTime() <= now, consumed: Boolean(c.consumedAt), attempts: c.attempts })), verification: audit?.action === 'auth.code_verify_succeeded' ? 'succeeded' : ['no_code', 'expired', 'locked', 'mismatch'].includes(reason ?? '') ? reason : null };
+  await mkdir('artifacts', { recursive: true });
+  await writeFile('artifacts/customer-email-fixture.json', JSON.stringify(evidence, null, 2));
+  console.log(JSON.stringify(evidence));
+  await db.$disconnect(); return;
+}
+if (process.argv.includes('--prepare-email-code')) {
+  const user = await db.user.findUniqueOrThrow({ where: { email: 'native-customer@example.test' } });
+  // Code-verification fixture, NOT issuance/delivery coverage. Prepare only
+  // after device install/media setup; never extend an already-issued code.
+  const now = Date.now();
+  await db.$transaction(async tx => {
+    if (await tx.authCode.count({ where: { email: user.email, purpose: 'MOBILE_SIGN_IN' } })) throw new Error('Email fixture must be prepared exactly once');
+    for (let i = 0; i < 5; i++) await tx.authCode.create({ data: { email: user.email, purpose: 'MOBILE_SIGN_IN', codeHash: await bcrypt.hash('123456', 4), createdAt: new Date(now - (5 - i) * 1000), expiresAt: new Date(now + 600000), consumedAt: i < 4 ? new Date(now) : null } });
+  });
+  console.log(JSON.stringify({ event: 'synthetic.email_fixture_prepared', timestamp: new Date(now).toISOString(), ttlMs: 600000 }));
+  await db.$disconnect(); return;
+}
 if (process.argv.includes('--assert')) {
   const customer = await db.user.findUniqueOrThrow({ where: { email: 'native-customer@example.test' } });
+  const codes = await db.authCode.findMany({ where: { email: customer.email, purpose: 'MOBILE_SIGN_IN' } });
+  if (codes.length !== 5 || codes.some(c => !c.consumedAt) || codes.filter(c => c.attempts === 1).length !== 1 || codes.some(c => c.consumedAt! > c.expiresAt)) throw new Error('Expected one normal-lifetime fixture verification; no reissuance or expiry extension');
   const cases = await db.serviceCase.findMany({ where: { title: 'Synthetic native support request' }, include: { events: true } });
   if (cases.length !== 1 || cases[0].openedById !== customer.id || cases[0].kind !== 'TICKET' || cases[0].category !== 'GENERAL' || cases[0].reservationId !== null || cases[0].vehicleId !== null) throw new Error('Expected one correctly scoped standalone customer support case');
   const replies = await db.serviceCaseEvent.findMany({ where: { body: 'Synthetic follow-up.' } });
@@ -35,11 +60,9 @@ await mkdir('/tmp/customer-native-fixtures', { recursive: true });
 await writeFile('/tmp/customer-native-fixtures/condition.png', await sharp({ create: { width: 600, height: 400, channels: 3, background: '#243c54' } }).png().toBuffer());
 const user = await db.user.create({ data: { email: 'native-customer@example.test', emailVerified: new Date(), name: 'Synthetic customer', role: 'CUSTOMER' } });
 await db.mobilePhoneIdentity.create({ data: { userId: user.id, phone: '+12025550101' } });
-// Code-verification fixture, NOT email issuance/delivery coverage. Four consumed
-// rows plus one usable code trigger the request endpoint's generic rate-limit
-// response. The app consumes this pre-seeded code through real bcrypt/session
-// routes; it does not capture or consume a newly delivered email code.
-for (let i = 0; i < 5; i++) await db.authCode.create({ data: { email: user.email, purpose: 'MOBILE_SIGN_IN', codeHash: await bcrypt.hash('123456', 4), createdAt: new Date(Date.now() - (5 - i) * 1000), expiresAt: new Date(Date.now() + 600000), consumedAt: i < 4 ? new Date() : null } });
+// The separate --prepare-email-code step creates four consumed rows and one
+// usable code immediately before the journey. The generic request response is
+// rate-limited; real bcrypt/session routes consume the fixture, not a new email.
 const hostUser = await db.user.create({ data: { email: 'native-host@example.test', role: 'HOST' } });
 const host = await db.hostProfile.create({ data: { userId: hostUser.id, legalName: 'Synthetic acceptance host', onboardingStatus: 'APPROVED', jurisdictionCode: 'TX' } });
 const vehicle = await db.vehicle.create({ data: { slug: 'synthetic-native-car', vin: 'SYNTHETIC-NATIVE-ONLY', licensePlate: 'TESTONLY', make: 'Synthetic', model: 'Acceptance Car', year: 2025, category: 'SEDAN', hostId: host.id, jurisdictionCode: 'TX', dailyRateCents: 10000, weeklyRateCents: 50000, monthlyRateCents: 100000, listingApproval: 'APPROVED' } });
