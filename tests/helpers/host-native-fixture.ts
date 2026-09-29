@@ -37,6 +37,9 @@ async function main() {
     if (completed.status !== 'COMPLETED') throw new Error('Return journey did not complete');
     if (await db.mobileMutation.count({ where: { operation: 'reservation.return' } }) !== 1) throw new Error('Interrupted return must use one durable receipt');
     const owner = await db.user.findUniqueOrThrow({ where: { email: 'host-owner@example.test' } });
+    const calendarReceipts = await db.mobileMutation.findMany({ where: { userId: owner.id, operation: 'host.availability' } });
+    if (calendarReceipts.length !== 2 || calendarReceipts.some(receipt => JSON.stringify(receipt.result) !== JSON.stringify({ success: true }))) throw new Error('Calendar block and removal must commit exactly two successful receipts');
+    if (await db.vehicleBlock.count({ where: { vehicle: { slug: 'host-synthetic-car' } } })) throw new Error('Calendar block removal must complete before leaving the listing');
     const uploads = await db.mobileUpload.findMany({ where: { userId: owner.id } });
     if (uploads.length !== 4 || uploads.some(upload => !upload.finalizedAt) || uploads.filter(upload => upload.reservationId === completed.id).length !== 2) throw new Error('Restarted uploads must finalize exactly four original host intents, two per report');
     const ready = await db.reservation.findUniqueOrThrow({ where: { confirmationNumber: 'HOST-READY' } });
