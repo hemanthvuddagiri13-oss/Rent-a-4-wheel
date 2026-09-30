@@ -135,6 +135,11 @@ env:
     commands:
       - tapOn: "Done editing"
 - tapOn: "Send text code"
+# Await the accepted-response state before scrolling through the newly inserted
+# code form. A request error must fail here; never issue another OTP request.
+- extendedWaitUntil:
+    visible: "Resend available in .*s"
+    timeout: 20000
 - scrollUntilVisible:
     element:
       id: "input-Six-digit text code"
@@ -184,6 +189,12 @@ env:
 - assertVisible: "Available at last check. A hold is required to reserve these dates."
 - takeScreenshot: native-availability
 - tapOn: "Hold dates & review price"
+# Navigation and all initial reservation queries must settle before scrolling.
+# Otherwise the driver swipes the listing/loading screen while price loads.
+- extendedWaitUntil:
+    visible:
+      id: "reservation-loaded"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Server price breakdown"
     direction: DOWN
@@ -309,6 +320,13 @@ env:
     element: "Send case reply"
     direction: DOWN
 - tapOn: "Send case reply"
+# A mutation authenticates /me, submits once, then reads the authoritative case.
+# The preserved iOS trace completed those requests in 21.5s; the default text
+# assertion expired before the mutation response. Use the same 60s readback
+# bound as case opening above, without changing any 20s HTTP deadline or retry.
+- extendedWaitUntil:
+    visible: "CUSTOMER_REPLY.*"
+    timeout: 60000
 - assertVisible: "CUSTOMER_REPLY.*"
 - scrollUntilVisible:
     element: "Synthetic follow-up."

@@ -21,15 +21,41 @@ appId: com.renta4wheel.host.acceptance
 - waitForAnimationToEnd
 - assertVisible: "Synthetic Host Car"
 - takeScreenshot: host-listing
+# The default block starts 24h from now. On the last day of a month, select
+# that month before expecting its block in the deliberately month-filtered list.
+- runFlow:
+    when:
+      true: ${new Date(Date.now() + 86400000).getMonth() !== new Date().getMonth()}
+    commands:
+      - scrollUntilVisible:
+          element: "Next month"
+          direction: DOWN
+      - tapOn: "Next month"
 - scrollUntilVisible:
     element: "Save calendar block"
     direction: DOWN
 - tapOn: "Save calendar block"
+# Do not scroll to the top while save/readback is still running: the new block
+# is inserted above this form. This only synchronizes the search; the enabled
+# Remove control below and PostgreSQL receipt checks prove the operation.
+- extendedWaitUntil:
+    notVisible:
+      text: "Save calendar block"
+      enabled: false
+    timeout: 20000
 - scrollUntilVisible:
     element: "Remove calendar block"
     direction: UP
+    # Keep the tap center clear of the fixed native navigation header.
+    centerElement: true
+- assertVisible:
+    text: "Remove calendar block"
+    enabled: true
 - takeScreenshot: host-calendar
 - tapOn: "Remove calendar block"
+- extendedWaitUntil:
+    notVisible: "Remove calendar block"
+    timeout: 20000
 - runFlow: back.yaml
 - runFlow: back.yaml
 - tapOn: "Reservations & handoffs"

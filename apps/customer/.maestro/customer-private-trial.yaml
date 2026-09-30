@@ -1,0 +1,100 @@
+appId: com.renta4wheel.customer.acceptance
+env:
+  PHONE: "+12025550101"
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Your next drive starts here."
+- scrollUntilVisible:
+    element:
+      id: home-sign-in
+    direction: UP
+    centerElement: true
+- tapOn:
+    id: home-sign-in
+- assertVisible:
+    id: phone-sign-in-screen
+- scrollUntilVisible:
+    element:
+      id: "input-Mobile phone number"
+    direction: UP
+- tapOn:
+    id: "input-Mobile phone number"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - inputText: "${PHONE}"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Synchronize every character with the native field. Maestro's burst
+      # injection can drop everything after its first character on iOS.
+      - evalScript: ${output.phoneIndex = 0}
+      - repeat:
+          times: ${PHONE.length}
+          commands:
+            # XCTest may lose first-responder focus between injections. Restore
+            # it explicitly; keep the exact prefix assertion after every digit.
+            - tapOn:
+                id: "input-Mobile phone number"
+            - inputText: ${PHONE.charAt(output.phoneIndex)}
+            - evalScript: ${output.phoneIndex = output.phoneIndex + 1}
+            - assertVisible:
+                id: "input-Mobile phone number"
+                text: "[+]${PHONE.slice(1, output.phoneIndex)}"
+- assertVisible:
+    id: "input-Mobile phone number"
+    text: "[+]${PHONE.slice(1)}"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
+- tapOn: "Send text code"
+# Synchronize with the existing response state, not a retry or a longer request.
+- extendedWaitUntil:
+    visible: "Resend available in .*s"
+    timeout: 20000
+- scrollUntilVisible:
+    element:
+      id: "input-Six-digit text code"
+    direction: DOWN
+- tapOn:
+    id: "input-Six-digit text code"
+- inputText: "123456"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - hideKeyboard
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Done editing"
+- scrollUntilVisible:
+    element: "Verify phone & continue"
+    direction: DOWN
+- tapOn: "Verify phone & continue"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      # Measured CI cold Keychain write: 49s, before the HTTP request.
+      # Await actual completion; retain the assertion and the app's HTTP bound.
+      - extendedWaitUntil:
+          visible: "Your next drive starts here."
+          timeout: 75000
+- assertVisible: "Your next drive starts here."
+- tapOn: Your trips
+- tapOn: View trip NATIVE-SYNTHETIC-TRIP
+- assertVisible:
+    id: reservation-loaded
+- runFlow: private-trial.yaml

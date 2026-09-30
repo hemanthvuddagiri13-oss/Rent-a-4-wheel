@@ -13,6 +13,7 @@ import { Home, Vehicle } from './screens/discovery';
 import { SignIn, EmailSignIn, Account } from './screens/account';
 import { LoginMethods } from './screens/login-methods';
 import { Reservation, Reservations } from './screens/reservations';
+import { Documents } from './screens/documents';
 import { Checkout } from './screens/checkout';
 import { Inspection } from './screens/inspection';
 import { Inbox, Messages, Notices, Cases, Case, Review } from './screens/community';
@@ -40,6 +41,7 @@ export default function App() {
     <Stack.Screen name="EmailSignIn" component={EmailSignIn} options={{ title: 'Email fallback' }} /><Stack.Screen name="LoginMethods" component={signedIn ? LoginMethods : SignIn} options={{ title: 'Login & recovery' }} />
     <Stack.Screen name="Reservations" component={signedIn ? Reservations : SignIn} options={{ title: 'Your trips' }} />
     <Stack.Screen name="Reservation" component={signedIn ? Reservation : SignIn} options={{ title: 'Trip details' }} />
+    <Stack.Screen name="Documents" component={signedIn ? Documents : SignIn} options={{ title: 'Private documents' }} />
     <Stack.Screen name="Checkout" component={signedIn ? Checkout : SignIn} options={{ title: 'Checkout preparation' }} />
     <Stack.Screen name="Inspection" component={signedIn ? Inspection : SignIn} options={{ title: 'Condition report' }} />
     <Stack.Screen name="Inbox" component={signedIn ? Inbox : SignIn} options={{ title: 'Messages' }} /><Stack.Screen name="Messages" component={signedIn ? Messages : SignIn} options={{ title: 'Conversation' }} />

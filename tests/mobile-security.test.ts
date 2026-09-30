@@ -30,6 +30,8 @@ import { mobileMutation } from "@/lib/mobile/mutation";
 import { messageCommand, conversationAccess } from "@/lib/conversations";
 import { createOrRefreshHold } from "@/lib/checkout-hold";
 import { verifyLoginChallenge } from "@/lib/mobile/login-identity";
+import { GET as webAgreement } from "@/app/api/reservations/[id]/agreement/route";
+import { POST as webPayment } from "@/app/api/reservations/[id]/payment-intent/route";
 import { GET as webIdentity } from "@/app/api/documents/[id]/route";
 import { GET as webBusiness } from "@/app/api/marketplace/files/[id]/route";
 import { GET as webCollaboration } from "@/app/api/community/files/[id]/route";
@@ -52,8 +54,8 @@ beforeAll(async () => {
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const request = new Request(base + req.url, { method: req.method, headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v.join(",") : v ?? ""])), ...(req.method === "POST" ? { body: Buffer.concat(chunks) } : {}) });
       const parts = new URL(request.url).pathname.replace("/api/v1/mobile/", "").split("/");
-      const web = new URL(request.url).pathname.match(/^\/web\/(identity|business|collaboration)\/(.+)$/);
-      const result = web ? await ({ identity: webIdentity, business: webBusiness, collaboration: webCollaboration }[web[1] as 'identity'])(request as NextRequest, { params: Promise.resolve({ id: web[2] }) }) : parts[0] === "auth" ? await (req.method === "POST" ? authPost : authGet)(request, { params: Promise.resolve({ action: parts[1] }) }) : await (req.method === "POST" ? apiPost : apiGet)(request, { params: Promise.resolve({ path: parts }) });
+      const web = new URL(request.url).pathname.match(/^\/web\/(identity|business|collaboration|agreement|payment)\/(.+)$/);
+      const result = web ? await ({ identity: webIdentity, business: webBusiness, collaboration: webCollaboration, agreement: webAgreement, payment: webPayment }[web[1] as 'identity'])(request as NextRequest, { params: Promise.resolve({ id: web[2] }) }) : parts[0] === "auth" ? await (req.method === "POST" ? authPost : authGet)(request, { params: Promise.resolve({ action: parts[1] }) }) : await (req.method === "POST" ? apiPost : apiGet)(request, { params: Promise.resolve({ path: parts }) });
       res.writeHead(result.status, Object.fromEntries(result.headers)); res.end(Buffer.from(await result.arrayBuffer()));
     } catch { res.writeHead(500); res.end(); }
   });
@@ -1457,4 +1459,87 @@ it.each(['identity', 'business', 'conversation', 'case'] as const)('web %s downl
     }
   } finally { await Promise.all([observer.$disconnect(), writer.$disconnect()]); }
   expect(await prisma.financialOperation.count()).toBe(0);
+});
+
+// Private trial: ordinary browser locations confer no authentication or finance authority.
+async function trialAgreement(f: Awaited<ReturnType<typeof tenantFixture>>, storageKey = 's3:trial-agreement.pdf') {
+  const contentSnapshot = 'Synthetic immutable signed rental terms. No real identity evidence.';
+  return prisma.agreementAcceptance.create({ data: { reservationId: f.reservation.id, signedByUserId: f.user.id, signerName: 'Synthetic customer', type: 'RENTAL_AGREEMENT', documentVersion: 'trial-frozen-v1', contentSnapshot, contentHash: createHash('sha256').update(contentSnapshot).digest('hex'), signedPdfStorageKey: storageKey } });
+}
+it('HTTP browser handoff is owner-only, repeatable and never creates credentials, cookies or provider work', async () => {
+  const f = await tenantFixture(), path = `reservations/${f.reservation.id}/web-payment`;
+  const before = { sessions: await prisma.session.count(), native: await prisma.mobileSession.count(), payments: await prisma.payment.count(), operations: await prisma.financialOperation.count(), receipts: await prisma.mobileMutation.count() };
+  for (let n = 0; n < 3; n++) {
+    const r = await get(path, f.customer.accessToken); expect(r.status).toBe(200); expect(r.headers.get('set-cookie')).toBeNull();
+    const data = (await r.json()).data;
+    expect(data).toMatchObject({ path: `/account/reservations/${f.reservation.id}`, authentication: 'INDEPENDENT_WEB_SESSION', confirmsPayment: false });
+    expect(JSON.stringify(data)).not.toMatch(/ma_|mr_|client_secret|cookie|token=/);
+  }
+  for (const c of [f.other, f.owner, f.employee]) expect((await get(path, c.accessToken)).status).toBe(404);
+  fixture.webUser = null;
+  expect((await fetch(base + '/web/payment/' + f.reservation.id, { method: 'POST', headers: { authorization: 'Bearer ' + f.customer.accessToken } })).status).toBe(401);
+  fixture.webUser = { id: (await prisma.user.findUniqueOrThrow({ where: { email: f.other.email } })).id, role: 'CUSTOMER' };
+  expect((await fetch(base + '/web/payment/' + f.reservation.id, { method: 'POST' })).status).toBe(403);
+  fixture.webUser = { id: f.user.id, role: 'CUSTOMER' };
+  expect((await fetch(base + '/web/payment/' + f.reservation.id, { method: 'POST' })).status).toBe(409); // Confirmed fixture is not awaiting payment.
+  await prisma.mobileSession.update({ where: { id: f.customer.sessionId }, data: { revokedAt: new Date() } });
+  expect((await get(path, f.customer.accessToken)).status).toBe(401);
+  expect({ sessions: await prisma.session.count(), native: await prisma.mobileSession.count(), payments: await prisma.payment.count(), operations: await prisma.financialOperation.count(), receipts: await prisma.mobileMutation.count() }).toEqual(before);
+  expect((await prisma.reservation.findUniqueOrThrow({ where: { id: f.reservation.id } })).status).toBe('CONFIRMED');
+});
+it('HTTP signed terms use the frozen acceptance after an interrupted read/replay and deny other recipients', async () => {
+  const f = await tenantFixture(), a = await trialAgreement(f), path = `reservations/${f.reservation.id}/signed-agreement`;
+  const first = await get(path, f.customer.accessToken); expect(first.status).toBe(200); await first.arrayBuffer(); // Simulated lost client consumption; no mutation retry.
+  await prisma.legalDocument.upsert({ where: { type: 'RENTAL_AGREEMENT' }, create: { type: 'RENTAL_AGREEMENT', title: 'Future draft', version: 'future', content: 'Different draft' }, update: { content: 'Different draft', version: 'future' } });
+  const second = await get(path, f.customer.accessToken); expect(second.status).toBe(200);
+  expect((await second.json()).data.agreement).toEqual({ id: a.id, documentVersion: a.documentVersion, contentSnapshot: a.contentSnapshot, contentHash: a.contentHash, signedAt: a.signedAt.toISOString(), pdfAvailable: true, browserPath: `/account/reservations/${f.reservation.id}#signed-agreement` });
+  for (const c of [f.other, f.owner, f.employee]) expect((await get(path, c.accessToken)).status).toBe(404);
+  await prisma.mobileSession.update({ where: { id: f.customer.sessionId }, data: { revokedAt: new Date() } });
+  expect((await get(path, f.customer.accessToken)).status).toBe(401);
+  expect(await prisma.agreementAcceptance.count()).toBe(1); expect(await prisma.financialOperation.count()).toBe(0); expect(fixture.storageRead).not.toHaveBeenCalled();
+});
+it.each(['revoke', 'expire', 'rotate', 'quarantine', 'delete', 'legacy-quarantine'] as const)('HTTP signed PDF denies bytes after independent %s during provider I/O', async change => {
+  const f = await tenantFixture(), bytes = Buffer.from('%PDF-1.7 SYNTHETIC_PRIVATE_TRIAL_SENTINEL'), hash = createHash('sha256').update(bytes).digest('hex');
+  const key = 's3:trial-effective.pdf', sourceKey = change === 'legacy-quarantine' ? 's3:trial-legacy.pdf' : key;
+  const a = await trialAgreement(f, sourceKey);
+  await prisma.privateObject.create({ data: { key, sha256: hash, size: bytes.length, mimeType: 'application/pdf', state: 'CLEAN', writeState: 'STORED' } });
+  if (sourceKey !== key) {
+    await prisma.privateObject.create({ data: { key: sourceKey, sha256: 'a'.repeat(64), size: 3, mimeType: 'application/pdf', state: 'QUARANTINED', writeState: 'STORED' } });
+    await prisma.operationsJob.create({ data: { key: 'legacy:trial-pdf', kind: 'LEGACY_IMPORT', resourceId: sourceKey, state: 'DONE' } });
+    await prisma.privateValidation.create({ data: { sourceKey, targetKey: key, resourceType: 'AGREEMENT', resourceId: a.id, sourceSha256: 'a'.repeat(64), targetSha256: hash, mimeType: 'application/pdf', bytes, evidence: {} } });
+  }
+  const browser = await prisma.session.create({ data: { userId: f.user.id, sessionToken: crypto.randomUUID(), expires: new Date(Date.now() + 600000), lastSeenAt: new Date() } });
+  fixture.webUser = { id: f.user.id, role: 'CUSTOMER' }; fixture.webSession = { sessionId: browser.id, credentialVersion: browser.rotation };
+  const real = await vi.importActual<typeof import('@/lib/storage')>('@/lib/storage'); fixture.storageRead.mockImplementation(real.readPrivateDocument); fixture.providerRead.mockResolvedValue(bytes);
+  const read = () => fetch(base + '/web/agreement/' + f.reservation.id);
+  const control = await read(); expect(control.status).toBe(200); expect(control.headers.get('content-type')).toBe('application/pdf'); expect(control.headers.get('cache-control')).toBe('private, no-store'); expect(Buffer.from(await control.arrayBuffer())).toEqual(bytes);
+  const [observer, writer] = await independentClients(), entered = deferred<void>(), release = deferred<void>();
+  fixture.providerRead.mockReset().mockImplementation(async () => { entered.resolve(); await release.promise; return bytes; });
+  const pending = read();
+  try {
+    await entered.promise;
+    if (change === 'revoke') await writer.session.update({ where: { id: browser.id }, data: { revokedAt: new Date() } });
+    else if (change === 'expire') await writer.session.update({ where: { id: browser.id }, data: { expires: new Date(Date.now() - 1) } });
+    else if (change === 'rotate') await writer.session.update({ where: { id: browser.id }, data: { rotation: { increment: 1 } } });
+    else await writer.privateObject.update({ where: { key }, data: change === 'delete' ? { state: 'DELETING', deletedAt: new Date() } : { state: 'QUARANTINED' } });
+    expect(await observer.user.findUnique({ where: { id: f.user.id } })).toMatchObject({ isActive: true });
+    expect(await observer.reservation.findUnique({ where: { id: f.reservation.id } })).toMatchObject({ customerId: f.user.id });
+  } finally { release.resolve(); await observer.$disconnect(); await writer.$disconnect(); }
+  const response = await pending; expect(response.status).toBe(404); expect(await response.text()).not.toContain('SYNTHETIC_PRIVATE_TRIAL_SENTINEL'); expect(fixture.providerRead).toHaveBeenCalledTimes(1);
+  expect(await prisma.agreementAcceptance.count()).toBe(1); expect(await prisma.financialOperation.count()).toBe(0);
+});
+it('HTTP signed PDF recovers a failed provider read without recreating an agreement and requires an independent web session', async () => {
+  const f = await tenantFixture(); await trialAgreement(f);
+  const read = () => fetch(base + '/web/agreement/' + f.reservation.id, { headers: { authorization: 'Bearer ' + f.customer.accessToken } });
+  expect((await read()).status).toBe(401); expect(fixture.storageRead).not.toHaveBeenCalled();
+  for (const userId of [f.host.userId, f.membership.userId, (await prisma.user.findUniqueOrThrow({ where: { email: f.other.email } })).id]) {
+    const deniedSession = await prisma.session.create({ data: { userId, sessionToken: crypto.randomUUID(), expires: new Date(Date.now() + 600000) } });
+    fixture.webUser = { id: userId, role: 'CUSTOMER' }; fixture.webSession = { sessionId: deniedSession.id, credentialVersion: deniedSession.rotation };
+    expect((await read()).status).toBe(404); expect(fixture.storageRead).not.toHaveBeenCalled();
+  }
+  const browser = await prisma.session.create({ data: { userId: f.user.id, sessionToken: crypto.randomUUID(), expires: new Date(Date.now() + 600000), lastSeenAt: new Date() } });
+  fixture.webUser = { id: f.user.id, role: 'CUSTOMER' }; fixture.webSession = { sessionId: browser.id, credentialVersion: browser.rotation };
+  fixture.storageRead.mockRejectedValueOnce(new Error('provider unavailable')).mockResolvedValue({ buffer: Buffer.from('%PDF-1.7 synthetic recovery'), revalidate: async () => {} });
+  expect((await read()).status).toBe(404); expect((await read()).status).toBe(200); expect((await read()).status).toBe(200);
+  expect(fixture.storageRead).toHaveBeenCalledTimes(3); expect(await prisma.agreementAcceptance.count()).toBe(1); expect(await prisma.agreementArtifact.count()).toBe(0); expect(await prisma.financialOperation.count()).toBe(0);
 });

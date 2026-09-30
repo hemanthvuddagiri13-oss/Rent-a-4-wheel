@@ -57,6 +57,9 @@ export async function mobileQuery(req: Request, parts: string[]) {
     const { readReportPhoto } = await import("./report-photo");
     return readReportPhoto(req, actor.userId, id, parts[3], parts[5]);
   }
+  if (resource === "reservations" && parts.length === 3 && ["web-payment", "signed-agreement"].includes(action)) {
+    const { trialRead } = await import("./trial"); return trialRead(req, id, action);
+  }
   if (resource === "files" && id && parts.length === 2) {
     const { readMobileDocument } = await import("./files"); return readMobileDocument(req, id);
   }

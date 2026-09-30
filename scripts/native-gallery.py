@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import struct
 
-ALLOW = {'native-cancellation-recovered', 'native-home', 'native-availability', 'native-price', 'native-trips', 'native-payment-status', 'native-message', 'native-notices', 'native-case', 'host-welcome', 'host-dashboard', 'host-listing', 'host-calendar', 'host-reservations', 'host-pickup', 'host-message', 'host-blocked-keys', 'host-reply-interrupted', 'host-reply-recovered', 'host-return-complete', 'host-incident', 'host-earnings'}
+ALLOW = {'native-browser-handoff', 'native-cancellation-recovered', 'native-home', 'native-availability', 'native-price', 'native-trips', 'native-payment-status', 'native-message', 'native-notices', 'native-case', 'host-welcome', 'host-dashboard', 'host-listing', 'host-calendar', 'host-reservations', 'host-pickup', 'host-message', 'host-blocked-keys', 'host-reply-interrupted', 'host-reply-recovered', 'host-return-complete', 'host-incident', 'host-earnings'}
 
 def main():
     if os.environ.get('CI') != 'true' or os.environ.get('APP_ENV') != 'test':

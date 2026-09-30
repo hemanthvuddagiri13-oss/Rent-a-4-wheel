@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { browserOperation, browserTiming } from './native-browser-timing.mjs';
 // CI-only reverse proxy: real Next routes/PostgreSQL execute first; one committed
 // support reply and upload response bodies are truncated to exercise app recovery.
 import { createServer as httpServer, request } from 'node:http';
@@ -22,11 +23,16 @@ httpServer((req, res) => {
     }); return;
   }
   const correlationId = req.headers['x-native-timing-id'];
+  const operation = browserOperation(req.method, req.url), browserId = randomUUID();
+  const browserTrace = (stage, requestId, status) => { const row = browserTiming({ operation, stage, correlationId: browserId, timestamp: new Date().toISOString(), requestId, status }); if (row) console.log(JSON.stringify(row)); };
   const timed = req.method === 'POST' && req.url === '/api/v1/mobile/auth/request-code' && typeof correlationId === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(correlationId);
   const timing = (stage, requestId) => { if (timed) console.log(JSON.stringify({ event: 'native.timing', operation: 'requestCode', stage, correlationId, timestamp: new Date().toISOString(), ...(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId ?? '') ? { requestId } : {}) })); };
   timing('ingress-entry');
+  browserTrace('ingress-entry');
   res.on('finish', () => timing('response-finish'));
   res.on('close', () => timing(res.writableFinished ? 'response-close' : 'response-disconnected'));
+  res.on('finish', () => browserTrace('response-finish', undefined, res.statusCode));
+  res.on('close', () => browserTrace(res.writableFinished ? 'response-close' : 'response-disconnected', undefined, res.statusCode));
   const fault = existsSync('/tmp/host-incident-fault') ? readFileSync('/tmp/host-incident-fault', 'utf8').trim() : '';
   if (fault === 'submission' && req.method === 'POST' && req.url === '/api/v1/mobile/cases' || fault === 'readback' && req.method === 'GET' && /^\/api\/v1\/mobile\/cases\/[^/]+(?:\/events)?$/.test(req.url.split('?')[0])) {
     const requestId = randomUUID(); req.resume(); console.log(JSON.stringify({ event: 'synthetic.incident_rejected', kind: fault, timestamp: new Date().toISOString(), requestId }));
@@ -35,7 +41,18 @@ httpServer((req, res) => {
   }
   const upstream = request({ hostname: '127.0.0.1', port: 3001, path: req.url, method: req.method, headers: { ...req.headers, host: 'localhost:3001' } }, response => {
     timing('upstream-headers', response.headers['x-request-id']);
+    browserTrace('upstream-headers', response.headers['x-request-id'], response.statusCode);
+    response.on('end', () => browserTrace('upstream-end', response.headers['x-request-id'], response.statusCode));
     response.on('end', () => timing('upstream-end', response.headers['x-request-id']));
+    const trialRead = process.env.CUSTOMER_RECOVERY === 'true' && req.method === 'GET' && (/^\/api\/v1\/mobile\/files\/[^/]+$/.test(req.url) ? 'private-preview' : /^\/api\/v1\/mobile\/reservations\/[^/]+\/web-payment$/.test(req.url) ? 'browser-handoff' : null);
+    if (trialRead && response.statusCode === 200 && !dropped.has(trialRead)) {
+      dropped.add(trialRead); response.resume(); response.on('end', () => {
+        const requestId = response.headers['x-request-id'];
+        console.log(JSON.stringify({ event: 'synthetic.read_interrupted', kind: trialRead, timestamp: new Date().toISOString(), requestId }));
+        res.writeHead(503, { 'x-request-id': requestId, 'x-api-version': '1', 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ data: null, error: { code: 'UNAVAILABLE' }, requestId }));
+      }); return;
+    }
     const kind = req.method === 'POST' && /\/cases\/[^/]+\/reply$/.test(req.url) ? 'reply' : req.method === 'POST' && /\/uploads\/[^/]+\/finalize$/.test(req.url) ? 'upload' : req.method === 'POST' && /\/conversations\/[^/]+\/messages$/.test(req.url) ? 'message' : req.method === 'POST' && /\/reservations\/[^/]+\/return$/.test(req.url) ? 'return' : req.method === 'POST' && /\/reservations\/[^/]+\/cancel$/.test(req.url) ? 'cancel' : null;
     if (kind && (process.env.CUSTOMER_RECOVERY !== 'true' || kind === 'message' || kind === 'cancel' || kind === 'upload') && response.statusCode === 200 && !dropped.has(kind)) {
       dropped.add(kind); response.resume(); response.on('end', () => {
@@ -51,7 +68,8 @@ httpServer((req, res) => {
     res.writeHead(response.statusCode, response.headers); response.pipe(res);
   });
   timing('upstream-dispatch');
-  upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); }); req.pipe(upstream);
+  browserTrace('upstream-dispatch');
+  upstream.on('error', () => { browserTrace('upstream-error'); if (!res.headersSent) res.writeHead(502); res.end(); }); req.pipe(upstream);
 }).listen(3000, '127.0.0.1');
 // Explicit protocol fixture, NOT real malware scanning evidence. Only installed
 // synthetic acceptance builds use this private loopback daemon. Production code

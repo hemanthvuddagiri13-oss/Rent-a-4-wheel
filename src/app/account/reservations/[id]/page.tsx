@@ -94,7 +94,7 @@ export default async function ReservationDetailPage({ params }: { params: Promis
         )}
       </div>
 
-      <div className="mt-8 flex flex-wrap gap-3">
+      <div id="signed-agreement" className="mt-8 flex flex-wrap gap-3">
         {reservation.agreementAcceptances[0]?.signedPdfStorageKey && <Button asChild variant="outline">
           <a href={`/api/reservations/${reservation.id}/agreement`} target="_blank" rel="noreferrer">
             <Download className="h-4 w-4" /> Download Agreement
