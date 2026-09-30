@@ -46,6 +46,8 @@ appId: com.renta4wheel.host.acceptance
 - scrollUntilVisible:
     element: "Remove calendar block"
     direction: UP
+    # Keep the tap center clear of the fixed native navigation header.
+    centerElement: true
 - assertVisible:
     text: "Remove calendar block"
     enabled: true

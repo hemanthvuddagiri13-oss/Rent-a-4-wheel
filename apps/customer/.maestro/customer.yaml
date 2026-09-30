@@ -189,6 +189,12 @@ env:
 - assertVisible: "Available at last check. A hold is required to reserve these dates."
 - takeScreenshot: native-availability
 - tapOn: "Hold dates & review price"
+# Navigation and all initial reservation queries must settle before scrolling.
+# Otherwise the driver swipes the listing/loading screen while price loads.
+- extendedWaitUntil:
+    visible:
+      id: "reservation-loaded"
+    timeout: 20000
 - scrollUntilVisible:
     element: "Server price breakdown"
     direction: DOWN

@@ -425,7 +425,9 @@ it("disabled jurisdiction hides discovery and refuses booking through the real b
  const vehicle=await createTestVehicle({jurisdictionCode:"CA",location:"Synthetic disabled jurisdiction"});vehicles.push(vehicle.id);
  const page=await browser.newPage();
  try{
-  await page.goto(base+"/vehicles?location="+encodeURIComponent(vehicle.location));await page.getByText("No vehicles match your search",{exact:false}).waitFor();
+  await page.goto(base+"/vehicles?location="+encodeURIComponent(vehicle.location));
+  // Streamed content can retain a hidden copy. Require the unique visible state.
+  await page.getByText("No vehicles match your search",{exact:true}).filter({visible:true}).waitFor();
   expect((await page.goto(base+"/vehicles/"+vehicle.slug))?.status()).toBe(404);
   expect((await page.request.get(`${base}/api/vehicles/${vehicle.id}/quote?pickupDate=2030-01-01&pickupTime=10:00&returnDate=2030-01-04&returnTime=10:00`)).ok()).toBe(false);
  }finally{await page.close();}
