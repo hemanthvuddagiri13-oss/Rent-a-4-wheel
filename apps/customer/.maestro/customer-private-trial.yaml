@@ -58,6 +58,10 @@ env:
     commands:
       - tapOn: "Done editing"
 - tapOn: "Send text code"
+# Synchronize with the existing response state, not a retry or a longer request.
+- extendedWaitUntil:
+    visible: "Resend available in .*s"
+    timeout: 20000
 - scrollUntilVisible:
     element:
       id: "input-Six-digit text code"

@@ -135,6 +135,11 @@ env:
     commands:
       - tapOn: "Done editing"
 - tapOn: "Send text code"
+# Await the accepted-response state before scrolling through the newly inserted
+# code form. A request error must fail here; never issue another OTP request.
+- extendedWaitUntil:
+    visible: "Resend available in .*s"
+    timeout: 20000
 - scrollUntilVisible:
     element:
       id: "input-Six-digit text code"
